@@ -18,11 +18,14 @@ export class Th08RunState {
   totalTimeOrbs = 0;
   stageTimeOrbs = 0;
   gaugeLocked = false;
+  private readonly gaugeEffectThresholds: readonly [number, number];
 
   constructor(
     readonly difficulty: number,
-    private readonly gaugeLimits: readonly [number, number] = [-10000, 10000]
+    private readonly gaugeLimits: readonly [number, number] = [-10000, 10000],
+    gaugeEffectThresholds: readonly [number, number] = [-8000, 8000]
   ) {
+    this.gaugeEffectThresholds = gaugeEffectThresholds;
     this.updatePointItemExtendThreshold();
   }
 
@@ -59,6 +62,90 @@ export class Th08RunState {
 
   addClockTime(amount: number): void {
     this.clockTime += amount;
+  }
+
+  gaugeIsExtremelyHuman(): boolean {
+    return this.youkaiGauge <= this.gaugeEffectThresholds[0];
+  }
+
+  gaugeIsExtremelyYoukai(): boolean {
+    return this.youkaiGauge >= this.gaugeEffectThresholds[1];
+  }
+
+  addScore(award: number): number {
+    const credited = Math.trunc(award / 10);
+    this.score += credited;
+    return credited;
+  }
+
+  // Item::CollectPoint @ 0x440e40 and Item::CollectPointSmall @ 0x441020.
+  // `abovePoCRandom` is the native RNG draw used only above the PoC line.
+  collectPoint(options: {
+    atOrAbovePoC: boolean;
+    isMaxValue?: boolean;
+    abovePoCRandom?: number;
+  }): { award: number; creditedScore: number; rankDelta: number; extendsGained: number } {
+    const full = this.pointItemValue;
+    let award = full;
+    if (options.atOrAbovePoC) {
+      award = Math.trunc(full / 2) -
+        (options.abovePoCRandom ?? 0) * Math.trunc(full / 1000);
+    }
+    if (options.isMaxValue) award = full;
+    award -= award % 10;
+    if (this.gaugeIsExtremelyHuman()) award *= 2;
+
+    const creditedScore = this.addScore(award);
+    this.pointItemsCollectedInStage++;
+    this.pointItemsCollected++;
+    let extendsGained = 0;
+    if (this.pointItemExtends >= 0) {
+      while (this.nextPointItemExtendThreshold <= this.pointItemsCollected) {
+        this.pointItemExtends++;
+        this.updatePointItemExtendThreshold();
+        extendsGained++;
+      }
+    }
+    return { award, creditedScore, rankDelta: award < full ? 3 : 10, extendsGained };
+  }
+
+  collectPointSmall(options: {
+    atOrAbovePoC: boolean;
+    isMaxValue?: boolean;
+    abovePoCRandom?: number;
+  }): { award: number; creditedScore: number } {
+    const full = this.pointItemValue;
+    let award = full;
+    if (options.atOrAbovePoC) {
+      award = Math.trunc(full / 2) -
+        (options.abovePoCRandom ?? 0) * Math.trunc(full / 1000);
+    }
+    if (options.isMaxValue) award = full;
+    award = Math.trunc(award / 10);
+    award -= award % 10;
+    if (this.gaugeIsExtremelyHuman()) award *= 2;
+    return { award, creditedScore: this.addScore(award) };
+  }
+
+  // Item::CollectTimeOrb @ 0x4412b0. Gauge movement is returned rather than
+  // applied here because the native branch also depends on the live player side.
+  collectTimeOrb(options: { specialScoringMode?: boolean }): {
+    award: number;
+    creditedScore: number;
+    rankDelta: number;
+    gaugeDelta: number | null;
+  } {
+    let award: number;
+    if (options.specialScoringMode) {
+      award = 100;
+    } else if (this.pointItemsCollected < 2000) {
+      award = Math.max((this.pointItemsCollected >> 1) * 10, 100);
+    } else {
+      award = 10000;
+    }
+    const creditedScore = this.addScore(award);
+    this.addTimeOrbs(1);
+    return { award, creditedScore, rankDelta: 8000, gaugeDelta: null };
   }
 
   // ItemManager::UpdatePointItemExtendThreshold @ 0x440470 and the adjacent

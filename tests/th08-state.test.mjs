@@ -61,3 +61,31 @@ test('point-item extend thresholds follow the v1.00d tables', () => {
     state.updatePointItemExtendThreshold();
   }
 });
+
+test('point collection reproduces PoC, tens, human-gauge, and score scaling', () => {
+  const state = new Th08RunState(3);
+  const normal = state.collectPoint({ atOrAbovePoC: true, abovePoCRandom: 100 });
+  assert.deepEqual(
+    [normal.award, normal.creditedScore, normal.rankDelta, state.pointItemsCollected],
+    [120000, 12000, 3, 1]
+  );
+
+  const human = new Th08RunState(3);
+  human.addYoukaiGauge(-8000, true);
+  assert.equal(human.gaugeIsExtremelyHuman(), true);
+  const doubled = human.collectPoint({ atOrAbovePoC: false });
+  assert.equal(doubled.award, 600000);
+  assert.equal(doubled.creditedScore, 60000);
+});
+
+test('small point and time-orb awards use native score divisions', () => {
+  const state = new Th08RunState(3);
+  const point = state.collectPointSmall({ atOrAbovePoC: true, abovePoCRandom: 100 });
+  assert.deepEqual([point.award, point.creditedScore], [12000, 1200]);
+
+  const time = state.collectTimeOrb({});
+  assert.deepEqual(
+    [time.award, time.creditedScore, state.currentTimeOrbs, state.pointItemValue],
+    [100, 10, 1, 300000]
+  );
+});
