@@ -1,12 +1,23 @@
-// The MSG interpreter addresses the two stage-local BGM descriptors by slot:
-// 0 = stage theme, 1 = boss theme. Th07.exe FUN_00428392 case 7
-// (@ 0x4288ae) forwards the MSG argument to the descriptor table at
-// stage-config + 0x290 + slot * 0x80; every msg1..msg8 pre-boss entry uses
-// slot 1. Physical track numbers follow musiccmt.txt.
+// TH08 stage-local BGM descriptors. The values come from each stage's STD
+// header (Song1/Song2) and musiccmt.txt; Stage 1 is th08_00 ("Ghostly Eyes")
+// followed by Wriggle's theme th08_03 ("Mooned Insect"). The title theme is
+// th08_01 ("Eastern Night"). Keep this table explicit rather than deriving it
+// from contiguous track numbers: th08_02 is absent and th08_13b is a special
+// Final Spell insertion rather than a normal stage pair.
 export function stageBgmTracks(stageNumber: number): readonly [string, string] {
-  const base = stageNumber <= 6 ? stageNumber * 2 : 16 + (stageNumber - 7) * 2;
-  const name = (track: number) => `th07_${String(track).padStart(2, '0')}`;
-  return [name(base), name(base + 1)];
+  const pairs: Record<number, readonly [number, number]> = {
+    1: [0, 3],
+    2: [4, 5],
+    3: [6, 7],
+    4: [8, 9],
+    5: [11, 12],
+    6: [13, 14],
+    7: [18, 19]
+  };
+  const pair = pairs[stageNumber];
+  if (!pair) throw new Error(`no TH08 BGM mapping for stage ${stageNumber}`);
+  const name = (track: number) => `th08_${String(track).padStart(2, '0')}`;
+  return [name(pair[0]), name(pair[1])];
 }
 
 export function stageBgmTrack(stageNumber: number, slot: number): string | null {
