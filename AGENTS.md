@@ -1,5 +1,24 @@
 # AGENTS.md
 
+## 0. TH08 fork overlay (authoritative while this branch exists)
+
+This branch is the Touhou 08 / Imperishable Night vertical-slice port. Treat
+the legacy TH07 text below as parent-engine history, not as format authority:
+
+- Original authority is `reference/Th08.exe` v1.00d and the unpacked files in
+  `reference/th08-original/`; use `reference/th08-decomp/` and
+  `reference/re-specs/th08-*` as cross-validation.
+- TH08 facts override TH07 facts: ECL has a leading `0x800` magic and v2
+  timelines; ANM entries are version 3; MSG text payloads are XOR `0x77`;
+  SHT uses 56-byte headers and records; replays are T8RP with a `0x68`
+  header and stage blocks containing `0x40` bytes of metadata.
+- The first deliverable is Stage 1 + Reimu/Yukari Border Team + the original
+  menus/UI, aligned to `replay/th8_udLy01.rpy`. Do not spend time on TH07
+  Extra/Phantasm/Cherry behavior except where shared engine code still needs
+  to be excised safely.
+- Runtime directories will move to `assets/th08-img`, `assets/audio/th08`,
+  and `assets/sfx/th08`; nothing under `reference/` or `replay/` may ship.
+
 Operating manual for AI agents and contributors. It encodes the working
 rules, the verification loop, the file-format facts, and the orchestration
 protocol that produced the current codebase. Follow it exactly; nearly
