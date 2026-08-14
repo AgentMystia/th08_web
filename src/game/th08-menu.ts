@@ -14,6 +14,26 @@ export const TH08_INPUT_BITS = {
   enter: 0x1000
 } as const;
 
+export const TH08_TITLE_ITEMS = [
+  { name: 'Game Start', enabled: true },
+  { name: 'Extra Start', enabled: false },
+  { name: 'Spell Practice', enabled: false },
+  { name: 'Practice Start', enabled: false },
+  { name: 'Replay', enabled: false },
+  { name: 'Result', enabled: false },
+  { name: 'Music Room', enabled: false },
+  { name: 'Option', enabled: false },
+  { name: 'Quit', enabled: false }
+] as const;
+
+export const TH08_DIFFICULTY_NAMES = ['Easy', 'Normal', 'Hard', 'Lunatic'] as const;
+export const TH08_TEAM_NAMES = [
+  'Reimu & Yukari',
+  'Marisa & Alice',
+  'Sakuya & Remilia',
+  'Youmu & Yuyuko'
+] as const;
+
 export type Th08MenuScreen = 'title' | 'difficulty' | 'character';
 export type Th08MenuEvent =
   | { type: 'move'; screen: Th08MenuScreen; cursor: number; direction: -1 | 1 }
