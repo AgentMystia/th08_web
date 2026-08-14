@@ -129,7 +129,11 @@ export class Th08RunState {
 
   // Item::CollectTimeOrb @ 0x4412b0. Gauge movement is returned rather than
   // applied here because the native branch also depends on the live player side.
-  collectTimeOrb(options: { specialScoringMode?: boolean }): {
+  collectTimeOrb(options: {
+    specialScoringMode?: boolean;
+    timerCurrent?: number;
+    playerRole?: 0 | 1;
+  }): {
     award: number;
     creditedScore: number;
     rankDelta: number;
@@ -145,7 +149,10 @@ export class Th08RunState {
     }
     const creditedScore = this.addScore(award);
     this.addTimeOrbs(1);
-    return { award, creditedScore, rankDelta: 8000, gaugeDelta: null };
+    const gaugeDelta = options.timerCurrent === 0
+      ? options.playerRole === 0 ? -111 : 111
+      : null;
+    return { award, creditedScore, rankDelta: 8000, gaugeDelta };
   }
 
   // ItemManager::UpdatePointItemExtendThreshold @ 0x440470 and the adjacent

@@ -83,9 +83,9 @@ test('small point and time-orb awards use native score divisions', () => {
   const point = state.collectPointSmall({ atOrAbovePoC: true, abovePoCRandom: 100 });
   assert.deepEqual([point.award, point.creditedScore], [12000, 1200]);
 
-  const time = state.collectTimeOrb({});
+  const time = state.collectTimeOrb({ timerCurrent: 0, playerRole: 1 });
   assert.deepEqual(
-    [time.award, time.creditedScore, state.currentTimeOrbs, state.pointItemValue],
-    [100, 10, 1, 300000]
+    [time.award, time.creditedScore, time.gaugeDelta, state.currentTimeOrbs, state.pointItemValue],
+    [100, 10, 111, 1, 300000]
   );
 });
