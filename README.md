@@ -1,4 +1,9 @@
-# TH07 Web - Perfect Cherry Blossom
+# TH08 Web - Imperishable Night (vertical slice)
+
+> 当前分支是《东方永夜抄 ～ Imperishable Night》TH08 Web 移植的垂直切片：
+> 目标是原作数据驱动的标题/菜单/UI、完整 Stage 1、Reimu/Yukari Border Team，
+> 以及与本地 T8RP replay 的 Stage 1 对齐。下方关于 TH07 的完整说明是母工程
+> 的历史文档；格式与行为权威以 `AGENTS.md §0` 和 TH08 v1.00d reference 为准。
 
 **在线游玩 / Play online: <https://agentmystia.github.io/th07_web/>**
 
