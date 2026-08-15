@@ -1,0 +1,83 @@
+# TH08 vertical-slice handoff (2026-08-15)
+
+## State
+
+Branch `th08-vertical-slice`. TH08 Stage 1 is playable end to end through the
+original data: title menu → difficulty → Border Team → Stage 1 with dialogue,
+HUD, ECL-driven waves, spell cards, bombs, and the Wriggle boss fight.
+
+All gates green: `npm run check`, `npm run build`, `npm test` (392),
+`npm run replay:verify` (TH07 6/6 PASS), clean `dev-shot` boot.
+
+## The convergence picture (honest)
+
+`npm run replay:verify:th08` replays `replay/th8_udLy01.rpy` stage 1
+(Border Team Lunatic, 5245 frames) through the production StageScene.
+Current divergence from the recorded stage-2 entry snapshot:
+
+| field | ours | native (stage-2 entry) |
+|---|---|---|
+| score | 56519 | 7376015 |
+| graze | 178 | 536 |
+| pointItems | 2 | 61 |
+| pointItemValue | 300000 | 320690 |
+| power | (untracked here) | 115 |
+| lives | (divergence deaths) | 6 (deathless) |
+| bombs | 3 | 3 |
+| gauge | 0 | -7893 |
+| clockTime | 0 | 1 |
+| RNG draws | 9472 | 32816 (seed 0x8fbe→0x32fb) |
+
+The recorded run is a low-interaction Lunatic survival playthrough: the
+player never pushes above y≈160 (verified by integrating the recorded input
+stream), so most wave enemies survive to the boss. Kills mostly come from
+Yukari's seeking option during focused windows — our seeker wiring works
+(collisions settle, enemies die when hit), but the kill count is short of
+native by an order of magnitude, which starves the item/point/score/RNG
+streams.
+
+## What is proven vs open
+
+Proven by the exe decompile (reference/re-specs/th08-ecl-ops-*.md,
+th08-bullet-anm.md) and landed:
+- ECL opcode remap + interpreter (all 183 raw opcodes for stage 1).
+- FIRE family (9 angle modes), bullet prototypes (21, exe VA 0x4b4ad8),
+  prototype hitboxes, spawn-state flash/fade scripts.
+- Auto-fire capture+replay (ins_105-108) as a PERIODIC emitter.
+- Timeline v2 op 6 = MSG start (dialogue machine runs it).
+- Score = award/10 (FUN_004181f0), replay snapshots store that field.
+- TH08 rank byte restore (T8RP +0x25), slowdown cadence buckets applied.
+
+Open (blocked on native per-frame evidence):
+- Enemy positions diverge from native early enough that the recorded
+  grazing/dodging misses differently (first hit f1039). The likely upstream
+  root is a movement/interp subtlety in the wave subs (ins_64/65/66 timing
+  or the op-73/74 muzzle/fan writer pair) — the ECL data is fully decoded,
+  but which micro-difference moves the field is not provable from the
+  decompile alone.
+- T8RP has NO per-frame aux event stream (the wide record's high word is
+  input only; auxFlags are all zero). The convergence oracle is the
+  stage-entry snapshot chain + RNG residue, which are integral and can only
+  say "diverged", not "where".
+
+## Native trace status
+
+scripts/native-trace.mjs boots the original under wine+Xvfb and drives
+winedbg's interactive prompt with breakpoints at the spawn/fire/RNG VAs.
+In this environment the breakpoints never fired inside the window (the game
+stays in the title under software rendering long enough that the read loop
+timed out); the harness is a verified-boot scaffold, not yet evidence. A
+future session with a working X11/longer window should finish it.
+
+## Next steps (priority order)
+
+1. Finish the native PRE-trace (or any frame-indexed native state dump) so
+   the earliest divergence is a number, not a guess.
+2. With the trace: fix the deterministic upstream root (never compensate
+   with RNG/epsilon/special cases).
+3. Stage-1 background (stage1.std) culling window: the ground slab's
+   far-bound check (StageScene drawBackground, `objDot > size/2 + 880`)
+   under-covers TH08's bigger slab — verify against Th08.exe Stage.cpp's
+   actual bound before widening.
+4. Item-pool swap to Th08ItemSpawnPool once drop rules are evidenced.
+5. Visual acceptance against reference/native-shots/ (play/side/lower).
