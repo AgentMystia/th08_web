@@ -78,6 +78,14 @@ let rngBootstrapDraws = 0;
 
 scene.rngBootstrapDone?.();
 
+function replaySlowdownAdvancesLocal(recordedFps, counter) {
+  if (recordedFps < 20) return counter % 3 === 0;
+  if (recordedFps < 30) return counter % 2 === 0;
+  if (recordedFps < 40) return counter % 3 !== 0;
+  if (recordedFps < 50) return counter % 6 !== 0;
+  return true;
+}
+
 const inputBits = (word) => ({
   held: new Set([
     word & 0x1 ? 'shoot' : null,
@@ -96,27 +104,36 @@ const inputs = stage.inputs;
 const frames = inputs.length;
 const spawnFrames = [];
 const killFrames = [];
+let currentFrame = -1;
 let divergeFrame = -1;
 const traceEvery = args.includes('--trace') ? Number(args[args.indexOf('--trace') + 1]) || 50 : 50;
 const trace = [];
 const seenSpawned = new Set();
-const seenDead = new Set();
 
+// Kill stream: instrument the runtime's killEnemy. Polling scene.enemies for
+// hp<=0 misses enemies removed in the same update pass (the manager splices
+// them out before the next frame's census).
+const origKill = scene.runtime.killEnemy.bind(scene.runtime);
+scene.runtime.killEnemy = (game, e, bombContact) => {
+  killFrames.push(currentFrame);
+  return origKill(game, e, bombContact);
+};
+
+let modeCounter = 0;
 for (let f = 0; f < frames; f++) {
+  // Native replay slowdown (recorded per 30 frames): TH08 keeps TH07's
+  // discrete cadence buckets — a recorded sub-60 FPS skips sim frames.
+  const recordedFps = stage.slowdown[Math.floor(f / 30)] & 0x7f;
+  const advances = recordedFps >= 60 || replaySlowdownAdvancesLocal(recordedFps, ++modeCounter);
+  if (!advances) continue;
+  currentFrame = f;
   const word = inputs[f];
   scene.update(inputBits(word));
-  // Spawn/kill event streams: the densest available AUX-free oracle until
-  // TH08's aux semantics are decoded (RPY aux bits for T8RP are unverified).
+  // Spawn stream census; the kill stream comes from the killEnemy hook above.
   for (const enemy of scene.enemies) {
     if (!seenSpawned.has(enemy.id)) {
       seenSpawned.add(enemy.id);
       spawnFrames.push(f);
-    }
-    // hp<=0 is the durable kill signal (the manager removes dead enemies the
-    // same frame; TH08 sweeps set HP=0 and never delete the slot).
-    if (enemy.hp <= 0 && !seenDead.has(enemy.id)) {
-      seenDead.add(enemy.id);
-      killFrames.push(f);
     }
   }
   if (f % traceEvery === 0) {
@@ -142,6 +159,50 @@ console.log(`end: score=${scene.score} graze=${scene.graze} enemies=${scene.enem
 if (scene.runState) {
   console.log(`th08 runState: gauge=${scene.runState.youkaiGauge} clock=${scene.runState.clockTime} orbs=${scene.runState.currentTimeOrbs}/${scene.runState.totalTimeOrbs} pointValue=${scene.runState.pointItemValue} extends=${scene.runState.pointItemExtends}`);
 }
+
+// End-of-stage state vs the recorded stage-2 entry snapshot (the original
+// engine's own ground truth for what stage 1 must produce). Every field is
+// an integral of the whole run — matching them forces near-total
+// convergence. PASS requires all fields exact plus the RNG residue.
+const next = rpy.stages[1];
+const checks = [
+  ['score', scene.score, stage.scoreAtEnd],
+  ['power', scene.playerObj.power, next.power],
+  ['lives', scene.playerObj.lives, next.lives],
+  ['bombs', scene.playerObj.bombs, next.bombs],
+  ['graze', scene.graze, next.graze],
+  ['pointItems', scene.pointItems, next.pointItems]
+];
+if (scene.runState) {
+  checks.push(
+    ['youkaiGauge', scene.runState.youkaiGauge, next.youkaiGauge],
+    ['clockTime', scene.runState.clockTime, next.clockTime],
+    ['pointItemValue', scene.runState.pointItemValue, next.pointItemValue],
+    ['pointItemExtends', scene.runState.pointItemExtends, next.pointItemExtends],
+    ['nextExtendThreshold', scene.runState.nextPointItemExtendThreshold, next.nextPointItemExtendThreshold]
+  );
+}
+// RNG residue: the original's total stage-1 draw budget (mod 65536) is the
+// distance from the stage-1 seed to the stage-2 seed.
+let rngBudget = -1;
+{
+  let s = stage.rngSeed;
+  for (let i = 0; i < 65536; i++) {
+    const a = ((s ^ 0x9630) - 0x6553) & 0xffff;
+    s = (((a & 0xc000) >> 14) + a * 4) & 0xffff;
+    if (s === next.rngSeed) { rngBudget = i + 1; break; }
+  }
+}
+const rngMatch = rngBudget >= 0 && rngDraws % 65536 === rngBudget % 65536;
+console.log('end-of-stage vs native stage-2 entry:');
+let allPass = rngMatch;
+for (const [name, ours, native] of checks) {
+  const ok = ours === native;
+  if (!ok) allPass = false;
+  console.log(`  ${name}: ours=${ours} native=${native} ${ok ? 'exact' : 'DIFF'}`);
+}
+console.log(`  rng: ours=${rngDraws} native≡${rngBudget} (mod 65536) ${rngMatch ? 'exact' : 'DIFF'}`);
+console.log(allPass ? 'STAGE 1 PASS' : 'STAGE 1 DIVERGED');
 console.log('trace samples:');
 for (const row of trace) console.log(' ', JSON.stringify(row));
-process.exit(divergeFrame < 0 ? 0 : 1);
+process.exit(allPass ? 0 : 1);
