@@ -579,6 +579,70 @@ export interface EclState {
   // Fractional half of the op142 countdown's native split timer
   // (enemy+0x4f3c; current integer is +0x4f40).
   damageShieldFrac: number;
+  // TH08 vertical-slice interpreter state (Th08.exe v1.00d). Present only
+  // when the stage ECL carries the 0x800 magic; every field cites its exe
+  // offset — see reference/re-specs/th08-ecl-ops-*.md and th08-bullet-anm.md.
+  th08?: Th08EclState;
+}
+
+// TH08-only per-enemy interpreter state. Frame-scope locals (10000-10007 int,
+// 10016-10023 float, 10036-10039, 10053-10060) stay in EclState.vars with the
+// TH08 layout documented in eclvm.ts so the existing call-frame save/restore
+// machinery covers them; enemy-scope locals and the TH08-only systems live
+// here. All offsets are from the Th08.exe Enemy object (stride 0x53d0).
+export interface Th08EclState {
+  // Vars 10008-10015 (enemy+0x2ca8) / 10024-10031 (enemy+0x2cc8).
+  enemyInts: Int32Array;
+  enemyFloats: Float64Array;
+  // +0x2e00/+0x2e04: pool copies written alongside HP by ins_131.
+  poolCopyA: number;
+  poolCopyB: number;
+  // +0x2d30: pending dynamic-call table index (ins_125), -1 = none.
+  pendingDynCall: number;
+  // +0x2cf0[i]: dynamic call-target table (ins_126 stores, ins_125 jumps).
+  dynCallTable: Int32Array;
+  // +0x2de8: movement-interp duration/anm id slot written by the move ops.
+  moveAux: number;
+  // +0x2dec/+0x2df0 fire rank-lerp speed bounds (defaults ±0.5,
+  // FUN_00415c80) and +0x2df4/+0x2df6/+0x2df8/+0x2dfa count bounds.
+  fireRankSpeedLow: number;
+  fireRankSpeedHigh: number;
+  fireRankCount1Low: number;
+  fireRankCount1High: number;
+  fireRankCount2Low: number;
+  fireRankCount2High: number;
+  // +0x3034: captured raw FIRE instruction (11 dwords) while flags bit 17 is
+  // set (ins_107), replayed by the auto-fire tick.
+  capturedFire: Int32Array | null;
+  // +0x3060: auto-fire deadline (ins_105/106); 0 = disarmed.
+  autoFireDeadline: number;
+  // +0x3313: transform ("intangible") type byte; -1 = none.
+  transformType: number;
+  // +0x3308/+0x330c: ins_144 death-drop pair (extra children count etc.).
+  deathDropA: number;
+  deathDropB: number;
+  // +0x3310/+0x3311/+0x3312: ins_138 death/drop effect id bytes.
+  deathEffectId: number;
+  dropEffectId: number;
+  deathByte2: number;
+  // +0x3324/+0x3328: the two raw TH08 flags words. Bits not consumed by a
+  // decoded system stay here verbatim.
+  flags: number;
+  flags2: number;
+  // +0x3340..+0x334c: player clamp rect (ins_75), armed by flags bit 19.
+  clampRect: { x1: number; y1: number; x2: number; y2: number } | null;
+  // +0x3350: squared suppress-fire radius (ins_85's op writes f*f).
+  suppressRadiusSq: number;
+  // +0x332f: manager-list id (0/2 human/youkai, 1 neutral).
+  managerList: number;
+  // ins_122's bonus + derived per-frame decay, retained for the TH08 spell
+  // presentation (Step 2).
+  spellBonus: number;
+  spellDecay: number;
+  // ins_135 persistent sub-ECL contexts (up to 4, "ECLInt" 0x24b0 blocks):
+  // each keeps its own cursor + frame-scope var block, ticked by the
+  // interpreter round-robin alongside the main context.
+  subContexts: { ctx: EclContext; vars: Float64Array }[];
 }
 
 export interface BulletProps {

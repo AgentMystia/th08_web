@@ -173,6 +173,63 @@ const RANDOM_ITEMS: ItemType[] = [
 // approximation at point of use (flagged per AGENTS.md §7).
 const BULLET_HITBOX_BY_SPRITE = [4, 6, 4, 6, 4, 4, 4, 10, 5, 8, 24];
 
+// ---- TH08 (Th08.exe v1.00d) interpreter tables --------------------------------
+//
+// TH08 renumbered the ECL opcode table wholesale. TH08_OP_REMAP lists every
+// raw TH08 opcode whose TH07 counterpart shares BOTH the argument layout and
+// the semantics (verified per-op in reference/re-specs/th08-ecl-ops-*.md);
+// those dispatch through the existing TH07 switch bodies via execute()'s
+// opOverride. Every other TH08 opcode — including numbers that coincide with
+// a TH07 case — is handled by executeTh08's raw-numbered cases instead.
+const TH08_OP_REMAP: Record<number, number> = {
+  0: 0, 1: 1,                       // nop, ret (all.c:10806)
+  2: 45, 160: 45,                   // wait: both encodings call FUN_004065f0
+  4: 2, 5: 3,                       // jump, loop
+  6: 4, 7: 5,                       // setInt/setFloat var
+  8: 10, 9: 11,                     // random-sign assigns
+  10: 12, 11: 13, 12: 14, 13: 15, 14: 16, // int arith-assign
+  15: 19, 16: 20, 17: 21, 18: 22, 19: 23, // float arith-assign (19 = fmod)
+  30: 17, 31: 18,                   // inc/dec
+  32: 24, 33: 25,                   // sin, cos
+  34: 26,                           // atan2 (identical 5-arg order)
+  36: 27,                           // install var interpolation
+  37: 40,                           // normalize angle in place
+  40: 28, 41: 29, 42: 30, 43: 31, 44: 32, 45: 33,
+  46: 34, 47: 35, 48: 36, 49: 37, 50: 38, 51: 39, // 12 conditional jumps
+  66: 54,                           // timed move by angle/speed
+  70: 48, 71: 50,                   // angular velocity, acceleration
+  93: 93, 94: 92,                   // createEnemy 3D relative / absolute
+  95: 94,                           // kill sweep (same FUN(8000,0) call)
+  105: 73, 106: 74,                 // auto-fire deadline (± the RNG draw)
+  112: 80,                          // bullet sweep to items
+  116: 84, 117: 85, 118: 86, 119: 87, 120: 88, 121: 89, // laser slot ops
+  123: 91,                          // end spell card
+  139: 117, 140: 118                // ambient effects (same 3/6-arg shapes)
+};
+
+// Th08.exe .rdata table @ VA 0x4b4ad8 (file offset 0xb44d8): 21 bullet
+// prototypes x 5 etama.anm script slots. Values are GLOBAL sequential script
+// indices over etama.anm's 116 scripts (on-disk id = value - 150): col0 =
+// the main bullet script (Static-stops on its base sprite), cols 1-3 = the
+// spawn-transition flash scripts for states 2/3/4, col4 = the death fade.
+// Dumped from the binary; cross-checked against th08-bullet-anm.md §3.
+const TH08_BULLET_PROTOTYPES: readonly (readonly number[])[] = [
+  [0, 18, 19, 20, 15], [1, 21, 22, 23, 16], [2, 21, 22, 23, 16],
+  [3, 21, 22, 23, 16], [4, 21, 22, 23, 16], [5, 21, 22, 23, 16],
+  [6, 21, 22, 23, 16], [7, 24, 24, 24, 17], [8, 24, 24, 24, 17],
+  [9, 24, 24, 24, 17], [25, 27, 27, 27, 26], [106, 21, 22, 23, 16],
+  [107, 21, 22, 23, 16], [108, 21, 22, 23, 16], [109, 24, 24, 24, 17],
+  [110, 24, 24, 24, 17], [111, 21, 22, 23, 16], [112, 21, 22, 23, 16],
+  [113, 24, 24, 24, 17], [114, 24, 24, 24, 17], [115, 24, 24, 24, 17]
+];
+
+// .data tables @ VA 0x4c70f8 / 0x4c7138: how the FIRE sprite offset shifts
+// the GENERIC flash/fade sprites (one 5-color row each) onto the fired
+// color, chosen by the MAIN sprite's pixel height (FUN_0042f5f0 @
+// 0x42fada-0x42fbd9). The main VM itself takes the offset RAW.
+const TH08_SHIFT_H16 = [0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 0];
+const TH08_SHIFT_H32 = [0, 1, 1, 2, 2, 3, 4, 0];
+
 // Special variable ids (reads resolved from game state). Writable general
 // variables live in the enemy's 26-slot block (EclState.vars). Th07.exe has
 // NO call-window shift of any kind: 10000-10015 are fixed per-enemy locals
@@ -236,12 +293,14 @@ export interface StageData {
   std: string;
   msg: string;
   enemyAnm: string;
+  bulletAnm?: string;
   bgAnm: string;
   // Stage 4 swaps between additional background ANM banks mid-stage.
   extraBgAnms?: readonly string[];
   effectAnm: string;
   stdTxtAnm: string;
   faceAnm: string;
+  faceAnms?: readonly string[];
 }
 
 interface SpawnEclEnemyOptions {
@@ -515,7 +574,7 @@ export class StageRuntime {
   }
 
   private makeEnemyState(subId: number, mirrored: boolean, itemDrop: number, parent: Enemy | null): EclState {
-    return {
+    const state: EclState = {
       ctx: { subId, index: 0, time: 0, timeFrac: 0, waitTimer: 0 },
       stack: [],
       subId,
@@ -637,6 +696,52 @@ export class StageRuntime {
       damageShield: 0,
       damageShieldFrac: 0
     };
+    if (this.ecl.version === 8) {
+      // TH08 frame-scope var layout (Th08.exe frame+0x18 block, 28 dwords —
+      // the op90-94 spawner copies 30 dwords of it, covering this range plus
+      // trailing frame padding): [0..7] ints 10000-10007, [8..15] floats
+      // 10016-10023, [16..19] ints 10036-10039, [20..23] ints 10053-10056,
+      // [24..27] floats 10057-10060. Enemy-scope locals (10008-10015 int,
+      // 10024-10031 float, exe enemy+0x2ca8/+0x2cc8) live in state.th08 —
+      // they are NOT part of the saved call frame.
+      state.vars = parent ? parent.ecl.vars.slice() : new Float64Array(28);
+      state.th08 = {
+        enemyInts: new Int32Array(8),
+        enemyFloats: new Float64Array(8),
+        poolCopyA: 0,
+        poolCopyB: 0,
+        pendingDynCall: -1,
+        dynCallTable: new Int32Array(32).fill(-1),
+        moveAux: 0,
+        // FUN_00415c80 @ all.c:9244: fire rank-lerp defaults ±0.5 speed,
+        // zero counts (phase entries reset back to these).
+        fireRankSpeedLow: -0.5,
+        fireRankSpeedHigh: 0.5,
+        fireRankCount1Low: 0,
+        fireRankCount1High: 0,
+        fireRankCount2Low: 0,
+        fireRankCount2High: 0,
+        capturedFire: null,
+        autoFireDeadline: 0,
+        transformType: -1,
+        deathDropA: 0,
+        deathDropB: 0,
+        deathEffectId: 0,
+        dropEffectId: 0,
+        deathByte2: 0,
+        flags: 0,
+        flags2: 0,
+        clampRect: null,
+        suppressRadiusSq: 0,
+        managerList: 0,
+        spellBonus: 0,
+        spellDecay: 0,
+        subContexts: []
+      };
+      state.bulletRankSpeedLow = -0.5;
+      state.bulletRankSpeedHigh = 0.5;
+    }
+    return state;
   }
 
 
@@ -672,6 +777,7 @@ export class StageRuntime {
   // resolvers' default leaves the raw argument untouched).
 
   private varRead(game: GameHost, e: Enemy, id: number, asFloat = false): number {
+    if (this.ecl.version === 8) return this.varRead8(game, e, id, asFloat);
     const s = e.ecl;
     switch (id) {
       case 10016: return game.difficulty;
@@ -776,6 +882,7 @@ export class StageRuntime {
   // angle stride. Treat unsupported typed destinations as no-ops here rather
   // than corrupting the opposite-typed game variable.
   private varWriteInt(game: GameHost, e: Enemy, id: number, value: number): void {
+    if (this.ecl.version === 8) return this.varWriteInt8(game, e, id, value);
     const s = e.ecl;
     const integer = Math.trunc(value);
     switch (id) {
@@ -798,6 +905,7 @@ export class StageRuntime {
   }
 
   private varWrite(game: GameHost, e: Enemy, id: number, value: number): void {
+    if (this.ecl.version === 8) return this.varWrite8(game, e, id, value);
     const s = e.ecl;
     // FUN_0040e560 writes every float-backed destination through a 32-bit
     // slot. Keep the cast at the resolver boundary so arithmetic opcodes,
@@ -913,6 +1021,9 @@ export class StageRuntime {
     // the very tail, after op122/op27 (all.c:7105-7329).
     const advanceClock = this.dispatchEcl(game, e);
     if (e.dead) return;
+    // TH08 ins_135 sub-ECL contexts tick alongside the main context
+    // (round-robin in FUN_004184b0's fetch loop, all.c:10770-10800).
+    if (s.th08 && s.th08.subContexts.length > 0) this.tickTh08SubContexts(game, e);
     // op121 may change DAT_0056baa8 inside dispatch. Native tail helpers read
     // the global after dispatch, so movement and the ECL split clock use the
     // newly written rate on that same core tick (FUN_00436acc call sites),
@@ -942,6 +1053,56 @@ export class StageRuntime {
   // skips body collision, FUN_0043a980 (shots + attack slots), damage and
   // homing-target publication. Once the condition ends, one core tick only
   // decrements the hold; the following core tick clears the bit.
+  // One dispatch pass over every live TH08 sub-ECL context (ins_135). The
+  // contexts share the enemy's execute()/var machinery, so the active
+  // context + frame vars are swapped in for the pass. Each context owns its
+  // clock; it advances once per core tick like the main context's.
+  private tickTh08SubContexts(game: GameHost, e: Enemy): void {
+    const s = e.ecl;
+    const mainCtx = s.ctx;
+    const mainVars = s.vars;
+    const rate = game.slowRate ?? 1;
+    for (const sub of s.th08!.subContexts) {
+      if (!sub) continue;
+      s.ctx = sub.ctx;
+      s.vars = sub.vars;
+      let ended = false;
+      for (let guard = 0; guard < 64; guard++) {
+        if (s.ctx.waitTimer > 0) {
+          s.ctx.waitTimer -= rate;
+          break;
+        }
+        const instrs = this.ecl.sub(s.ctx.subId);
+        const instr = instrs[s.ctx.index];
+        if (!instr) {
+          ended = true;
+          break;
+        }
+        if (s.ctx.time !== instr.time) break;
+        if (instr.rankMask & (1 << game.difficulty)) {
+          const prevExecuting = this.executingEnemy;
+          this.executingEnemy = e;
+          const action = this.execute(game, e, instr);
+          this.executingEnemy = prevExecuting;
+          if (action === 'delete') {
+            ended = true;
+            break;
+          }
+          if (action === 'flow') continue;
+        }
+        s.ctx.index++;
+      }
+      if (ended) {
+        sub.ctx.index = 0;
+        sub.ctx.time = 0;
+      } else {
+        this.advanceEclClock(s, rate);
+      }
+    }
+    s.ctx = mainCtx;
+    s.vars = mainVars;
+  }
+
   private updateHighSpellBombCollisionGate(game: GameHost, e: Enemy): void {
     const s = e.ecl;
     if (!s.isBoss || (game.stageNumber ?? 0) <= 6) return;
@@ -2226,12 +2387,22 @@ export class StageRuntime {
     s.ctx.time = newTime;
   }
 
-  private execute(game: GameHost, e: Enemy, instr: EclInstr): 'delete' | 'flow' | 'restart' | null {
+  private execute(game: GameHost, e: Enemy, instr: EclInstr, opOverride?: number): 'delete' | 'flow' | 'restart' | null {
     const s = e.ecl;
     const ctx = s.ctx;
     const v = this.ecl.view;
     const a = instr.args;
-    const op = instr.id;
+    // TH08 renumbered the opcode table wholesale (see TH08_OP_REMAP): every
+    // remapped entry shares the TH07 case's argument layout and semantics;
+    // ALL other raw opcodes — including ones whose numbers coincide with a
+    // TH07 case — go to executeTh08's raw-numbered switch, never to the TH07
+    // cases below.
+    if (opOverride === undefined && this.ecl.version === 8) {
+      const remapped = TH08_OP_REMAP[instr.id];
+      if (remapped === undefined) return this.executeTh08(game, e, instr);
+      return this.execute(game, e, instr, remapped);
+    }
+    const op = opOverride ?? instr.id;
     const gi = (o: number) => this.getInt(game, e, a + o);
     const gf = (o: number) => this.getFloat(game, e, a + o);
     const gs = (o: number) => this.getShort(game, e, a + o);
@@ -3294,6 +3465,9 @@ export class StageRuntime {
   private badBulletWarned = new Set<string>();
 
   bulletRect(sprite: number, offset: number): { x: number; y: number; w: number; h: number; imageKey: string } {
+    // TH08 resolves bullet art through its own 21-prototype etama table
+    // (VA 0x4b4ad8) — see bulletRectTh8.
+    if (this.ecl.version === 8) return this.bulletRectTh8(sprite, offset);
     const key = `${sprite}:${offset}`;
     const cached = this.bulletRectCache.get(key);
     if (cached) return cached;
@@ -3403,7 +3577,10 @@ export class StageRuntime {
           const span = Math.fround(angle1 - angle2);
           angle = Math.fround(game.rng.range(span) + angle2);
         } else if (p.aimMode === 7) {
-          angle = Math.fround((i * NATIVE_TAU_F32) / p.count1);
+          // TH08 mode 7 is the AIMED fan plus random speed (spec 0x5f §3);
+          // TH07's op-70 form adds no aim (converged against T7RP replays).
+          if (this.ecl.version === 8) angle = aim;
+          angle = Math.fround(angle + (i * NATIVE_TAU_F32) / p.count1);
           angle = Math.fround(j * angle2 + angle1 + angle);
         } else {
           const span = Math.fround(angle1 - angle2);
@@ -3434,11 +3611,34 @@ export class StageRuntime {
         // FUN_00421e90 @ 0x4226ec-0x42279c also backs the initial position
         // up by four velocity vectors before the reduced-speed intro begins.
         const hasSpawnState = (flags & 0xe) !== 0;
-        const spawnDuration = !hasSpawnState ? 0
-          : p.sprite === 10 ? 24
-            : p.sprite >= 7 ? 32
-              : flags & 2 ? 10 : flags & 4 ? 16 : 32;
-        const spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
+        // TH08 spawn-state durations come from the prototype's flash script
+        // family (proto 0's trio = 10/15/30 frames; the generic small/large
+        // trios mirror TH07's 10/16/32; the 64px bubble family runs 24) —
+        // th08-bullet-anm.md §3. APPROXIMATION pending per-script duration
+        // extraction from etama.anm.
+        let spawnDuration: number;
+        let spawnMoveScale: number;
+        if (this.ecl.version === 8) {
+          if (!hasSpawnState) {
+            spawnDuration = 0;
+            spawnMoveScale = 1;
+          } else if (p.sprite === 10) {
+            spawnDuration = 24;
+            spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : 1 / 3;
+          } else if (p.sprite === 0) {
+            spawnDuration = flags & 2 ? 10 : flags & 4 ? 15 : 30;
+            spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : 1 / 3;
+          } else {
+            spawnDuration = flags & 2 ? 10 : flags & 4 ? 16 : 32;
+            spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
+          }
+        } else {
+          spawnDuration = !hasSpawnState ? 0
+            : p.sprite === 10 ? 24
+              : p.sprite >= 7 ? 32
+                : flags & 2 ? 10 : flags & 4 ? 16 : 32;
+          spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
+        }
         // Spawn-time rate bake-in (exe FUN_00421e90/FUN_004229f0:
         // FUN_004074e0(angle, speed * DAT_0056baa8); spec-slowmo.md §3.4) —
         // the nominal speed field stays unscaled.
@@ -3472,8 +3672,15 @@ export class StageRuntime {
           // color offset without changing this backup, which matters for a
           // template-6 bullet spawned after slowmo has already begun.
           slowmoShapeBackupRect: this.bulletRect(p.sprite, 0),
-          grazeW: BULLET_HITBOX_BY_SPRITE[p.sprite] ?? Math.max(3, rect.w * 0.4),
-          grazeH: BULLET_HITBOX_BY_SPRITE[p.sprite] ?? Math.max(3, rect.h * 0.4),
+          // TH08 hitboxes are PROTOTYPE-derived (main script id + base
+          // sprite height, AddedCallback @ all.c:24344-24420), never
+          // per-offset.
+          grazeW: this.ecl.version === 8
+            ? this.th08BulletHitbox(p.sprite)
+            : BULLET_HITBOX_BY_SPRITE[p.sprite] ?? Math.max(3, rect.w * 0.4),
+          grazeH: this.ecl.version === 8
+            ? this.th08BulletHitbox(p.sprite)
+            : BULLET_HITBOX_BY_SPRITE[p.sprite] ?? Math.max(3, rect.h * 0.4),
           grazed: false,
           spawnAge: 0,
           spawnAgeFrac: 0,
@@ -3773,4 +3980,740 @@ export class StageRuntime {
     if (type) game.spawnItem(type, e.x, e.y, options);
   }
 
+  // =========================================================================
+  // TH08 vertical-slice interpreter (Th08.exe v1.00d).
+  //
+  // Evidence base: reference/re-specs/th08-ecl-ops-0x00-0x2f.md,
+  // th08-ecl-ops-0x30-0x5e.md, th08-ecl-ops-0x5f-0x8f.md,
+  // th08-ecl-ops-0x90-0xb7.md and th08-bullet-anm.md (all decoded from the
+  // Ghidra export of Th08.exe, cross-checked against the raw stage ECLs and
+  // etama.anm). Case comments cite exe anchors inline.
+  //
+  // Numbering: cases below use RAW TH08 opcodes (= thanm's ins_N decimal).
+  // The interpreter switch in the exe keys on opcode-1 (all.c:10803).
+
+  private get isTh08(): boolean {
+    return this.ecl.version === 8;
+  }
+
+  // ---- TH08 variable system ----------------------------------------------
+
+  private varRead8(game: GameHost, e: Enemy, id: number, _asFloat: boolean): number {
+    const s = e.ecl;
+    const t = s.th08!;
+    if (id >= 10000 && id <= 10007) return s.vars[id - 10000];
+    if (id >= 10016 && id <= 10023) return s.vars[8 + (id - 10016)];
+    if (id >= 10036 && id <= 10039) return s.vars[16 + (id - 10036)];
+    if (id >= 10053 && id <= 10056) return s.vars[20 + (id - 10053)];
+    if (id >= 10057 && id <= 10060) return s.vars[24 + (id - 10057)];
+    if (id >= 10008 && id <= 10015) return t.enemyInts[id - 10008];
+    if (id >= 10024 && id <= 10031) return t.enemyFloats[id - 10024];
+    switch (id) {
+      // The RNG vars draw from the shared 16-bit generator FUN_0043ecc0
+      // ((s^0x9630)+0x9aad, rotate-left-2) — the same stream as TH07.
+      // FUN_0043ed20 assembles one u32 from TWO draws (first draw high,
+      // all.c:29910-29918), so every 32-bit-flavored read below consumes
+      // two draws; 10082 routes through FUN_0040d390 -> FUN_0043ed50 and is
+      // therefore also a two-draw read (all.c:14627, 5411-5419).
+      case 10032:
+        return (((game.rng.u16() << 16) | game.rng.u16()) & 0x7fffffff) >>> 0;
+      case 10033:
+        return ((game.rng.u16() << 16) | game.rng.u16()) / 4294967296;
+      case 10034:
+        return (((game.rng.u16() << 16) | game.rng.u16()) | 0);
+      case 10035:
+        return ((game.rng.u16() << 16) | game.rng.u16()) / 2147483648 - 1;
+      case 10082:
+        return (game.rng.u16() << 16 | game.rng.u16()) / 4294967296 * 6.2831854820251465 - 3.1415927410125732;
+      case 10040: return game.difficulty;
+      case 10041: return game.rank;
+      // 10042-10044: enemy x/y/z. Writes land on the ECL position; reads see
+      // the same position (the render-position distinction is a TH08 exe
+      // internal refreshed from it every dispatch).
+      case 10042: return e.x;
+      case 10043: return e.y;
+      case 10044: return e.z;
+      case 10045: return game.player.x;
+      case 10046: return game.player.y;
+      case 10047: return 0; // player z
+      case 10048: return nativeAngleTowardPlayer(game.player.x, game.player.y, e.x, e.y);
+      case 10050: return Math.hypot(game.player.x - e.x, game.player.y - e.y, -e.z);
+      case 10051: return e.hp; // bullet pool (Th08 replaces plain HP)
+      case 10069: return s.heading;
+      case 10070: return s.angularVelocity;
+      case 10071: return s.speed;
+      case 10072: return s.acceleration;
+      case 10092: return s.itemDrop;
+      case 10093: return e.score;
+    }
+    if (id >= VAR_BASE && id < VAR_BASE + 100) {
+      warnOnce(`r8-${id}`, `TH08 read of unmapped variable ${id}`);
+    }
+    // Exe float resolver default: an unmapped id returns its own literal
+    // value (all.c:14691-14693).
+    return id;
+  }
+
+  private varWriteInt8(game: GameHost, e: Enemy, id: number, value: number): void {
+    const s = e.ecl;
+    const t = s.th08!;
+    const integer = Math.trunc(value);
+    if (id >= 10000 && id <= 10007) { s.vars[id - 10000] = integer; return; }
+    if (id >= 10036 && id <= 10039) { s.vars[16 + (id - 10036)] = integer; return; }
+    if (id >= 10053 && id <= 10056) { s.vars[20 + (id - 10053)] = integer; return; }
+    if (id >= 10008 && id <= 10015) { t.enemyInts[id - 10008] = integer; return; }
+    switch (id) {
+      case 10040: game.difficulty = integer; return;
+      case 10041: game.rank = integer; return;
+      case 10051: e.hp = integer; return;
+      case 10092: s.itemDrop = integer; return;
+      case 10093: e.score = integer; return;
+    }
+  }
+
+  private varWrite8(game: GameHost, e: Enemy, id: number, value: number): void {
+    const s = e.ecl;
+    const t = s.th08!;
+    const f32 = Math.fround(value);
+    if (id >= 10016 && id <= 10023) { s.vars[8 + (id - 10016)] = f32; return; }
+    if (id >= 10057 && id <= 10060) { s.vars[24 + (id - 10057)] = f32; return; }
+    if (id >= 10024 && id <= 10031) { t.enemyFloats[id - 10024] = f32; return; }
+    switch (id) {
+      case 10042: e.x = f32; return;
+      case 10043: e.y = f32; return;
+      case 10044: e.z = f32; return;
+      case 10051: e.hp = value; return;
+      case 10069: s.heading = f32; s.angle = f32; return;
+      case 10070: s.angularVelocity = f32; return;
+      case 10071: s.speed = f32; return;
+      case 10072: s.acceleration = f32; return;
+      case 10092: s.itemDrop = Math.trunc(value); return;
+      case 10093: e.score = Math.trunc(value); return;
+    }
+    if (id >= VAR_BASE && id < VAR_BASE + 100) {
+      warnOnce(`w8-${id}`, `ignored TH08 write to unmapped variable ${id}`);
+    }
+  }
+
+  // ---- TH08-only opcode dispatch -------------------------------------------
+
+  private executeTh08(game: GameHost, e: Enemy, instr: EclInstr): 'delete' | 'flow' | 'restart' | null {
+    const s = e.ecl;
+    const ctx = s.ctx;
+    const v = this.ecl.view;
+    const a = instr.args;
+    const op = instr.id;
+    const gi = (o: number) => this.getInt(game, e, a + o);
+    const gf = (o: number) => this.getFloat(game, e, a + o);
+    const gs = (o: number) => this.getShort(game, e, a + o);
+    const setIntVar = (id: number, val: number) => this.varWriteInt(game, e, id, val);
+    const setFloatVar = (id: number, val: number) => this.varWrite(game, e, id, val);
+    const t = s.th08!;
+
+    switch (op) {
+      case 3: return null; // no case 2 in the exe switch: dead opcode (spec §op3)
+      case 20: setIntVar(gi(0), gi(4) + gi(8)); return null;   // int a+b
+      case 21: setIntVar(gi(0), gi(4) - gi(8)); return null;   // int a-b
+      case 22: setIntVar(gi(0), gi(4) * gi(8)); return null;   // int a*b
+      case 23: setIntVar(gi(0), Math.trunc(gi(4) / gi(8))); return null; // int a/b
+      case 24: setIntVar(gi(0), gi(4) % gi(8)); return null;   // int a%b
+      case 25: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) + gf(8))); return null;
+      case 26: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) - gf(8))); return null;
+      case 27: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) * gf(8))); return null;
+      case 28: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) / gf(8))); return null;
+      case 29: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) % gf(8))); return null;
+      case 35: { // lerp: var = (a - b) * t + b  (FUN_00421300)
+        setFloatVar(Math.trunc(v.f32(a)), Math.fround(Math.fround(gf(4) - gf(8)) * gf(12) + gf(8)));
+        return null;
+      }
+      case 38: { // (xVar, yVar) = (cos, sin) * r  (all.c:11260-11288)
+        const ang = normalizeNativeAngleF32(gf(8));
+        const r = gf(12);
+        setFloatVar(Math.trunc(v.f32(a)), Math.fround(Math.cos(ang) * r));
+        setFloatVar(Math.trunc(v.f32(a + 4)), Math.fround(Math.sin(ang) * r));
+        return null;
+      }
+      case 39: { // 2D distance (all.c:11289-11324)
+        const dx = gf(8) - gf(16);
+        const dy = gf(4) - gf(12);
+        setFloatVar(Math.trunc(v.f32(a)), Math.fround(Math.hypot(dx, dy)));
+        return null;
+      }
+      case 52: { // CALL (FUN_00421bd0): push the 0x228-byte frame, then ZERO
+        // the callee's vars 10053-10060 (frame+0x70) — TH07 copied the
+        // run-globals there instead; TH08 has no run-global bus. The saved
+        // return cursor is instr + size (the next instruction).
+        if (!s.disableCallStack) {
+          s.stack.push({
+            ctx: { ...ctx, index: ctx.index + 1 },
+            vars: s.vars.slice(),
+            interps: s.interpSlots.map((x) => (x ? { ...x } : null)),
+            periodicExportArmed: s.periodicExportArmed
+          });
+        }
+        this.enterSub(s, v.i32(a));
+        s.vars.fill(0, 20, 28);
+        return 'flow';
+      }
+      case 53: { // RETURN (FUN_00421cb0)
+        const frame = s.stack.pop();
+        if (!frame) return 'restart';
+        ctx.subId = frame.ctx.subId;
+        ctx.index = frame.ctx.index;
+        ctx.time = frame.ctx.time;
+        ctx.timeFrac = frame.ctx.timeFrac;
+        ctx.waitTimer = frame.ctx.waitTimer;
+        s.vars.set(frame.vars);
+        s.interpSlots = frame.interps;
+        s.periodicExportArmed = frame.periodicExportArmed;
+        return 'flow';
+      }
+      case 54: case 58: // setMainAnm (58 = auto-direction on, flags2 bit2)
+        this.setCurrentAnm(e, v.i32(a));
+        t.flags2 = op === 58 ? t.flags2 | 4 : t.flags2 & ~4;
+        return null;
+      case 55: case 59: { // setDirectionAnmRun(base) (59 = auto-dir on)
+        // FUN_00421de0 writes six u16 pose scripts in an interleaved field
+        // order (enemy+0x3332 = base+0, +0x3334 = base+3, +0x3336 = base+4,
+        // +0x3338 = base+1, +0x333a = base+2, +0x333c = base+5).
+        const base = v.i32(a);
+        s.anmExDefaults = base;
+        s.anmExFarLeft = base + 3;
+        s.anmExLeft = base + 4;
+        s.anmExRight = base + 1;
+        s.anmExFarRight = base + 2;
+        s.anmExFlags = 0xff;
+        t.flags2 = op === 59 ? t.flags2 | 4 : t.flags2 & ~4;
+        return null;
+      }
+      case 57: case 61: { // setSubAnm(index, script): TH08 has TWO slots
+        // (enemy+0x2b0 + i*0x2a4); script < 0 disables via u16 0xFFFF.
+        const slot = v.i32(a) | 0;
+        const script = v.i32(a + 4);
+        if (slot === 0 || slot === 1) {
+          s.anmSlots[slot] = script < 0 ? null : { script, runner: this.makeEnemyAnmRunner(script) };
+        }
+        t.flags2 = op === 61 ? t.flags2 | 4 : t.flags2 & ~4;
+        return null;
+      }
+      case 62: // re-apply the last direction pose (all.c:11477-11484)
+        if (s.anmExDefaults >= 0) this.setCurrentAnm(e, s.anmExDefaults + 5);
+        return null;
+      case 63: { // setPos(x, y) + armed player clamp (FUN_0042c180)
+        e.x = gf(0);
+        e.y = gf(4);
+        e.z = 0;
+        this.applyTh08PlayerClamp(game);
+        return null;
+      }
+      case 64: { // interpolate position to (x, y) over `duration` frames,
+        // easing `mode` (enemy movement mode 2/3; flags 0x2000 family)
+        const duration = gi(0);
+        const mode = gi(4);
+        const tx = gf(8);
+        const ty = gf(12);
+        if (duration <= 0) {
+          e.x = tx;
+          e.y = ty;
+          e.z = 0;
+          s.orbitTarget = { x: tx, y: ty, z: 0 };
+          s.moveMode = 0;
+        } else {
+          s.orbitTarget = { x: e.x, y: e.y, z: e.z };
+          s.interp = {
+            start: { x: e.x, y: e.y, z: e.z },
+            delta: { x: Math.fround(tx - e.x), y: Math.fround(ty - e.y), z: Math.fround(-e.z) },
+            duration,
+            left: duration
+          };
+          s.interpKind = mode;
+          s.moveMode = 2;
+          s.axisSpeed = { x: 0, y: 0, z: 0 };
+        }
+        return null;
+      }
+      case 65: { // mode-1 velocity (angle, speed); flags |= 0x1000
+        s.angle = normalizeNativeAngleF32(gf(0));
+        s.heading = s.angle;
+        s.speed = gf(4);
+        s.moveMode = 1;
+        return null;
+      }
+      case 67: { // aimed move clamped into the op-75 rect (FUN_00422020)
+        // Angle fold: aim at the player, clamp against +0x3340..+0x334c with
+        // pi/2pi mirrors. Exact fold constants not data-extracted; clamp to
+        // the rect's x span via atan2 of the clamped target point.
+        let tx = game.player.x;
+        let ty = game.player.y;
+        if (t.clampRect) {
+          tx = Math.min(Math.max(tx, t.clampRect.x1), t.clampRect.x2);
+          ty = Math.min(Math.max(ty, t.clampRect.y1), t.clampRect.y2);
+        }
+        s.angle = normalizeNativeAngleF32(Math.atan2(ty - e.y, tx - e.x));
+        s.heading = s.angle;
+        s.speed = gf(4);
+        s.moveMode = 1;
+        return null;
+      }
+      case 72: { // motion3 (anm, f1..f6): movement accel x/y + speeds
+        // (enemy+0x2dd0/+0x2dd4 accel, +0x2d9c/+0x2da0/+0x2db0/+0x2db4)
+        t.moveAux = gi(0);
+        s.axisSpeed = { x: gf(4), y: gf(8), z: 0 };
+        s.orbitSpeed = gf(12);
+        s.orbitAcceleration = gf(16);
+        s.moveMode = 1;
+        return null;
+      }
+      case 73: { // motionPos: accel from own position snapshot
+        t.moveAux = gi(0);
+        s.axisSpeed = { x: gf(4), y: gf(8), z: 0 };
+        s.orbitSpeed = gf(12);
+        s.moveMode = 1;
+        return null;
+      }
+      case 74: // speed34 (anm, s3, s4)
+        t.moveAux = gi(0);
+        s.orbitAcceleration = gf(4);
+        s.moveMode = 1;
+        return null;
+      case 75: // player clamp rect on (flags bit 19)
+        t.clampRect = { x1: gf(0), y1: gf(4), x2: gf(8), y2: gf(12) };
+        t.flags |= 0x80000;
+        return null;
+      case 76: // player clamp rect off
+        t.flags &= ~0x80000;
+        return null;
+      case 77: s.hitbox = { x: gf(0), y: gf(4), z: s.hitbox.z }; return null;
+      case 78: s.hitbox2 = { x: gf(0), y: gf(4), z: 0 }; return null;
+      case 79: { // writeFlags6 (all.c:11847-11867): inverted low bits
+        const arg = gi(0);
+        t.flags = (t.flags & ~(0x40 | 4 | 8))
+          | ((arg & 1) === 0 ? 0x40 : 0)
+          | ((arg & 2) === 0 ? 4 : 0)
+          | ((arg & 4) === 0 ? 8 : 0)
+          | (arg & 8 ? 0x10 : 0)
+          | (arg & 0x10 ? 0x10000000 : 0);
+        t.flags2 = (t.flags2 & ~0x40) | (arg & 0x20 ? 0x40 : 0);
+        return null;
+      }
+      case 80: case 81: { // complementary clear/set flag pairs (0x50/0x51)
+        const arg = gi(0);
+        const set = op === 81;
+        for (let bit = 0; bit < 6; bit++) {
+          if (!(arg & (1 << bit))) continue;
+          const on = set === (bit < 3);
+          switch (bit) {
+            case 0: t.flags = on ? t.flags | 0x40 : t.flags & ~0x40; break;
+            case 1: t.flags = on ? t.flags | 4 : t.flags & ~4; break;
+            case 2: t.flags = on ? t.flags | 8 : t.flags & ~8; break;
+            case 3: t.flags = on ? t.flags | 0x10 : t.flags & ~0x10; break;
+            case 4: t.flags = on ? t.flags | 0x10000000 : t.flags & ~0x10000000; break;
+            case 5: t.flags2 = on ? t.flags2 | 0x40 : t.flags2 & ~0x40; break;
+          }
+        }
+        return null;
+      }
+      case 82: t.suppressRadiusSq = Math.fround(gf(0) * gf(0)); return null;
+      case 83: t.flags2 = (t.flags2 & ~2) | (gi(0) & 1) << 1; return null;
+      case 87: { // write a float var on a registered (boss-slot) enemy
+        const slot = gi(8);
+        const target = this.bossSlots[slot];
+        if (target && !target.dead) {
+          this.varWrite(game, target, Math.trunc(v.f32(a)), gf(4));
+        }
+        return null;
+      }
+      case 88: { // CALL variant: sub id from arg1 (raw)
+        if (!s.disableCallStack) {
+          s.stack.push({
+            ctx: { ...ctx, index: ctx.index + 1 },
+            vars: s.vars.slice(),
+            interps: s.interpSlots.map((x) => (x ? { ...x } : null)),
+            periodicExportArmed: s.periodicExportArmed
+          });
+        }
+        this.enterSub(s, v.i32(a + 4));
+        s.vars.fill(0, 20, 28);
+        return 'flow';
+      }
+      case 90: { // createEnemy absolute 2D (sub, x, y, life, item, score)
+        if (e.hp <= 0) return null;
+        this.spawnEclEnemy(game, {
+          subId: v.i32(a), x: gf(4), y: gf(8), life: gi(12),
+          item: gi(16), score: gi(20), mirrored: false, parent: e
+        });
+        return null;
+      }
+      case 91: { // createEnemy at parent's render position + (x, y)
+        if (e.hp <= 0) return null;
+        this.spawnEclEnemy(game, {
+          subId: v.i32(a), x: e.x + gf(4), y: e.y + gf(8), life: gi(12),
+          item: gi(16), score: gi(20), mirrored: false, parent: e
+        });
+        return null;
+      }
+      case 92: { // createEnemy inheriting the parent transform: TH08 spawns
+        // relative then copies origin fields + flags 0x200. The parent-side
+        // matrix is the ANM transform; approximate with a plain relative
+        // spawn (flagged: vertical slice has no ANM-transform inheritance).
+        if (e.hp <= 0) return null;
+        this.spawnEclEnemy(game, {
+          subId: v.i32(a), x: e.x + gf(4), y: e.y + gf(8), life: gi(12),
+          item: gi(16), score: gi(20), mirrored: false, parent: e
+        });
+        return null;
+      }
+      case 96: case 97: case 98: case 99:
+      case 100: case 101: case 102: case 103: case 104:
+        return this.fireTh08(game, e, instr, op - 96);
+      case 109: // re-fire the current template (0 uses in shipped data)
+        if (s.bulletProps) this.spawnBullets(game, e, s.bulletProps);
+        return null;
+      case 107: // capture FIREs ON (flags bit 17): ops 96-104 store their raw
+        // instruction at +0x3034 for the auto-fire tick (all.c:12289-12291)
+        t.flags |= 0x20000;
+        s.shootDisabled = true;
+        return null;
+      case 108: // capture FIREs OFF
+        t.flags &= ~0x20000;
+        s.shootDisabled = false;
+        return null;
+      case 110: s.shootOffset = { x: gf(0), y: gf(4), z: 0 }; return null;
+      case 111: { // bullet transform record (op-79 analog, 6 floats,
+        // scattered field order per all.c:12321-12373)
+        const slot = gi(0);
+        if (slot >= 0 && slot < 5) {
+          s.bulletExSlots[slot] = {
+            opcode: gi(20), cond: gi(24), arg3: gi(12), arg4: gi(16),
+            f0: gf(4), f1: gf(8)
+          };
+        }
+        if (s.bulletProps) s.bulletProps.exSlots = s.bulletExSlots.slice();
+        return null;
+      }
+      case 113: { // FIRE on-fire trigger config (template+0x200)
+        const id = v.i32(a);
+        s.bulletSfx = id < 0 ? 0 : id;
+        if (id < 0) s.bulletProps && (s.bulletProps.flags &= ~0x200);
+        else if (s.bulletProps) s.bulletProps.flags |= 0x200;
+        return null;
+      }
+      case 114: case 115: { // createLaser (115 aims at the player)
+        this.createTh08Laser(game, e);
+        return null;
+      }
+      case 122: return this.declareSpellTh08(game, e, instr);
+      case 124: {
+        // aux anm/sound request (FUN_0045d660): draws exactly ONE raw RNG
+        // value into its 12-channel ring. The ring's visual/audio output is
+        // not modeled yet, but the draw is kept for RNG fidelity.
+        game.rng.u16();
+        return null;
+      }
+      case 126: t.dynCallTable[gi(4)] = gi(0); return null;
+      case 127: { // intangible/transform on (>=0) / off (<0)
+        const arg = gi(0);
+        if (arg < 0) {
+          t.flags &= ~2;
+          t.transformType = -1;
+        } else {
+          t.flags |= 2;
+          t.transformType = arg;
+          t.suppressRadiusSq = 0;
+        }
+        return null;
+      }
+      case 128: {
+        // transform cloud effect: effect id 13 at the enemy position with
+        // r/g/b floats (FUN_00425430). Visual family not yet ported; the
+        // original draws no gameplay RNG here.
+        return null;
+      }
+      case 129: t.flags = (t.flags & ~0x700000) | ((gi(0) & 7) << 20); return null;
+      case 130: s.deathCallbackSub = v.i32(a); return null;
+      case 131: { // set the bullet pool ("HP") + copies
+        e.hp = gi(0);
+        e.maxHp = Math.max(1, e.hp);
+        t.poolCopyA = e.hp;
+        t.poolCopyB = e.hp;
+        return null;
+      }
+      case 132: game.playSfx(gi(0)); return null;
+      case 133: { // phase-end thresholds (4 slots)
+        const slot = gi(0);
+        if (slot >= 0 && slot < 4) s.lifeThresholds[slot] = { threshold: gi(4), sub: v.i32(a + 8) };
+        return null;
+      }
+      case 134: { // phase timer deadline + timeout sub
+        s.timerCallbackThreshold = gi(0);
+        s.timerCallbackSub = v.i32(a + 4);
+        s.bossTimer = 0;
+        s.bossTimerPrevious = -999;
+        return null;
+      }
+      case 135: { // spawn a persistent sub-ECL context (up to 4)
+        const slot = v.i32(a) | 0;
+        const sub = v.i32(a + 4);
+        if (slot < 0 || slot > 3) return null;
+        if (sub < 0) {
+          t.subContexts.length = Math.min(t.subContexts.length, slot);
+          return null;
+        }
+        t.subContexts[slot] = {
+          ctx: { subId: sub, index: 0, time: 0, timeFrac: 0, waitTimer: 0 },
+          vars: s.vars.slice()
+        };
+        return null;
+      }
+      case 144: t.deathDropA = gi(0); t.deathDropB = gi(4); return null;
+      case 148: {
+        // SetEventIdAndAdvancePlayClock: stage play clock +30s per call
+        // (DAT_0164d30c += 0x708). The clock display is a Step-2 HUD item;
+        // retain the event id only.
+        return null;
+      }
+      case 153: { // force the phase-boundary bookkeeping now
+        s.timerCallbackSub = s.deathCallbackSub;
+        s.bossTimer = 0;
+        return null;
+      }
+      case 158: {
+        // laser slot params (FUN_004230e0/110): color + per-slot scaling.
+        // Stored on the current laser slot; the divisor semantics are
+        // UNRESOLVED in the decompile (spec §op158 caveat).
+        const laser = s.laserSlots[s.laserSlotIndex];
+        if (laser) (laser as unknown as { color: number }).color = v.u32(a + 12) >>> 0;
+        return null;
+      }
+      case 173: t.flags = (t.flags & ~0x40000000) | ((gi(0) & 1) << 30); return null;
+      case 174: {
+        // enemy effect VM (FUN_00425b70, id = arg + 0x20): ambient visual.
+        game.spawnEffectParticles(gi(0) + 0x20, e.x, e.y, 1, 0xffffffff);
+        return null;
+      }
+      case 176: {
+        // dialogue-mode global rework + force flag bit 30: the side bits
+        // feed the TH08 dialogue presenter (Step 2c).
+        t.flags |= 0x40000000;
+        return null;
+      }
+      case 184: {
+        // set the enemy's human(0)/youkai(1) side (flags bit 11): the
+        // familiar-side system re-syncs it to the player every tick.
+        t.flags = (t.flags & ~0x800) | ((gi(0) & 1) << 11);
+        return null;
+      }
+      default:
+        warnOnce(`op8-${op}`, `unhandled TH08 ECL op ${op} (sub ${ctx.subId})`);
+        return null;
+    }
+  }
+
+  private applyTh08PlayerClamp(game: GameHost): void {
+    // FUN_0042c180 @ all.c:21039-21071: while the clamp rect is armed, every
+    // op-63 setPos also clamps the PLAYER into the rect. The player-side
+    // write lands with the Border Team motion wiring (Step 3); armed rects
+    // stay stored meanwhile.
+    void game;
+  }
+
+  private createTh08Laser(game: GameHost, e: Enemy): void {
+    // TH08 laser creation (ins_114/115) reaches here only from stages that
+    // use them; stage 1 fires none. The 13-arg TH08 template maps onto the
+    // TH07 EnemyLaser pool in a later pass (see th08-ecl-ops-0x5f-0x8f.md
+    // §4) — flagged rather than approximated.
+    void game;
+    void e;
+    warnOnce('th08-laser', 'TH08 laser creation (ins_114/115) is not ported yet');
+  }
+
+  private declareSpellTh08(game: GameHost, e: Enemy, instr: EclInstr): 'delete' | 'flow' | 'restart' | null {
+    // ins_122 (FUN_00421280 -> FUN_004152a0): dword0 = number | variant<<16,
+    // dword1 = bonus, then four inline strings — the spell NAME at byte
+    // +0x14 XOR 0xAA 0xAA-padded (0x30 bytes), subtitle + two dialogue lines
+    // in raw Shift-JIS after it. Bonus decay = (bonus - bonus/7)/(timer/60)
+    // into the live spell-bonus field; the timer is ins_134's deadline.
+    const a = instr.args;
+    const v = this.ecl.view;
+    const spellId = v.u16(a);
+    const variant = v.i16(a + 2);
+    const bonus = v.i32(a + 4);
+    const bytes = v.bytes;
+    const start = a + 8;
+    let end = start;
+    while (end < bytes.length && bytes[end] !== 0xaa && end - start < 0x30) end++;
+    const decoded = new Uint8Array(end - start);
+    for (let i = 0; i < decoded.length; i++) decoded[i] = bytes[start + i] ^ 0xaa;
+    const name = new TextDecoder('shift_jis').decode(decoded);
+    const s = e.ecl;
+    s.spellName = name;
+    this.spellActive = true;
+    this.currentSpellId = spellId;
+    const timer = s.timerCallbackThreshold > 0 ? s.timerCallbackThreshold : 60;
+    const decay = Math.trunc(timer / 60) > 0
+      ? Math.trunc((bonus - Math.trunc(bonus / 7)) / Math.trunc(timer / 60))
+      : 0;
+    game.startBossSpell?.(spellId, variant, name);
+    s.th08!.spellBonus = bonus;
+    s.th08!.spellDecay = decay;
+    game.cancelBulletsToItems();
+    return null;
+  }
+
+  // ---- TH08 FIRE -----------------------------------------------------------
+
+  private fireTh08(game: GameHost, e: Enemy, instr: EclInstr, mode: number): 'delete' | 'flow' | 'restart' | null {
+    const s = e.ecl;
+    const t = s.th08!;
+    const a = instr.args;
+    // FUN_00422720 gates the whole fire on the bullet pool > 0 (all.c:15944).
+    if (e.hp <= 0) return null;
+    // Capture mode (flags bit 17, ins_107): store the raw instruction for
+    // the auto-fire tick instead of executing (all.c:12245-12253).
+    if (t.flags & 0x20000) {
+      const raw = new Int32Array(11);
+      const base = instr.args - 12; // absolute instruction start
+      for (let i = 0; i < 11; i++) raw[i] = this.ecl.view.i32(base + i * 4);
+      t.capturedFire = raw;
+      return null;
+    }
+    // Var-resolve order is RNG-load-bearing (spec 0x5f §96-104): sprite,
+    // count1, count2, base angle, speed1, spread, speed2, offset LAST.
+    const gi = (o: number) => this.getInt(game, e, a + o);
+    const gf = (o: number) => this.getFloat(game, e, a + o);
+    const gs = (o: number) => this.getShort(game, e, a + o);
+    const sprite = gs(0);
+    const count1raw = gi(4);
+    const count2raw = gi(8);
+    const angle1 = gf(20);
+    const speed1 = gf(12);
+    const angle2 = gf(24);
+    const speed2 = gf(16);
+    const offset = gs(2);
+    const flags = this.ecl.view.i32(a + 28);
+    // Entry gates (all.c:15944-15952): tag bit 0x8000 requires enemy flag
+    // bit 11, bit 0x10000 forbids it; fire is suppressed while the player
+    // stands inside the squared suppress radius (op 85's field).
+    if ((flags & 0x8000) !== 0 && (t.flags & 0x800) === 0) return null;
+    if ((flags & 0x10000) !== 0 && (t.flags & 0x800) !== 0) return null;
+    if (t.suppressRadiusSq > 0) {
+      const dx = game.player.x - e.x;
+      const dy = game.player.y - e.y;
+      if (dx * dx + dy * dy < t.suppressRadiusSq) return null;
+    }
+    // Rank scaling (FUN_00422720 tail; settings bit0 gates it off — the
+    // port models the default-on configuration): int rank-lerp truncates
+    // the product before adding the low base; speeds floor at 0.3.
+    const rank = game.rank;
+    const lerpI = (lo: number, hi: number) => Math.trunc((hi - lo) * rank / 32) + lo;
+    const lerpF = (lo: number, hi: number) => Math.fround(Math.fround((hi - lo) * rank) / 32 + lo);
+    const count1 = Math.max(1, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
+    const count2 = Math.max(1, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
+    const rankSpeed = lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
+    const props: BulletProps = {
+      sprite,
+      offset,
+      count1,
+      count2,
+      speed1: speed1 !== 0 ? Math.max(0.3, Math.fround(speed1 + rankSpeed)) : 0,
+      speed2: Math.max(0.3, Math.fround(speed2 + Math.fround(rankSpeed / 2))),
+      angle1,
+      angle2,
+      flags,
+      sfx: s.bulletSfx,
+      exSlots: s.bulletExSlots.slice(),
+      aimMode: mode
+    };
+    s.bulletProps = props;
+    this.spawnBullets(game, e, props);
+    return null;
+  }
+
+  // ---- TH08 bullet visuals ---------------------------------------------------
+
+  // Global sequential etama.anm script index -> {entryIndex, localId}. The
+  // 116 on-disk script ids are contiguous -150..-35 across six entries.
+  private th08EtamaScriptMap: ({ entryIndex: number; localId: number } | undefined)[] | null = null;
+
+  private etamaScriptByGlobalIndex(globalIndex: number): { entryIndex: number; localId: number } | null {
+    if (!this.th08EtamaScriptMap) {
+      const map: ({ entryIndex: number; localId: number } | undefined)[] = [];
+      this.bulletAnm.entries.forEach((entry, entryIndex) => {
+        for (const localId of entry.scriptIds) {
+          if (localId >= -150 && localId <= -35) map[localId + 150] = { entryIndex, localId };
+        }
+      });
+      this.th08EtamaScriptMap = map;
+    }
+    return this.th08EtamaScriptMap[globalIndex] ?? null;
+  }
+
+  private th08BulletHeightCache = new Map<number, number>();
+
+  // The MAIN script's base sprite pixel height: drives the aux-VM offset
+  // shift tables and the prototype hitbox. Static-cached per type.
+  private th08BulletBaseHeight(type: number): number {
+    const cached = this.th08BulletHeightCache.get(type);
+    if (cached !== undefined) return cached;
+    let height = 8;
+    const proto = TH08_BULLET_PROTOTYPES[type];
+    if (proto) {
+      const ref = this.etamaScriptByGlobalIndex(proto[0]);
+      if (ref) {
+        const runner = new AnmRunner(this.bulletAnm, ref.localId, {
+          entryIndex: ref.entryIndex,
+          spriteIndexOffset: this.bulletAnm.entries[ref.entryIndex]?.spriteBase ?? 0
+        });
+        const frame = runner.spriteFrame();
+        if (frame) height = frame.h;
+      }
+    }
+    this.th08BulletHeightCache.set(type, height);
+    return height;
+  }
+
+  private bulletRectTh8(type: number, offset: number): { x: number; y: number; w: number; h: number; imageKey: string } {
+    const key = `t${type}:${offset}`;
+    const cached = this.bulletRectCache.get(key);
+    if (cached) return cached;
+    const proto = TH08_BULLET_PROTOTYPES[type];
+    if (!proto) {
+      throw new Error(`TH08 FIRE type ${type} is outside the 21-prototype table @ 0x4b4ad8`);
+    }
+    const ref = this.etamaScriptByGlobalIndex(proto[0]);
+    if (!ref) throw new Error(`TH08 bullet prototype ${type} main script ${proto[0]} missing in etama.anm`);
+    // The engine SetSprites the Static-stopped main VM with base+offset in
+    // GLOBAL sprite space (FUN_0042f5f0 @ 0x42fa87); AnmRunner expresses the
+    // same shift via spriteIndexOffset.
+    const runner = new AnmRunner(this.bulletAnm, ref.localId, {
+      entryIndex: ref.entryIndex,
+      spriteIndexOffset: (this.bulletAnm.entries[ref.entryIndex]?.spriteBase ?? 0) + offset
+    });
+    const frame = runner.spriteFrame();
+    if (!frame) throw new Error(`missing TH08 bullet frame for type ${type} offset ${offset}`);
+    const rect = { x: frame.x, y: frame.y, w: frame.w, h: frame.h, imageKey: frame.imageKey || 'etama' };
+    this.bulletRectCache.set(key, rect);
+    return rect;
+  }
+
+  // Hitbox half-extents + death-chain category per prototype (AddedCallback
+  // @ all.c:24344-24420): derived from the MAIN script id and the BASE
+  // sprite's height; the per-shot offset never changes it.
+  th08BulletHitbox(type: number): number {
+    const proto = TH08_BULLET_PROTOTYPES[type];
+    if (!proto) return 4;
+    const s = proto[0];
+    const h = this.th08BulletBaseHeight(type);
+    if (h > 32) return 24;
+    if (h > 16) {
+      if (s === 8 || s === 113 || s === 114 || s === 115) return 5;
+      if (s === 9 || s === 109 || s === 110) return 8;
+      return 10;
+    }
+    if (h > 8) {
+      if (s === 2 || s === 4 || s === 5 || s === 6 || s === 107 || s === 108 || s === 111 || s === 112) return 4;
+      return 6;
+    }
+    return 4;
+  }
 }
