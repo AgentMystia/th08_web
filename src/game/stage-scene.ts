@@ -20,6 +20,7 @@ import { PlayerEffects } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
+import { Th08BorderBombSim } from './th08-border-bombs';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import { TH08_HUD } from './th08-hud-layout';
 import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
@@ -619,6 +620,7 @@ export class StageScene implements GameHost {
   }));
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
   private bombRunner: BombRunner | null = null;
+  private th08Bomb: Th08BorderBombSim | null = null;
   private bombContext!: BombContext;
   // Latched bomb duration (frames) for end-window checks (ReimuA focused's
   // final-30-frames detonation, etc.).
@@ -2518,6 +2520,19 @@ export class StageScene implements GameHost {
   private onBombUsed(): void {
     const p = this.playerObj;
     this.bombActiveThisFrame = true;
+    // TH08 Border Team: run the committed border-bomb simulation
+    // (Reimu/Human or Yukari/Youkai per the focus-latched side, the exe's
+    // five-callback address tables) instead of the TH07 bomb engine.
+    if (this.runState) {
+      this.th08Bomb = new Th08BorderBombSim({
+        side: p.bombFocused ? 'youkai' : 'human',
+        mode: 'normal'
+      });
+      this.playSfx(14);
+      this.adjustRank(-200);
+      this.forceCollectAllItems();
+      return;
+    }
     p.bombCherryDrain = bombCherryDrainPerFrame(
       p.character,
       p.bombFocused,
@@ -2633,8 +2648,40 @@ export class StageScene implements GameHost {
   // functions 0x407840-0x40cbf0; specs spec-bombs-{shared,reimu,marisa,
   // sakuya}.md). Slot consumption below is exe-exact.
   private tickBombChoreography(): void {
+    // TH08 path: the border-bomb simulation runs its own tick and applies
+    // its bullet-clear events against the live enemy-bullet list. Damage
+    // stays null until the v1.00d callback damage fields are decoded.
+    if (this.th08Bomb) {
+      this.tickTh08Bomb();
+      return;
+    }
     if (!this.bombRunner) return;
     this.bombRunner.tick(this.refreshBombContext());
+  }
+
+  private tickTh08Bomb(): void {
+    const sim = this.th08Bomb;
+    if (!sim) return;
+    const p = this.playerObj;
+    const targets = this.enemies
+      .filter((e) => !e.dead && e.ecl.interactable)
+      .map((e) => ({ x: e.x, y: e.y, z: e.z, id: e.id }));
+    const events = sim.tick({
+      player: { x: p.x, y: p.y, z: 0 },
+      targets,
+      bullets: this.enemyBullets.map((b, i) => ({ x: b.x, y: b.y, id: i, cleared: b.dead }))
+    });
+    for (const event of events) {
+      if (event.kind === 'bullet-clear') {
+        for (const id of event.clearedBulletIds) {
+          const bullet = this.enemyBullets[id];
+          if (bullet && !bullet.dead) {
+            bullet.dead = true;
+          }
+        }
+      }
+    }
+    if (sim.ended) this.th08Bomb = null;
   }
 
   // Bomb visuals, per shot type, from the character's own playerXX.anm bomb
