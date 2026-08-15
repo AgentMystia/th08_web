@@ -34,6 +34,7 @@ console.log(JSON.stringify({
   boss: snap.bossActive,
   spell: snap.spellName,
   cherry: snap.cherry,
+  th08: snap.th08 ?? null,
   player: snap.player,
   bgm
 }));

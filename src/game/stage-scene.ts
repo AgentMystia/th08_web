@@ -18,6 +18,7 @@ import {
 } from './player';
 import { PlayerEffects } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
+import { Th08RunState } from './th08-state';
 import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
 import { DialogueRunner, portraitSprite } from './dialogue';
 import { stageBgmTrack } from './bgm';
@@ -458,7 +459,11 @@ export class StageScene implements GameHost {
   stageClearTimer = 0;
   private exitFired = false;
   private stageCompleteFired = false;
-  cherry: CherrySystem;
+  // TH07 Supernatural Border system — null on TH08 scenes, which run the
+  // committed Th08RunState (time orbs, night clock, human/youkai gauge)
+  // instead. Every consumer gates on null; the TH07 paths are unchanged.
+  cherry: CherrySystem | null;
+  runState: Th08RunState | null = null;
   hiScore = 100000;
   dialogue: DialogueRunner | null = null;
   private dialogueResume = false;
@@ -723,6 +728,12 @@ export class StageScene implements GameHost {
       (id) =>
         new AnmRunner(this.stdTxtAnm, id, { entryIndex: 0, spriteIndexOffset: introEntry.spriteBase })
     );
+    // TH08 runs the committed run-state (time orbs, night clock, human/
+    // youkai gauge) in place of TH07's Supernatural Border cherry system.
+    if (character === 'reimuYukari') {
+      this.cherry = null;
+      this.runState = new Th08RunState(difficulty);
+    } else {
     this.cherry = new CherrySystem(
       {
         borderStartAction: () => {
@@ -804,6 +815,7 @@ export class StageScene implements GameHost {
       },
       difficulty
     );
+    }
     this.runtime = new StageRuntime(stageData, {
       etama: assets.anms.etama,
       enemy: this.enemyAnm,
@@ -841,10 +853,12 @@ export class StageScene implements GameHost {
       this.playerObj.lives = carry.lives;
       this.playerObj.bombs = carry.bombs;
       this.playerObj.power = carry.power;
-      this.cherry.cherry = carry.cherry;
-      this.cherry.cherryMax = carry.cherryMax;
-      this.cherry.cherryPlus = carry.cherryPlus;
-      this.cherry.spellsCaptured = carry.spellsCaptured;
+      if (this.cherry) {
+        this.cherry.cherry = carry.cherry;
+        this.cherry.cherryMax = carry.cherryMax;
+        this.cherry.cherryPlus = carry.cherryPlus;
+        this.cherry.spellsCaptured = carry.spellsCaptured;
+      }
       this.extendLevel = carry.extendLevel;
       this.rank = carry.rank;
       this.rankAccumulator = carry.rankAccumulator ?? 0;
@@ -1180,7 +1194,7 @@ export class StageScene implements GameHost {
     const stageGraze = this.graze - this.stageEntryGraze;
     const stagePointItems = this.pointItems - this.stageEntryPointItems;
     let internal =
-      this.stageNumber * 100000 + stageGraze * 50 + stagePointItems * 5000 + this.cherry.cherryMax;
+      this.stageNumber * 100000 + stageGraze * 50 + stagePointItems * 5000 + (this.cherry?.cherryMax ?? 0);
     let playerBonus = 0;
     let bombBonus = 0;
     if (finalClear) {
@@ -1213,7 +1227,7 @@ export class StageScene implements GameHost {
       // (live cherry), into the results block. Stage 1 is the decisive
       // witness: native clear credit 915750 uses 320000 cherryMax; using its
       // 128770 live cherry produced only 628900.
-      cherry: this.cherry.cherryMax * 10,
+      cherry: (this.cherry?.cherryMax ?? 0) * 10,
       player: playerBonus * 10,
       bomb: bombBonus * 10,
       mult,
@@ -1232,10 +1246,10 @@ export class StageScene implements GameHost {
       lives: this.playerObj.lives,
       bombs: this.playerObj.bombs,
       power: this.playerObj.power,
-      cherry: this.cherry.cherry,
-      cherryMax: this.cherry.cherryMax,
-      cherryPlus: this.cherry.cherryPlus,
-      spellsCaptured: this.cherry.spellsCaptured,
+      cherry: this.cherry?.cherry ?? 0,
+      cherryMax: this.cherry?.cherryMax ?? 0,
+      cherryPlus: this.cherry?.cherryPlus ?? 0,
+      spellsCaptured: this.cherry?.spellsCaptured ?? 0,
       extendLevel: this.extendLevel,
       rank: this.rank,
       rankAccumulator: this.rankAccumulator,
@@ -1867,7 +1881,7 @@ export class StageScene implements GameHost {
       // score += uVar6/10 at all.c:6644).
       const bonus = this.spellcard.bonus + this.spellcard.grazeBonus;
       this.addScore(Math.trunc(bonus / 10));
-      this.cherry.onSpellCapture();
+      this.cherry?.onSpellCapture();
       const tally = this.spellHistory.get(this.spellcard.id);
       if (tally) tally.got++;
       // Duration 280 frames (0x117+1 @ all.c:18302-18304). Failure path
@@ -1891,7 +1905,7 @@ export class StageScene implements GameHost {
   }
 
   onBossPhaseTimeout(): void {
-    this.cherry.onBossTimeout();
+    this.cherry?.onBossTimeout();
     // Exe timeout path (all.c:13831): FUN_00422ea0(10) — every bullet fades
     // out with NO item conversion, lasers clear unconditionally (bombType
     // 10 ignores the immunity bit) — and the spell is marked failed
@@ -2006,7 +2020,7 @@ export class StageScene implements GameHost {
   }
 
   awardCherry(v: number): void {
-    this.cherry.debugAddCherry(v);
+    this.cherry?.debugAddCherry(v);
   }
 
   // Test/debug-only: replace the live field with a deterministic three-shot
@@ -2150,7 +2164,7 @@ export class StageScene implements GameHost {
       // not pay until the following player tick; full-dialogue freeze pauses
       // the drain together with the rest of the player callback.
       if (bombActiveAtFrameStart || bombCleanupThisTick) {
-        this.cherry.drainBomb(p.bombCherryDrain);
+        this.cherry?.drainBomb(p.bombCherryDrain);
       }
     }
     // The exe reads the bomb button as a raw HELD bit (DAT_004afe30 bit 2 @
@@ -2164,7 +2178,7 @@ export class StageScene implements GameHost {
     // freshly-written cooldown remains 40 for this frame. Otherwise +0x23fc
     // is decremented first and held X may trigger as soon as it reaches zero.
     const borderBreakRequested = !frozen && !bombCleanupThisTick &&
-      p.bombTimer <= 0 && this.cherry.borderEngaged && input.held.has('bomb');
+      p.bombTimer <= 0 && (this.cherry?.borderEngaged ?? false) && input.held.has('bomb');
     if (borderBreakRequested) {
       if (this.breakBorder(null, true, true)) this.forceCollectAllItems();
     } else if (!frozen) {
@@ -2179,7 +2193,7 @@ export class StageScene implements GameHost {
       }
     }
     if (!frozen && p.bombTimer > 0) this.prepareBombEffects();
-    if (!messageActive) this.cherry.retryBorderStart();
+    if (!messageActive) this.cherry?.retryBorderStart();
     // FUN_0043a820's compound gate is bomb-active && Marisa family && B shot
     // (DAT_004ca4d8 / DAT_00625625 / DAT_00625626), not a global bomb gate.
     // Snapshot the frame-entry bomb state because Player.update() consumes
@@ -2195,7 +2209,7 @@ export class StageScene implements GameHost {
       // FUN_0043e2e0 precedes movement, shot MOVE/FIRE, and the priority-10
       // enemy manager. Snapshot the state before Player.update consumes the
       // last invulnerability tick, matching the native state dispatcher.
-      this.tickPlayerShotCollisionClock(p.invulnFrames > 0 || this.cherry.borderActive);
+      this.tickPlayerShotCollisionClock(p.invulnFrames > 0 || (this.cherry?.borderActive ?? false));
       p.update(input, this.slowRate, !messageActive);
       if (bombActiveAtFrameStart && p.bombTimer === 0) {
         this.bombCleanupPending = true;
@@ -2261,7 +2275,7 @@ export class StageScene implements GameHost {
     if (!frozen) {
       // FUN_0043eef0 returns before the state-4 border timer while dialogue
       // freeze DAT_0061c25c is set; the 540-frame clock pauses with gameplay.
-      const borderBonus = this.cherry.tick(this.slowRate);
+      const borderBonus = this.cherry ? this.cherry.tick(this.slowRate) : 0;
       if (borderBonus > 0) this.addScore(borderBonus);
       // The border ring/badge VMs ride the same clock (the exe's effect VM
       // ticks inside the frozen-with-gameplay EffectManager priority band):
@@ -2322,8 +2336,8 @@ export class StageScene implements GameHost {
     // advancing its own script (FUN_00428392 -> FUN_0043e620,
     // all.c:17791-17793). This is distinct from the global gameplay-freeze
     // predicate: timestamp-only dialogue is active here too.
-    if (this.isDialogueActive() && this.cherry.borderEngaged) {
-      const forcedBorderBonus = this.cherry.forceBorderSurvival();
+    if (this.isDialogueActive() && (this.cherry?.borderEngaged ?? false)) {
+      const forcedBorderBonus = this.cherry ? this.cherry.forceBorderSurvival() : 0;
       if (forcedBorderBonus > 0) this.addScore(forcedBorderBonus);
     }
     if (this.dialogue) {
@@ -2382,7 +2396,7 @@ export class StageScene implements GameHost {
       p.character,
       p.bombFocused,
       this.difficulty,
-      this.cherry.cherry,
+      this.cherry ? this.cherry.cherry : 0,
       Math.trunc(p.bombTimer)
     );
     this.playSfx(14);
@@ -2713,7 +2727,7 @@ export class StageScene implements GameHost {
       p.power = p.power < 17 ? 0 : p.power - 16;
       this.spawnDeathDrop('bigPower', p.x, p.y);
       for (let i = 0; i < 5; i++) this.spawnDeathDrop('power', p.x, p.y);
-      this.cherry.onDeath(p.sht.cherryLossOnDeath, p.character.startsWith('sakuya'));
+      this.cherry?.onDeath(p.sht.cherryLossOnDeath, p.character.startsWith('sakuya'));
     }
     // FUN_0043dca0 @ 0x43df6a-0x43df79: the miss penalty lands after the
     // power/cherry/drop bookkeeping, on the death-commit frame.
@@ -2966,7 +2980,7 @@ export class StageScene implements GameHost {
     // Attack contacts still damage and score during a bomb, but never add
     // Cherry or Cherry+ while the bomb-active flag is set.
     if (!this.bombActiveThisFrame) {
-      this.cherry.onShotHit(
+      this.cherry?.onShotHit(
         raw,
         e.ecl.isBoss,
         this.stageNumber,
@@ -3602,7 +3616,7 @@ export class StageScene implements GameHost {
     // 0x43bc42-0x43bc70; character is not consulted. DAT_00494fb0 maps id8
     // to FUN_004194d0, four raw RNG draws per particle, so this cosmetic
     // branch is gameplay-stream-visible.
-    const borderUnfocused = this.cherry.borderActive && !p.focusHeld;
+    const borderUnfocused = (this.cherry?.borderActive ?? false) && !p.focusHeld;
     this.spawnEffectParticles(
       8,
       (p.x + sourceX) / 2,
@@ -3626,9 +3640,9 @@ export class StageScene implements GameHost {
     // gains. Reversing that order crosses the /1500 step one graze early;
     // Yuyuko spell 115 crosses three such steps and was over-awarded by 60.
     if (this.spellcard) {
-      this.spellcard.grazeBonus += 2500 + Math.trunc(this.cherry.cherry / 1500) * 20;
+      this.spellcard.grazeBonus += 2500 + Math.trunc((this.cherry?.cherry ?? 0) / 1500) * 20;
     }
-    this.cherry.onGraze(this.focusHeld);
+    this.cherry?.onGraze(this.focusHeld);
     this.playSfx(30);
   }
 
@@ -3689,7 +3703,7 @@ export class StageScene implements GameHost {
   }
 
   private breakBorder(sourceBullet: EnemyBullet | null, includePending = false, rescueDeathbomb = false): boolean {
-    if (!this.cherry.breakBorder(includePending)) return false;
+    if (!this.cherry || !this.cherry.breakBorder(includePending)) return false;
     this.applyBorderBreakEffects(sourceBullet, rescueDeathbomb);
     return true;
   }
@@ -3771,7 +3785,7 @@ export class StageScene implements GameHost {
       // miss/invuln/respawn — native `playerState != ALIVE` includes INVULNERABLE,
       // BORDER, DEAD, SPAWNING (紫's 「弾幕結界」 etc.).
       if (e.ecl.pauseDuringBombOrBorder &&
-          (this.bombActiveThisFrame || this.cherry.borderActive ||
+          (this.bombActiveThisFrame || (this.cherry?.borderActive ?? false) ||
            !this.playerObj.alive || this.playerObj.invulnFrames > 0)) {
         continue;
       }
@@ -4311,7 +4325,7 @@ export class StageScene implements GameHost {
       // the sprite flashes red every 4 frames — this takes precedence over
       // the spawn-invuln dim (both gate on the same invuln timer, and the
       // border branch wins in the native state dispatcher).
-      if (this.cherry.borderActive) {
+      if (this.cherry?.borderActive) {
         const flashRed = this.cherry.borderTimer % 4 < 2;
         r.drawAnmFrame(pf, ox + p.x, oy + p.y, flashRed ? { color: 0xff0000 } : {});
         return;
@@ -4570,7 +4584,7 @@ export class StageScene implements GameHost {
           tw.elapsed++;
         }
       } else {
-        if (this.cherry.borderActive) {
+        if (this.cherry?.borderActive) {
           // FUN_00430c10: while the Supernatural Border is live, every item
           // is latched to homing state with guaranteed-max scoring. (The
           // decompile names DAT_004b5ec5 here; Stage 1-6 exact AUX requires
@@ -4766,7 +4780,11 @@ export class StageScene implements GameHost {
       }
       case 'point': {
         this.pointItems++;
-        const pts = this.cherry.pointItemScore(it.y, p.sht.pocLineY, it.guaranteedMax);
+        // TH08 point items credit through the run state's native /10
+        // score rule with the PoC ladder (full item-pool wiring: Step 2d).
+        const pts = this.cherry
+          ? this.cherry.pointItemScore(it.y, p.sht.pocLineY, it.guaranteedMax)
+          : this.runState!.collectPoint({ atOrAbovePoC: it.y < p.sht.pocLineY }).creditedScore;
         this.addScore(pts);
         // Case 1: position or +0x280 selects yellow. The +0x27f homing byte
         // by itself does not affect value/color.
@@ -4788,7 +4806,7 @@ export class StageScene implements GameHost {
         // Exe item type 8 (the Border-break circle's unboxed petal): +30
         // cherry&cherryPlus (dc6f) and +70 cherry-only (dd6c), NO score
         // (FUN_00430c10 case 8; FUN_0043eb00 @ all.c:28984).
-        this.cherry.onBigCherryItem();
+        this.cherry?.onBigCherryItem();
         break;
       case 'bomb':
         if (p.bombs < 8) {
@@ -4818,10 +4836,10 @@ export class StageScene implements GameHost {
         // item-score flag than DAT_004ca4d8/attack-slot activity: do not fold
         // this cleanup tick into the global bomb collision gate.
         const bombItemScoreActive = this.bombActiveThisFrame || this.bombCleanupDefersBorder;
-        const v = this.cherry.grazeScaledItemScore(this.graze, bombItemScoreActive);
+        const v = this.cherry ? this.cherry.grazeScaledItemScore(this.graze, bombItemScoreActive) : 0;
         this.addScore(v);
         this.spawnScorePopup(v * 10, it.x, it.y, 0xffffffff, true);
-        this.cherry.onSmallCherryItem(this.bombActiveThisFrame, (it.poolSlot & 1) === 0);
+        this.cherry?.onSmallCherryItem(this.bombActiveThisFrame, (it.poolSlot & 1) === 0);
         break;
       }
       case 'case9Cherry': {
@@ -4830,10 +4848,10 @@ export class StageScene implements GameHost {
         // all.c:22249-22260). Stage-6 native processing 5950 collects two
         // of these and advances cherryPlus by 200; treating them as type 6
         // advanced it by only 40.
-        const v = this.cherry.grazeScaledItemScore(this.graze);
+        const v = this.cherry ? this.cherry.grazeScaledItemScore(this.graze) : 0;
         this.addScore(v);
         this.spawnScorePopup(v * 10, it.x, it.y, 0xffffffff, true);
-        this.cherry.onCase9CherryItem();
+        this.cherry?.onCase9CherryItem();
         break;
       }
       case 'bigCherry': {
@@ -4843,19 +4861,17 @@ export class StageScene implements GameHost {
         // captures (all.c:22236), plus a height-falloff score bonus when
         // cherry is already saturated. Saturated: white/yellow score popup;
         // otherwise a RED popup showing the cherry gain (spec-popups.md).
-        if (this.cherry.cherry >= this.cherry.cherryMax) {
-          const v = this.cherry.largeCherryItemScore(
-            it.y,
-            this.playerObj.sht.pocLineY,
-            it.guaranteedMax
-          );
+        if ((this.cherry?.cherry ?? 0) >= (this.cherry?.cherryMax ?? 0)) {
+          const v = this.cherry
+            ? this.cherry.largeCherryItemScore(it.y, this.playerObj.sht.pocLineY, it.guaranteedMax)
+            : 0;
           this.addScore(v);
           const yellow = !!it.guaranteedMax || it.y < p.sht.pocLineY;
           this.spawnScorePopup(v * 10, it.x, it.y, yellow ? 0xffffff00 : 0xffffffff);
         } else {
-          this.spawnScorePopup(this.cherry.largeCherryItemGain(), it.x, it.y, 0xffff4040);
+          this.spawnScorePopup(this.cherry ? this.cherry.largeCherryItemGain() : 0, it.x, it.y, 0xffff4040);
         }
-        this.cherry.onLargeCherryItem();
+        this.cherry?.onLargeCherryItem();
         break;
       }
     }
@@ -4944,8 +4960,8 @@ export class StageScene implements GameHost {
   // so the applied value is the average of the previous and current
   // request, and exactly one dimmed frame trails the border's end.
   private borderDimLevel(): number {
-    const timer = this.cherry.borderTimer;
-    const active = this.cherry.borderActive && timer > 0;
+    const timer = this.cherry?.borderTimer ?? 0;
+    const active = (this.cherry?.borderActive ?? false) && timer > 0;
     const c = borderDimRequest(timer);
     const state = { a: this.borderDimA, rgb: this.borderDimRgb };
     if (active) smoothBlendColor(state, c); // Player::UpdateState feed
@@ -5081,7 +5097,7 @@ export class StageScene implements GameHost {
       if (this.borderRing) {
         const ring = this.borderRing;
         const scaleMul = ring.mode === 'active'
-          ? 1 + (0.25 - 1) * Math.min(1, (BORDER_DURATION - this.cherry.borderTimer) / BORDER_DURATION)
+          ? 1 + (0.25 - 1) * Math.min(1, (BORDER_DURATION - (this.cherry?.borderTimer ?? 0)) / BORDER_DURATION)
           : 0.0625 + (1.3 - 0.0625) * Math.min(1, ring.age / 30);
         r.drawAnmFrame(ring.runner.spriteFrame(),
           ox + (ring.x ?? this.playerObj.x), oy + (ring.y ?? this.playerObj.y),
@@ -6041,6 +6057,7 @@ export class StageScene implements GameHost {
     // B/G/R = 0xb0/0x80/0xc0) floats above the blank. The banner sprite
     // dims to alpha 64/255 while charging and runs full-bright while the
     // border is up; the engine-drawn digits stay opaque.
+    if (this.cherry) {
     this.blit(r, 'ascii', [0, 224, 96, 16], PLAYFIELD.x, 448, this.cherry.borderActive ? 1 : 64 / 255);
     const cherryStr = String(Math.max(0, Math.trunc(this.cherry.cherry)));
     this.drawNumber(r, this.cherry.cherry, PLAYFIELD.x + 84 - cherryStr.length * DIGIT_W, 450);
@@ -6079,6 +6096,7 @@ export class StageScene implements GameHost {
     // gauge while BORDER_ACTIVE (ascii.anm entry-0 script 5, gauge +24/+8).
     if (this.cherry.borderActive && this.borderBadgeRunner) {
       r.drawAnmFrame(this.borderBadgeRunner.spriteFrame(), PLAYFIELD.x + 24, 448 + 8);
+    }
     }
 
     if (this.bossActive) {

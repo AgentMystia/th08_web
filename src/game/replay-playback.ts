@@ -60,10 +60,12 @@ export function applyReplayStageSnapshot(scene: StageScene, rpy: Rpy, stageIndex
   scene.playerObj.lives = stage.lives;
   scene.playerObj.bombs = stage.bombs;
   scene.playerObj.power = stage.power;
-  scene.cherry.cherry = stage.cherry;
-  scene.cherry.cherryMax = stage.cherryMax;
-  scene.cherry.cherryPlus = stage.cherryPlus;
-  scene.cherry.spellsCaptured = stage.spellsCaptured;
+  if (scene.cherry) {
+    scene.cherry.cherry = stage.cherry;
+    scene.cherry.cherryMax = stage.cherryMax;
+    scene.cherry.cherryPlus = stage.cherryPlus;
+    scene.cherry.spellsCaptured = stage.spellsCaptured;
+  }
   scene.extendLevel = stage.extendLevel;
   scene.powerItemCountForScore = stage.powerItemCountForScore;
   // Gui.cpp:1365's stage-6 clear-bonus arm reads stageReplayData[4] — slot

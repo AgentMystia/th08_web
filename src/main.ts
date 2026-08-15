@@ -381,7 +381,7 @@ async function boot(): Promise<void> {
       },
       addCherry: (n: number) => {
         if (!stage) return;
-        stage.cherry.debugAddCherry(n);
+        stage.cherry?.debugAddCherry(n);
       },
       primeBorderCollision: () => stage?.debugPrimeBorderCollision() ?? false,
       clearEnemyBullets: () => { if (stage) stage.enemyBullets.length = 0; },
