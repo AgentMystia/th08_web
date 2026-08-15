@@ -2,7 +2,7 @@ import { BinaryView } from './bin';
 import { normalizeAngle } from '../core/util';
 import type { Rng } from '../core/rng';
 
-// TH07 ANM (version 2) parser and script runner.
+// TH07/TH08 ANM (entry versions 2 and 3) parser and script runner.
 //
 // Entry header layout: anm_header06_t (64 bytes) — see thtk/extlib/thtypes.
 const warnedAnmOps = new Set<string>();
@@ -33,6 +33,7 @@ export interface AnmEntry {
   width: number;
   height: number;
   format: number;
+  version: 2 | 3;
   // Global id of this entry's embedded sprite 0 (the running entry base at
   // parse time). Callers that address an entry's sprites by embedded id must
   // add this — entry bases depend on every earlier entry's max embedded id.
@@ -56,6 +57,7 @@ interface ScriptRef {
   id: number;
   start: number; // absolute file offset of the first instruction
   imageKey: string | null;
+  version: 2 | 3;
 }
 
 function imageKeyFromName(name: string): string | null {
@@ -105,11 +107,13 @@ export class Anm {
       const nameOffset = v.u32(entryStart + 28);
       const version = v.u32(entryStart + 40);
       const nextOffset = v.u32(entryStart + 56);
-      if (version !== 2) throw new Error(`${this.name}: ANM entry version ${version}, expected 2`);
+      if (version !== 2 && version !== 3) {
+        throw new Error(`${this.name}: ANM entry version ${version}, expected 2 or 3`);
+      }
       const name = v.cstring(entryStart + nameOffset);
       const imageKey = imageKeyFromName(name);
       const entry: AnmEntry = {
-        name, imageKey, width, height, format,
+        name, imageKey, width, height, format, version,
         spriteBase: entryBase,
         scriptBase,
         spriteIds: [],
@@ -142,7 +146,7 @@ export class Anm {
         const id = v.i32(ptr + i * 8);
         if (id >= 0) maxEmbeddedScript = Math.max(maxEmbeddedScript, id);
         const start = entryStart + v.u32(ptr + i * 8 + 4);
-        const ref: ScriptRef = { id, start, imageKey };
+        const ref: ScriptRef = { id, start, imageKey, version };
         this.scriptRefs.set(id, ref);
         entryScriptMap.set(id, ref);
         entry.scriptIds.push(id);
@@ -278,6 +282,7 @@ export class AnmRunner {
   private scriptStart: number;
   private ip: number;
   private imageKey: string | null;
+  private entryVersion: 2 | 3 = 2;
   readonly scriptId: number;
 
   frame = 0;
@@ -327,6 +332,7 @@ export class AnmRunner {
     const ref = options.entryIndex != null ? anm.scriptRefInEntry(options.entryIndex, scriptId) : anm.scriptRef(scriptId);
     this.scriptStart = ref.start;
     this.imageKey = options.imageKey ?? ref.imageKey;
+    this.entryVersion = ref.version;
     this.ip = ref.start;
     this.spriteIndexOffset = options.spriteIndexOffset ?? 0;
     this.rng = options.rng;
@@ -623,8 +629,12 @@ export class AnmRunner {
       case 28: // visibility
         this.visible = !!v.i32(a);
         break;
-      case 29: // scale over duration (linear)
-        this.scaleInterp = { start: this.frame, duration: Math.max(1, v.i32(a + 8)), formula: 0, from: [this.scaleX, this.scaleY], to: [v.f32(a), v.f32(a + 4)] };
+      case 29: // TH07: scale over duration (linear); TH08 changed this to one i32
+        if (this.entryVersion === 3) {
+          warnUnhandledOp(`${this.anm.name}: unimplemented ANM v3 opcode 29 in script ${this.scriptId}`);
+        } else {
+          this.scaleInterp = { start: this.frame, duration: Math.max(1, v.i32(a + 8)), formula: 0, from: [this.scaleX, this.scaleY], to: [v.f32(a), v.f32(a + 4)] };
+        }
         break;
       case 30: // render-state flag (z-buffer related); no effect in Canvas renderer
       case 31: // render-state flag; no effect in Canvas renderer
@@ -725,7 +735,7 @@ export class AnmRunner {
         // stays in sync) — a throw here escapes the rAF tick and freezes the
         // whole game, which is exactly how stg4bg2's ins_80 hard-locked
         // stage 4 before it was implemented.
-        warnUnhandledOp(`${this.anm.name}: unhandled ANM v2 opcode ${type} in script ${this.scriptId}`);
+        warnUnhandledOp(`${this.anm.name}: unhandled ANM v${this.entryVersion} opcode ${type} in script ${this.scriptId}`);
     }
   }
 

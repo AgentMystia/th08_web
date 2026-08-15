@@ -1,18 +1,22 @@
 import { BinaryView } from './bin';
 
-// TH07 replay container (.rpy, magic "T7RP"). Load pipeline mirrors
-// Th07.exe FUN_004402d0 (all.c:29624): decrypt in place from +0x10 with the
-// key byte at +0x0D (b -= key; key += 7), verify the additive checksum
-// (0x3F000318 + sum of bytes [0x0D, EOF)) against u32 @+0x08, then
-// LZSS-decompress the body at +0x54. Offsets in the two stage tables are
-// absolute into the decompressed image (0x54 header + body), fixed up the
-// same way FUN_00440480 rebases them at playback start. Field semantics:
-// reference/re-specs/exe-replay.md.
+// TH07/TH08 replay containers (.rpy, magic "T7RP"/"T8RP"). The TH07 load
+// pipeline mirrors Th07.exe FUN_004402d0: decrypt from +0x10, verify its
+// additive checksum, then LZSS-decompress at +0x54. TH08 version 6 instead
+// carries rawFileSize at +0x0c, decrypts [0x18, rawFileSize) with the byte
+// key at +0x15, stores compressed/decompressed sizes in the decrypted raw
+// header, and starts the LZSS stream after its two fixed pointer tables at
+// +0x68. In both cases the raw header plus decompressed ReplayData form the
+// complete image; all stage and slowdown table pointers are image-relative.
 
 const MAGIC = 0x50523754; // "T7RP"
+const TH08_MAGIC = 0x50523854; // "T8RP"
 const HEADER_SIZE = 0x54;
+const TH08_RAW_HEADER_SIZE = 0x68;
 const STAGE_SLOTS = 7; // 1-6 + Extra; Phantasm replays use th7_udXXXX slots too
+const TH08_STAGE_SLOTS = 9;
 const SUBHEADER_SIZE = 0x2c;
+const TH08_SUBHEADER_SIZE = 0x40;
 export const MAX_RPY_BYTES = 16 * 1024 * 1024;
 
 // Bits of the per-frame input word (a verbatim copy of DAT_004afe2c made by
@@ -152,7 +156,18 @@ export function detectAuxAlignment(
 
 export interface RpyStage {
   stage: number; // 1-based table index: 1..6 = stages, 7 = Extra
-  offset: number; // absolute offset of the 0x2C sub-header in the image
+  offset: number; // absolute image offset of this stage's metadata block
+  // TH08 exposes its full 0x40-byte stage snapshot under these names. The
+  // compatibility fields below retain TH07's cherry/rank spelling for callers
+  // that were written against T7RP.
+  score: number;
+  pointItemExtends: number;
+  nextPointItemExtendThreshold: number;
+  pointItemValue: number;
+  youkaiGauge: number;
+  rank: number;
+  character: number;
+  clockTime: number;
   // Stage-entry snapshot (+ scoreAtEnd). rngSeed (+0x20) is what
   // FUN_00440480 (all.c:29748) injects into the live RNG (DAT_00495e00) at
   // playback start. The cherry triple was pinned by cross-checking the
@@ -185,6 +200,7 @@ export interface RpyStage {
   spellsCaptured: number; // +0x27 u8 (provisional — trajectory 0/3/7/12/16/21
   // over a Lunatic clear fits captures)
   inputs: Uint16Array; // per-frame input word (first u16 of each 4-byte record)
+  inputHigh: Uint16Array; // high word of wide replay input records (TH08)
   auxFlags: Uint16Array; // second u16 (ctx+0x9e; opaque, usually 0)
   // One playback-observed-FPS byte per 30 input frames from the matching
   // +0x38 table block. The raw trailer has one leading recorder byte; native
@@ -195,27 +211,35 @@ export interface RpyStage {
 }
 
 export const RPY_CHARACTERS = ['reimuA', 'reimuB', 'marisaA', 'marisaB', 'sakuyaA', 'sakuyaB'] as const;
+export const RPY_TH08_CHARACTERS = [
+  'reimuYukari', 'marisaAlice', 'sakuyaRemilia', 'yuyukoYoumu'
+] as const;
 
 export class Rpy {
-  readonly version: number;
-  readonly shotByte: number; // character*2 + subtype == StageScene.shotIndex
-  readonly difficulty: number; // 0=Easy .. 3=Lunatic, 4=Extra, 5=Phantasm
-  readonly date: string; // "MM/DD"
-  readonly name: string;
-  readonly score: number; // raw internal units; displayed value is ×10
+  version!: number;
+  shotByte!: number; // TH07 shot index, or raw TH08 ReplayData shotType
+  difficulty!: number; // 0=Easy .. 3=Lunatic, 4=Extra, 5=Phantasm
+  date!: string; // "MM/DD"
+  name!: string;
+  score!: number; // raw internal units; displayed value is ×10
   // Config starting-lives at record time (global header +0x38, the 8th int of
   // the 14-int run-state block FUN_00440480 restores to DAT_0061c254 at
   // playback start; low byte 2-5). Drives the results-screen "Player
   // Penalty" clear-bonus scaling (FUN_00429446: 3 -> x5/10, 4 -> x2/10) and
   // matches the first stage sub-header's lives field in every known file.
-  readonly initialLives: number;
+  initialLives!: number;
   readonly stages: RpyStage[] = [];
-  readonly image: BinaryView; // decrypted+decompressed full image (debugging)
+  image!: BinaryView; // decrypted+decompressed full image (debugging)
 
   constructor(source: string | Uint8Array) {
     const raw = new BinaryView(source);
-    if (raw.length > MAX_RPY_BYTES) throw new Error('T7RP file exceeds 16 MiB safety limit');
-    if (raw.length < HEADER_SIZE || raw.u32(0) !== MAGIC) throw new Error('not a T7RP replay');
+    if (raw.length > MAX_RPY_BYTES) throw new Error('replay file exceeds 16 MiB safety limit');
+    const magic = raw.u32(0);
+    if (magic === TH08_MAGIC) {
+      this.parseTh08(raw);
+      return;
+    }
+    if (raw.length < HEADER_SIZE || magic !== MAGIC) throw new Error('not a T7RP replay');
     this.version = raw.u16(4);
     if ((this.version & 0xfff) !== 0x100) throw new Error(`unsupported T7RP version 0x${this.version.toString(16)}`);
 
@@ -265,7 +289,7 @@ export class Rpy {
     for (let i = 0; i < present.length; i++) {
       const { offset, stage } = present[i];
       const end = i + 1 < present.length ? present[i + 1].offset : trailerStart;
-      this.stages.push(parseStage(v, stage, offset, end));
+      this.stages.push(parseStage(v, stage, offset, end, this.shotByte));
     }
     this.stages.sort((a, b) => a.stage - b.stage);
     for (const stage of this.stages) {
@@ -279,13 +303,146 @@ export class Rpy {
   }
 
   get character(): (typeof RPY_CHARACTERS)[number] {
-    const c = RPY_CHARACTERS[this.shotByte];
-    if (!c) throw new Error(`T7RP shot byte ${this.shotByte} out of range`);
+    // The existing engine's character enum predates TH08 teams. Preserve its
+    // TH07-compatible primary-character selection; `shotByte` remains the
+    // authoritative raw TH08 ReplayData shotType.
+    if (this.version === 6) return RPY_CHARACTERS[(this.shotByte & 3) === 3 ? 0 : this.shotByte * 2];
+    const table = RPY_CHARACTERS;
+    const c = table[this.shotByte];
+    if (!c) throw new Error(`replay shot byte ${this.shotByte} out of range`);
     return c;
+  }
+
+  get th08Character(): (typeof RPY_TH08_CHARACTERS)[number] {
+    const c = RPY_TH08_CHARACTERS[this.shotByte];
+    if (!c) throw new Error(`T8RP shotType ${this.shotByte} out of range`);
+    return c;
+  }
+
+  private parseTh08(raw: BinaryView): void {
+    if (raw.length < TH08_RAW_HEADER_SIZE) throw new Error('truncated T8RP replay');
+    this.version = raw.u16(4);
+    if (this.version !== 6) throw new Error(`unsupported T8RP version ${this.version}`);
+
+    const rawFileSize = raw.u32(0x0c);
+    if (rawFileSize < TH08_RAW_HEADER_SIZE || rawFileSize > raw.length) {
+      throw new Error(`T8RP invalid raw file size 0x${rawFileSize.toString(16)}`);
+    }
+
+    const data = raw.bytes.slice();
+    let key = data[0x15];
+    for (let i = 0x18; i < rawFileSize; i++) {
+      data[i] = (data[i] - key) & 0xff;
+      key = (key + 7) & 0xff;
+    }
+    const dec = new BinaryView(data);
+    const compressedSize = dec.u32(0x18);
+    const decompSize = dec.u32(0x1c);
+    if (decompSize > MAX_RPY_BYTES) throw new Error('T8RP decompressed body exceeds 16 MiB safety limit');
+    if (compressedSize > rawFileSize - TH08_RAW_HEADER_SIZE) throw new Error('T8RP truncated compressed body');
+
+    const image = new Uint8Array(TH08_RAW_HEADER_SIZE + decompSize);
+    image.set(data.subarray(0, TH08_RAW_HEADER_SIZE));
+    const produced = lzssDecompress(
+      data.subarray(TH08_RAW_HEADER_SIZE, TH08_RAW_HEADER_SIZE + compressedSize),
+      image.subarray(TH08_RAW_HEADER_SIZE)
+    );
+    if (produced !== decompSize) throw new Error('T8RP decompressed size mismatch');
+    const v = this.image = new BinaryView(image);
+
+    const body = TH08_RAW_HEADER_SIZE;
+    this.shotByte = v.u8(body + 0x02);
+    this.difficulty = v.u8(body + 0x03);
+    if (this.difficulty > 4) throw new Error(`T8RP difficulty ${this.difficulty} is out of range`);
+    this.date = v.cstring(body + 0x04);
+    this.name = v.cstring(body + 0x0a).trim();
+    this.score = v.u32(body + 0x48);
+    this.initialLives = v.u8(body + 0x5c);
+
+    const inputOffsets: number[] = [];
+    const slowdownOffsets: number[] = [];
+    for (let i = 0; i < TH08_STAGE_SLOTS; i++) {
+      inputOffsets.push(v.u32(0x20 + i * 4));
+      slowdownOffsets.push(v.u32(0x44 + i * 4));
+    }
+    const slowdownStart = Math.min(...slowdownOffsets.filter((o) => o > 0), v.length);
+    const present = inputOffsets
+      .map((offset, i) => ({ offset, stage: i + 1 }))
+      .filter((s) => s.offset > 0)
+      .sort((a, b) => a.offset - b.offset);
+
+    for (let i = 0; i < present.length; i++) {
+      const { offset, stage } = present[i];
+      const end = i + 1 < present.length ? present[i + 1].offset : slowdownStart;
+      this.stages.push(this.parseTh08Stage(v, stage, offset, end));
+    }
+    this.stages.sort((a, b) => a.stage - b.stage);
+    for (const stage of this.stages) {
+      const offset = slowdownOffsets[stage.stage - 1];
+      const length = Math.ceil(stage.inputs.length / 30);
+      if (offset <= 0 || offset + 1 + length > v.length) {
+        throw new Error(`T8RP stage ${stage.stage} slowdown trailer out of bounds`);
+      }
+      stage.slowdown = v.bytes.slice(offset + 1, offset + 1 + length);
+    }
+  }
+
+  private parseTh08Stage(v: BinaryView, stage: number, offset: number, end: number): RpyStage {
+    if (offset + TH08_SUBHEADER_SIZE > end || end > v.length) {
+      throw new Error(`T8RP stage ${stage} block out of bounds (${offset}..${end})`);
+    }
+    const frames = Math.floor((end - offset - TH08_SUBHEADER_SIZE) / 4);
+    const inputs = new Uint16Array(frames);
+    const inputHigh = new Uint16Array(frames);
+    for (let f = 0; f < frames; f++) {
+      inputs[f] = v.u16(offset + TH08_SUBHEADER_SIZE + f * 4);
+      inputHigh[f] = v.u16(offset + TH08_SUBHEADER_SIZE + f * 4 + 2);
+    }
+    const score = v.u32(offset);
+    const pointItems = v.u32(offset + 0x04);
+    const graze = v.u32(offset + 0x08);
+    const pointItemExtends = v.u32(offset + 0x0c);
+    const nextPointItemExtendThreshold = v.u32(offset + 0x10);
+    const pointItemValue = v.u32(offset + 0x14);
+    const youkaiGauge = v.i16(offset + 0x18);
+    const rngSeed = v.u16(offset + 0x1a);
+    return {
+      stage,
+      offset,
+      score,
+      pointItems,
+      graze,
+      pointItemExtends,
+      nextPointItemExtendThreshold,
+      pointItemValue,
+      youkaiGauge,
+      rngSeed,
+      power: v.u8(offset + 0x1c),
+      lives: v.u8(offset + 0x1d),
+      bombs: v.u8(offset + 0x1e),
+      rank: v.u8(offset + 0x1f),
+      character: v.u8(offset + 0x20),
+      clockTime: v.u8(offset + 0x22),
+      scoreAtEnd: score,
+      cherry: youkaiGauge,
+      cherryMax: 0,
+      cherryPlus: 0,
+      extendLevel: pointItemExtends,
+      extendThreshold: nextPointItemExtendThreshold,
+      rankByte: v.u8(offset + 0x1f),
+      powerItemCountForScore: 0,
+      spellsCaptured: 0,
+      inputs,
+      inputHigh,
+      auxFlags: new Uint16Array(0),
+      slowdown: new Uint8Array(0)
+    };
   }
 }
 
-function parseStage(v: BinaryView, stage: number, offset: number, end: number): RpyStage {
+function parseStage(
+  v: BinaryView, stage: number, offset: number, end: number, shotByte: number
+): RpyStage {
   if (offset + SUBHEADER_SIZE > end || end > v.length) {
     throw new Error(`T7RP stage ${stage} block out of bounds (${offset}..${end})`);
   }
@@ -299,12 +456,17 @@ function parseStage(v: BinaryView, stage: number, offset: number, end: number): 
   return {
     stage,
     offset,
+    score: v.u32(offset),
     scoreAtEnd: v.u32(offset),
     pointItems: v.u32(offset + 0x04),
     cherry: v.u32(offset + 0x08),
     cherryMax: v.u32(offset + 0x0c),
     cherryPlus: v.u32(offset + 0x10),
     graze: v.u32(offset + 0x14),
+    pointItemExtends: v.u32(offset + 0x18),
+    nextPointItemExtendThreshold: v.u32(offset + 0x1c),
+    pointItemValue: 0,
+    youkaiGauge: v.u32(offset + 0x08),
     extendLevel: v.u32(offset + 0x18),
     extendThreshold: v.u32(offset + 0x1c),
     rngSeed: v.u16(offset + 0x20),
@@ -312,9 +474,13 @@ function parseStage(v: BinaryView, stage: number, offset: number, end: number): 
     lives: v.u8(offset + 0x23),
     bombs: v.u8(offset + 0x24),
     rankByte: v.u8(offset + 0x25),
+    rank: v.u8(offset + 0x25),
+    character: shotByte,
+    clockTime: 0,
     powerItemCountForScore: v.u8(offset + 0x26),
     spellsCaptured: v.u8(offset + 0x27),
     inputs,
+    inputHigh: new Uint16Array(frames),
     auxFlags,
     slowdown: new Uint8Array(0)
   };

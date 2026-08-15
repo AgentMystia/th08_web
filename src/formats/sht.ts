@@ -1,14 +1,13 @@
 import { BinaryView } from './bin';
 
-// TH07 SHT player-data format (one file per character/type/focus-state).
+// TH07/TH08 SHT player-data format (one file per character/type/focus-state).
 //
 // Verified against the TH07 struct definition in Priw8's sht-webedit tool
 // (js/struct/struct_07.js, https://github.com/Priw8/sht-webedit), which is
 // the only public source with an exact byte-for-byte field list for this
-// game's .sht layout, plus field semantics from that repo's README. This is
-// NOT the same layout as TH06 (which has no .sht at all) or TH08+ (which
-// inserts extra unknown i16 fields into the shooter record) - PyTouhou's
-// sht.py documents TH06 only and was cross-checked but not trusted blindly.
+// game's .sht layout, plus field semantics from that repo's README. TH08 uses
+// the same family with a 56-byte main header and 56-byte shooter records.
+// This is NOT the TH06 layout (that game has no .sht at all).
 // Every field offset below was additionally confirmed by dumping all 12
 // ply*.sht files and matching values against community-documented PCB facts
 // (movement speeds, hitbox widths, graze radii, deathbomb-window frame
@@ -45,6 +44,12 @@ import { BinaryView } from './bin';
 // reimplemented 1:1; stage-scene.ts keys approximations off funcs[0] and
 // shotType (see AGENTS.md §7). Shooter records run until an interval/delay
 // sentinel of 0xffff/0xffff (4 bytes of 0xff).
+//
+// TH08 differences, validated against ply00a/ply00as: the power-offset table
+// starts at +0x38; the main header preserves unknownOld0/1/2; each shooter
+// inserts i16 unknownOldSht0 after damage and i16 unknownOldSht2 after the
+// option/unknownOldSht1 byte pair. Callbacks remain four 32-bit indices at
+// the end of the 56-byte record.
 
 export interface ShtShot {
   interval: number;
@@ -57,7 +62,10 @@ export interface ShtShot {
   speed: number;
   damage: number;
   orb: number; // 0 = player, 1 = left option, 2 = right option
+  unknownOldSht0: number;
   shotType: number;
+  unknownOldSht1: number;
+  unknownOldSht2: number;
   sprite: number; // ANM script id in the character's playerXX.anm
   sfxId: number; // sound effect id to play on fire, -1 = none (not yet wired to playback)
   funcs: [number, number, number, number]; // behavior function indices (see header comment)
@@ -72,6 +80,10 @@ export interface ShtLevel {
 }
 
 export class Sht {
+  readonly isTh08: boolean;
+  readonly unknownHead: number;
+  readonly bombPerLife: number;
+  readonly unknownOld0: number;
   readonly bombs: number;
   readonly deathbombWindow: number;
   readonly hitbox: number;
@@ -84,28 +96,38 @@ export class Sht {
   readonly focusedSpeed: number;
   readonly diagSpeed: number;
   readonly diagFocusedSpeed: number;
+  readonly unknownOld1: number;
+  readonly unknownOld2: number;
   readonly levels: ShtLevel[] = [];
 
   constructor(source: string | Uint8Array) {
     const v = new BinaryView(source);
     const levelCount = v.i16(2);
-    this.bombs = v.f32(4);
-    this.deathbombWindow = v.i32(8);
+    const oldTable = v.length > 56 ? v.u32(52) : v.length;
+    const th08Table = v.length > 60 ? v.u32(56) : v.length;
+    this.isTh08 = oldTable >= v.length && th08Table < v.length;
+    const tableOffset = this.isTh08 ? 56 : 52;
+    const recordSize = this.isTh08 ? 56 : 52;
+    this.unknownHead = v.i16(0);
+    this.bombPerLife = this.bombs = v.f32(4);
+    this.unknownOld0 = this.deathbombWindow = v.i32(8);
     this.hitbox = v.f32(12);
     this.grazebox = v.f32(16);
     this.autocollectSpeed = v.f32(20);
     this.itemRadius = v.f32(24);
-    this.cherryLossOnDeath = v.f32(28);
-    this.pocLineY = v.f32(32);
+    this.cherryLossOnDeath = this.isTh08 ? 0 : v.f32(28);
+    this.pocLineY = v.f32(this.isTh08 ? 28 : 32);
+    this.unknownOld1 = this.isTh08 ? v.u32(32) : 0;
     this.speed = v.f32(36);
     this.focusedSpeed = v.f32(40);
     this.diagSpeed = v.f32(44);
     this.diagFocusedSpeed = v.f32(48);
+    this.unknownOld2 = this.isTh08 ? v.f32(52) : 0;
     for (let i = 0; i < levelCount; i++) {
-      const offset = v.u32(52 + i * 8);
-      const power = v.u32(52 + i * 8 + 4);
+      const offset = v.u32(tableOffset + i * 8);
+      const power = v.u32(tableOffset + i * 8 + 4);
       const shots: ShtShot[] = [];
-      for (let o = offset; o + 4 <= v.length;) {
+      for (let o = offset; o + recordSize <= v.length;) {
         const interval = v.u16(o);
         const delay = v.u16(o + 2);
         if (interval === 0xffff && delay === 0xffff) break;
@@ -119,13 +141,18 @@ export class Sht {
           angle: v.f32(o + 20),
           speed: v.f32(o + 24),
           damage: v.i16(o + 28),
-          orb: v.u8(o + 30),
-          shotType: v.u8(o + 31),
-          sprite: v.i16(o + 32),
-          sfxId: v.i16(o + 34),
-          funcs: [v.i32(o + 36), v.i32(o + 40), v.i32(o + 44), v.i32(o + 48)]
+          unknownOldSht0: this.isTh08 ? v.i16(o + 30) : 0,
+          orb: v.u8(this.isTh08 ? o + 32 : o + 30),
+          unknownOldSht1: this.isTh08 ? v.u8(o + 33) : v.u8(o + 31),
+          unknownOldSht2: this.isTh08 ? v.i16(o + 34) : 0,
+          shotType: this.isTh08 ? v.u8(o + 33) : v.u8(o + 31),
+          sprite: v.i16(this.isTh08 ? o + 36 : o + 32),
+          sfxId: v.i16(this.isTh08 ? o + 38 : o + 34),
+          funcs: this.isTh08
+            ? [v.i32(o + 40), v.i32(o + 44), v.i32(o + 48), v.i32(o + 52)]
+            : [v.i32(o + 36), v.i32(o + 40), v.i32(o + 44), v.i32(o + 48)]
         });
-        o += 52;
+        o += recordSize;
       }
       this.levels.push({ power, shots });
     }

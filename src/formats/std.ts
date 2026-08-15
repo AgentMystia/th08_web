@@ -193,6 +193,8 @@ const OBJECT_TABLE_OFFSET = 0x490;
 
 export class Std {
   readonly view: BinaryView;
+  readonly objectCount: number;
+  readonly faceCount: number;
   readonly stageName: string;
   readonly songNames: string[] = [];
   readonly songPaths: string[] = [];
@@ -221,6 +223,8 @@ export class Std {
 
   constructor(source: string | Uint8Array) {
     this.view = new BinaryView(source);
+    this.objectCount = this.view.i16(0);
+    this.faceCount = this.view.i16(2);
     this.stageName = this.view.shiftJis(16, this.cstrEnd(16, 128));
     for (let i = 0; i < 4; i++) {
       const nameOff = 16 + 128 + i * 128;
@@ -240,13 +244,16 @@ export class Std {
 
   private parse(): void {
     const v = this.view;
-    const objectCount = v.i16(0);
     const faceOffset = v.i32(4);
     const scriptOffset = v.i32(8);
-    for (let i = 0; i < objectCount; i++) {
+    for (let i = 0; i < this.objectCount; i++) {
       this.objects.push(this.parseObject(v.i32(OBJECT_TABLE_OFFSET + i * 4)));
     }
-    for (let off = faceOffset, guard = 0; off + 16 <= v.length && guard < 4096; off += 16, guard++) {
+    for (
+      let off = faceOffset, guard = 0;
+      off + 16 <= v.length && guard < this.faceCount;
+      off += 16, guard++
+    ) {
       const id = v.i16(off);
       if (id < 0) break;
       this.instances.push({ id, x: v.f32(off + 4), y: v.f32(off + 8), z: v.f32(off + 12) });
