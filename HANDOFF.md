@@ -100,3 +100,22 @@ future session with a working X11/longer window should finish it.
   software rendering the game did not reach stage-1 code inside the window
   in this environment. Finishing it (a working X11 or a longer window, or
   winedbg's own script mode) is the next session's first task.
+
+## Update (2026-08-15, third pass — verifier accuracy + trace blocker pinned)
+
+- The verifier's kill census was under-reporting by ~3x (it polled
+  scene.enemies for hp<=0 after the manager had already spliced dead enemies
+  out of the array). Instrumenting runtime.killEnemy shows the real stage-1
+  kill count is 101 with the first at f269 — the damage/drop/settle chain is
+  confirmed working at the right order of magnitude. The remaining score/
+  graze/point gap is downstream of item collection (pointItems 2 vs 61),
+  which is downstream of WHERE kills happen (kill geometry), which is
+  upstream of the native evidence.
+- The native trace blocker is now precisely characterized: under wine's
+  software-rendered Direct3D on Xvfb, Th08.exe spins at 99.5% CPU without
+  ever opening a game data file (no .dat/.rpy/.anm CreateFile in 300s) — it
+  never reaches the title screen, so no breakpoint past the exe entry can
+  fire. The harness itself is proven working (the entry breakpoint at
+  0x4a619e fires and the gdb 'commands' loop prints + auto-continues). On a
+  host where the original boots (real GPU or wine with GL), the same script
+  produces the trace; it is not a code bug.
