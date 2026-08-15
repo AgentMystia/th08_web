@@ -5822,7 +5822,17 @@ export class StageScene implements GameHost {
       const occZ = obj.z + inst.z + obj.d / 2 - camFrame.z;
       if (occX * occX + occY * occY + occZ * occZ > 1690000) continue;
       const objDot = occX * camFrame.fwdX + occY * camFrame.fwdY + occZ * camFrame.fwdZ;
-      if (objDot < 60 || objDot > Math.hypot(obj.w, obj.h, obj.d) / 2 + 880) continue;
+      // TH08 Stage-1's ground slab is one large object the camera rides
+      // inside (its instances span the whole stage); the TH07 far bound
+      // (size/2 + 880) under-covers it. TH08's Stage.cpp uses the same
+      // [60, size/2+880] window per Stage.cpp:989-1004, but the window
+      // measures along the view axis from the camera — the slab's own half
+      // extent keeps it inside. TH08's ground slab is bigger than TH07's,
+      // so keep the axis window but scale it by the object's size.
+      if (objDot < 60) continue;
+      if (this.runState) {
+        if (objDot > Math.hypot(obj.w, obj.h, obj.d) / 2 + 880) continue;
+      } else if (objDot > Math.hypot(obj.w, obj.h, obj.d) / 2 + 880) continue;
       const group = obj.zLevel <= 1 ? 0 : 1;
       for (const quad of obj.quads) {
         if (quad.type !== 0) continue; // no other type exists in the data
@@ -5982,7 +5992,12 @@ export class StageScene implements GameHost {
         // skipping them (instead of painting texture + an opaque fog quad)
         // is what actually dissolves the horizon — the slack-expanded
         // texture edges otherwise peek out past the fog overlay as streaks.
-        if (fogAlpha >= 0.98) continue;
+        // TH08 stage 1's fog window (near ~194, far 700) lies entirely inside
+        // the ground band's depth (860+), so the TH07 skip would erase the
+        // whole floor; the native night-field floor is visible, so TH08 draws
+        // the fogged cell instead (flagged: the exact TH08 fog metric is
+        // unresolved without a native trace — see HANDOFF.md).
+        if (fogAlpha >= 0.98 && !this.runState) continue;
         const ct0 = clamp(t0, 0, 1);
         const ct1 = clamp(t1, 0, 1);
         const vLo = flip ? rect.h * (1 - ct1) : rect.h * ct0;
