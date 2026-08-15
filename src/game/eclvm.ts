@@ -3968,8 +3968,10 @@ export class StageRuntime {
     }
     if (mode === 0 || mode === 1) {
       // The ECL spawn score is stored at enemy+0x2bc0 in display*10 units;
-      // FUN_0041ed50 adds that value / 10 for modes 0 and 1 only.
-      game.addScore(Math.trunc((e.score || 0) / 10));
+      // FUN_0041ed50 adds that value / 10 for modes 0 and 1 only. TH08's
+      // addScore (FUN_004181f0) already divides by 10 — pass the raw value
+      // there so the kill credit isn't divided twice.
+      game.addScore(this.ecl.version === 8 ? (e.score || 0) : Math.trunc((e.score || 0) / 10));
     }
     if (mode === 1) s.interactable = false;
     if (mode === 3) {

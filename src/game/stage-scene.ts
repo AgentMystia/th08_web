@@ -1273,6 +1273,15 @@ export class StageScene implements GameHost {
   // -- GameHost --------------------------------------------------------------
 
   addScore(v: number): void {
+    // TH08 credits score at award/10 (FUN_004181f0 @ 0x4181f0); the live
+    // field is display/10-scale and the HUD shows it verbatim. Route through
+    // the run state so score and the gauge/ladder consumers share one
+    // accumulator.
+    if (this.runState) {
+      this.runState.addScore(v);
+      this.score = this.runState.score;
+      return;
+    }
     this.score += v;
   }
 
@@ -4981,11 +4990,13 @@ export class StageScene implements GameHost {
       case 'point': {
         this.pointItems++;
         // TH08 point items credit through the run state's native /10
-        // score rule with the PoC ladder (full item-pool wiring: Step 2d).
+        // score rule with the PoC ladder (full item-pool wiring: Step 2d);
+        // runState.addScore already credited it — do not double-credit.
         const pts = this.cherry
           ? this.cherry.pointItemScore(it.y, p.sht.pocLineY, it.guaranteedMax)
           : this.runState!.collectPoint({ atOrAbovePoC: it.y < p.sht.pocLineY }).creditedScore;
-        this.addScore(pts);
+        if (this.cherry) this.addScore(pts);
+        else this.score = this.runState!.score;
         // Case 1: position or +0x280 selects yellow. The +0x27f homing byte
         // by itself does not affect value/color.
         const yellow = !!it.guaranteedMax || it.y < p.sht.pocLineY;

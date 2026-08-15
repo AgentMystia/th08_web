@@ -45,6 +45,8 @@ scene.mode = 'test';
 // applyReplayStageSnapshot's TH07 fields — the full restore lands with the
 // browser T8RP preview): score/graze/lives/bombs/power + the TH08 run-state
 // fields.
+// The recorded stage-entry rank (T8RP +0x25): the run's neutral point.
+scene.rank = stage.rankByte;
 scene.score = 0; // stage 1 of the recording starts fresh
 scene.graze = stage.graze;
 scene.playerObj.lives = stage.lives;
@@ -110,7 +112,9 @@ for (let f = 0; f < frames; f++) {
       seenSpawned.add(enemy.id);
       spawnFrames.push(f);
     }
-    if (enemy.dead && !seenDead.has(enemy.id)) {
+    // hp<=0 is the durable kill signal (the manager removes dead enemies the
+    // same frame; TH08 sweeps set HP=0 and never delete the slot).
+    if (enemy.hp <= 0 && !seenDead.has(enemy.id)) {
       seenDead.add(enemy.id);
       killFrames.push(f);
     }
