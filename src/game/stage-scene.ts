@@ -5439,9 +5439,12 @@ export class StageScene implements GameHost {
     if (this.stageNumber >= 6) return;
     if (this.playerObj.character === 'reimuYukari') {
       // The TH08 vertical bundle intentionally does not ship the other teams'
-      // loading ANMs; Stage 1 uses only the native capture animation.
+      // loading ANMs; Stage 1's clear presentation resolves to the native
+      // capture animation (capture.anm entry-0 script -4, the full-screen
+      // capture fade) with no loading portrait.
       this.clearLoadingRunner = null;
-      this.clearCaptureRunner = new AnmRunner(this.assets.anms.capture, 1, { imageKey: 'capture:@' });
+      const capture = this.assets.anms.capture;
+      this.clearCaptureRunner = new AnmRunner(capture, -4, { imageKey: 'capture:@', entryIndex: 0, spriteIndexOffset: capture.entries[0].spriteBase });
       this.clearCaptureArmed = true;
       return;
     }

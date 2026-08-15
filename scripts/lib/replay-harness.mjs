@@ -33,6 +33,13 @@ export function makeStubAssets(mod) {
   return { anms, images: {} };
 }
 
+export function makeStubAssetsTh08(mod) {
+  const anms = Object.fromEntries(
+    Object.entries(mod.TH08_DATA.anm).map(([key, b64]) => [key, new mod.Anm(b64, key)])
+  );
+  return { anms, images: {} };
+}
+
 export function makeStubAudio() {
   return {
     preloadSfx() {},

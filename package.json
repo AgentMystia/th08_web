@@ -22,7 +22,8 @@
     "perf:smoke": "node scripts/perf-smoke.mjs",
     "latency:trace": "node scripts/latency-probe.mjs",
     "prepare-pages": "node scripts/prepare-pages.mjs",
-    "deploy": "node scripts/deploy-pages.mjs"
+    "deploy": "node scripts/deploy-pages.mjs",
+    "replay:verify:th08": "node scripts/replay-verify-th08.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

@@ -84,7 +84,11 @@ export class Ecl {
         if (size < 8) break;
         if (off + size > v.length) break;
         const evt: TimelineEvent = { time, arg0: 0, op, size, rank };
-        if (size >= 32 && (op === 0 || op === 2 || op === 4 || op === 6)) {
+        // TH08 timeline v2 (th08-stage1.md + FUN_0042a8a0's switch at
+        // all.c:20270-20393): op 6 is a 12-byte MSG-start, NOT the 32-byte
+        // spawn of TH07's table. Spawn family = 0-5 and 11/12/15.
+        const isSpawn = size >= 32 && (op <= 5 || op === 11 || op === 12 || op === 15);
+        if (isSpawn) {
           evt.arg0 = v.i32(off + 8);
           evt.x = v.f32(off + 12);
           evt.y = v.f32(off + 16);

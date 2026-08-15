@@ -14,5 +14,6 @@ export {
 } from '../game/replay-playback';
 export { Anm } from '../formats/anm';
 export { TH07_DATA } from '../data/th07-data';
+export { TH08_DATA } from '../data/th08-data';
 export { stageSnapshot } from '../game/snapshot';
 export { DialogueRunner } from '../game/dialogue';
