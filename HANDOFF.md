@@ -81,3 +81,22 @@ future session with a working X11/longer window should finish it.
    actual bound before widening.
 4. Item-pool swap to Th08ItemSpawnPool once drop rules are evidenced.
 5. Visual acceptance against reference/native-shots/ (play/side/lower).
+
+## Update (2026-08-15, second pass)
+
+- Stage-1 background renders: fully-fogged ground cells draw on the TH08
+  path (TH07's skip erased the floor — the native fog window sits inside
+  the ground band's depth). dev-shot f2000/f2500 show the night sky, moon,
+  tree silhouettes, rice paddy, and petal danmaku matching the native
+  userdemo's look.
+- Auto-fire capture+replay is periodic (was every-frame). Graze and score
+  moved toward native (178 vs 536; 56519 vs 7376015) but the kill stream is
+  still short: the recorded player survives stage 1 without dying and never
+  pushes the PoC line, so most wave enemies live to the boss sweep. The
+  residual divergence is upstream in the wave patterns' micro-geometry and
+  is NOT provable from the decompile alone — it needs the native PRE-trace.
+- The wine+winedbg harness (scripts/native-trace.mjs) boots the original
+  and installs breakpoints at the spawn/fire/RNG VAs, but under Xvfb's
+  software rendering the game did not reach stage-1 code inside the window
+  in this environment. Finishing it (a working X11 or a longer window, or
+  winedbg's own script mode) is the next session's first task.
