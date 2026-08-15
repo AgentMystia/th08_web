@@ -10,6 +10,7 @@ import type { GameAssets } from './assets';
 import { Anm, AnmRunner, type AnmFrame } from '../formats/anm';
 import { bgQuadCorner, orderBgJobsByVisibility, type Vec3 } from '../formats/std';
 import { TH07_DATA } from '../data/th07-data';
+import { TH08_DATA } from '../data/th08-data';
 import type { AudioBus } from '../audio/audio';
 import {
   CHARACTERS, Player, bombCherryDrainPerFrame, playerShotAllocationAllowed,
@@ -22,7 +23,12 @@ import { DialogueRunner, portraitSprite } from './dialogue';
 import { stageBgmTrack } from './bgm';
 
 // Stage host. Runs any of the 8 stage timelines (1-6 main game, 7 Extra,
-// 8 Phantasm) with per-stage ECL/STD/MSG/ANM data resolved from TH07_DATA.
+// 8 Phantasm) with per-stage ECL/STD/MSG/ANM data. The TH08 vertical slice
+// dispatches on character: the Border Team ('reimuYukari') resolves its
+// stage bundle from the embedded TH08 data, while every other character
+// keeps the parent TH07 engine path (the node replay harness stub assets
+// still supply the TH07 ANMs), so the TH07 sim suite and replay
+// convergence gates stay green while the TH08 runtime lands.
 
 // Everything that survives a stage transition within one credit.
 export interface RunCarry {
@@ -665,7 +671,7 @@ export class StageScene implements GameHost {
     private assets: GameAssets,
     private audio: AudioBus,
     difficulty = 1,
-    character: CharacterId = 'reimuA',
+    character: CharacterId = 'reimuYukari',
     stageNumber = 1,
     carry: RunCarry | null = null,
     initialRngSeed?: number
@@ -677,7 +683,10 @@ export class StageScene implements GameHost {
     if (initialRngSeed != null) this.rng.seed = initialRngSeed & 0xffff;
     this.difficulty = difficulty;
     this.stageNumber = stageNumber;
-    const stageData = (TH07_DATA.stages as unknown as Record<number, StageData>)[stageNumber];
+    const stageTable = character === 'reimuYukari'
+      ? (TH08_DATA.stages as unknown as Record<number, StageData>)
+      : (TH07_DATA.stages as unknown as Record<number, StageData>);
+    const stageData = stageTable[stageNumber];
     if (!stageData) throw new Error(`no data for stage ${stageNumber}`);
     const anms = assets.anms as Record<string, Anm>;
     this.enemyAnm = anms[stageData.enemyAnm];
@@ -5212,10 +5221,18 @@ export class StageScene implements GameHost {
     // capture.anm script 1 (global 0x725). Capture scripts 0/2/3 belong to
     // separate transitions and are intentionally not created here.
     if (this.stageNumber >= 6) return;
+    if (this.playerObj.character === 'reimuYukari') {
+      // The TH08 vertical bundle intentionally does not ship the other teams'
+      // loading ANMs; Stage 1 uses only the native capture animation.
+      this.clearLoadingRunner = null;
+      this.clearCaptureRunner = new AnmRunner(this.assets.anms.capture, 1, { imageKey: 'capture:@' });
+      this.clearCaptureArmed = true;
+      return;
+    }
     const family = CHARACTERS[this.playerObj.character].family;
     const loadingKey = CLEAR_LOADING_ANM[family] ?? CLEAR_LOADING_ANM[0];
     this.clearLoadingKey = loadingKey;
-    this.clearLoadingRunner = new AnmRunner(this.assets.anms[loadingKey], 0);
+    this.clearLoadingRunner = new AnmRunner((this.assets.anms as Record<string, Anm>)[loadingKey], 0);
     this.clearCaptureRunner = new AnmRunner(this.assets.anms.capture, 1, { imageKey: 'capture:@' });
     this.clearCaptureArmed = true;
   }
@@ -5901,8 +5918,13 @@ export class StageScene implements GameHost {
     if (!d) return;
     const ctx = r.ctx;
     const family = CHARACTERS[this.playerObj.character].family;
-    const playerFaceKey = (['face_rm00', 'face_mr00', 'face_sk00'] as const)[family];
-    const anms = [this.assets.anms[playerFaceKey], this.faceAnm];
+    const playerFaceKey = this.playerObj.character === 'reimuYukari'
+      ? 'face_rm00'
+      : (['face_rm00', 'face_mr00', 'face_sk00'] as const)[family];
+    const anms = [
+      (this.assets.anms as Record<string, Anm>)[playerFaceKey],
+      this.faceAnm
+    ];
     for (let side = 0; side < 2; side++) {
       const p = d.portraits[side];
       if (!p?.visible) continue;

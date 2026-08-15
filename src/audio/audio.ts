@@ -1,7 +1,7 @@
-import { TH07_DATA } from '../data/th07-data';
+import { TH08_DATA } from '../data/th08-data';
 
 // Web Audio bus. BGM tracks loop gaplessly using loopStart/loopEnd sample
-// positions taken from the original thbgm.fmt (embedded in TH07_DATA.bgm) —
+// positions taken from the original thbgm.fmt (embedded in TH08_DATA.bgm) —
 // an intentional improvement over TH06 Web's whole-file HTMLAudio looping.
 
 interface BgmTrackInfo {
@@ -12,6 +12,18 @@ interface BgmTrackInfo {
 }
 
 const BGM_VOLUME = 0.65;
+
+// The vertical-slice audio bundle ships exactly these .ogg files (see
+// scripts/split-th08-bgm.mjs); every other table track resolves to the
+// stage-1 pair by parity (even = stage theme, odd = boss theme) so neither
+// preload nor play issues a doomed fetch for the unshipped files.
+const SHIPPED_BGM_TRACKS = new Set(['th08_01', 'th08_00', 'th08_03']);
+
+function resolveBgmTrackName(name: string): string {
+  if (SHIPPED_BGM_TRACKS.has(name)) return name;
+  const m = /^th08_(\d+)$/.exec(name);
+  return m ? (Number(m[1]) % 2 === 0 ? 'th08_00' : 'th08_03') : name;
+}
 
 export class AudioBus {
   private ctx: AudioContext | null = null;
@@ -97,7 +109,7 @@ export class AudioBus {
   }
 
   private trackInfo(name: string): BgmTrackInfo | null {
-    return (TH07_DATA.bgm as readonly BgmTrackInfo[]).find((t) => t.name === name) ?? null;
+    return (TH08_DATA.bgm as readonly BgmTrackInfo[]).find((t) => t.name === name) ?? null;
   }
 
   private loadBgm(name: string): Promise<AudioBuffer | null> {
@@ -105,7 +117,7 @@ export class AudioBus {
     if (cached) return Promise.resolve(cached);
     let loading = this.bgmLoading.get(name);
     if (!loading) {
-      loading = fetch(`assets/audio/th07/${name}.ogg`)
+      loading = fetch(`assets/audio/th08/${name}.ogg`)
         .then((r) => r.arrayBuffer())
         .then((buf) => this.ensureCtx()?.decodeAudioData(buf) ?? null)
         .then((decoded) => {
@@ -119,7 +131,7 @@ export class AudioBus {
   }
 
   preloadBgm(names: string[]): void {
-    for (const name of names) void this.loadBgm(name);
+    for (const name of names) void this.loadBgm(resolveBgmTrackName(name));
   }
 
   playBgm(name: string | null, options: { fadeMs?: number; restart?: boolean } = {}): void {
@@ -142,13 +154,12 @@ export class AudioBus {
     this.stopSourceOnly();
     void this.loadBgm(name).then((buffer) => {
       if (!buffer && this.active === name) {
-        // Track file missing: fall back to the stage-1 pair by parity
-        // (even = stage theme, odd = boss theme) instead of going silent.
-        // With a full thbgmogg.dat extract this path should not fire for
-        // tracks 01-19; kept as a defensive residual for partial assets.
-        const m = /^th07_(\d+)$/.exec(name);
-        const fallback = m && Number(m[1]) > 3 ? (Number(m[1]) % 2 === 0 ? 'th07_02' : 'th07_03') : null;
-        if (fallback) {
+        // Track file missing at runtime despite the shipped-set resolution
+        // above (e.g. a partial manual asset copy): fall back to the stage-1
+        // pair by parity (even = stage theme, odd = boss theme) instead of
+        // going silent.
+        const fallback = resolveBgmTrackName(name);
+        if (fallback !== name) {
           this.active = null;
           this.playBgm(fallback, options);
         }
@@ -220,7 +231,7 @@ export class AudioBus {
     if (cached) return Promise.resolve(cached);
     let loading = this.sfxLoading.get(file);
     if (!loading) {
-      loading = fetch(`assets/sfx/th07/${file}.wav`)
+      loading = fetch(`assets/sfx/th08/${file}.wav`)
         .then((r) => r.arrayBuffer())
         .then((buf) => this.ensureCtx()?.decodeAudioData(buf) ?? null)
         .then((decoded) => {
@@ -243,7 +254,7 @@ export class AudioBus {
   // itself. Keyed by the caller's slot id (falls back to the file stem).
   private slotVoices = new Map<number | string, AudioBufferSourceNode>();
 
-  // Plays an original SFX by file stem (e.g. "se_tan00" → assets/sfx/th07/se_tan00.wav).
+  // Plays an original SFX by file stem (e.g. "se_tan00" → assets/sfx/th08/se_tan00.wav).
   sfx(file: string, volume = 1, slot?: number | string): void {
     if (!this.unlocked || this.muted) {
       void this.loadSfx(file);

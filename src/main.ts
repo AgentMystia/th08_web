@@ -115,7 +115,7 @@ async function boot(): Promise<void> {
   // zero-latency local server, and 8.9s/26.2s (~533/~1573 frames) under
   // throttled Slow-4G/Fast-3G — with the title theme still audibly looping
   // for the entire gap (measured during the 2026-07-10 BGM preload audit).
-  audio.preloadBgm(['th07_01', 'th07_02', 'th07_03']);
+  audio.preloadBgm(['th08_01', 'th08_00', 'th08_03']);
   // ?test=1 alone must still boot directly into the stage exactly as before
   // the menu flow existed (scripts/dev-shot.mjs and other automated tooling
   // depend on this). Add ?menu=1 alongside ?test=1 to make the menu flow
@@ -150,7 +150,7 @@ async function boot(): Promise<void> {
 
   // Shared by both the menu's "confirm" callback and the direct (?test=1,
   // no ?menu=1) boot path below, so BGM/preload behavior is identical either
-  // way. Track 1 (th07_01) is the title theme, per musiccmt.txt.
+  // way. Track 1 (th08_01) is the title theme, per musiccmt.txt.
   //
   function startStage(
     difficulty: number,
@@ -183,8 +183,8 @@ async function boot(): Promise<void> {
       // Returning from practice parks the title cursor back on Practice
       // Start (exe FUN_00452e91 @ all.c:40457-40459).
       menu = createMenu(practice ? 2 : 0);
-      audio.preloadBgm(['th07_01']);
-      audio.playBgm('th07_01');
+      audio.preloadBgm(['th08_01']);
+      audio.playBgm('th08_01');
     };
     // Pause-menu 最初からやり直す: restart the run from its beginning —
     // story from stage 1, practice/test from the current stage.
@@ -234,8 +234,8 @@ async function boot(): Promise<void> {
     stage = null;
     menu = createMenu(3);
     menu.showReplay(replay, fileName, stageIndex);
-    audio.preloadBgm(['th07_01']);
-    audio.playBgm('th07_01');
+    audio.preloadBgm(['th08_01']);
+    audio.playBgm('th08_01');
   }
 
   function advanceReplayStage(
@@ -348,12 +348,16 @@ async function boot(): Promise<void> {
 
   if (useMenu) {
     menu = createMenu();
-    audio.preloadBgm(['th07_01']);
-    audio.playBgm('th07_01');
+    audio.preloadBgm(['th08_01']);
+    audio.playBgm('th08_01');
   } else {
     // ?difficulty=0..5 (4 = Extra, 5 = Phantasm), ?stage=1..8 for probes.
+    // Default shot is the TH08 Border Team: the browser ships only the TH08
+    // asset bundle, so a TH07 character id cannot resolve its player ANM
+    // here (the TH07 engine path stays exercised by the node test harness,
+    // whose stub assets still provide the TH07 ANMs).
     const difficulty = Math.min(5, Math.max(0, Number(params.get('difficulty') ?? 1)));
-    const character = (params.get('shot') ?? 'reimuA') as CharacterId;
+    const character = (params.get('shot') ?? 'reimuYukari') as CharacterId;
     const stageNumber = Math.min(8, Math.max(1, Number(params.get('stage') ?? 1)));
     const s = startStage(difficulty, character, stageNumber);
     // Test-only override so scripts/dev-shot.mjs can snapshot a shot pattern

@@ -1,6 +1,7 @@
 import { Sht, type ShtShot } from '../formats/sht';
 import { Anm, AnmRunner } from '../formats/anm';
 import { TH07_DATA } from '../data/th07-data';
+import { TH08_DATA } from '../data/th08-data';
 import { clamp } from '../core/util';
 import type { InputFrame } from '../core/input';
 
@@ -9,7 +10,9 @@ import type { InputFrame } from '../core/input';
 // come from the game data. Bomb behavior is a functionally-accurate first
 // pass (damage/duration/invulnerability), visuals to be refined.
 
-export type CharacterId = 'reimuA' | 'reimuB' | 'marisaA' | 'marisaB' | 'sakuyaA' | 'sakuyaB';
+export type CharacterId =
+  | 'reimuA' | 'reimuB' | 'marisaA' | 'marisaB' | 'sakuyaA' | 'sakuyaB'
+  | 'reimuYukari';
 
 // Th07.exe FUN_0043a820 @ 0x43a850-0x43a86b gates FUN_0043a100 only when
 // all three predicates hold: bomb-active, character family == Marisa, and
@@ -30,7 +33,9 @@ export const CHARACTERS: Record<CharacterId, { family: 0 | 1 | 2; name: string; 
   marisaA: { family: 1, name: 'Marisa A', shtBase: 'ply01a', anmKey: 'player01' },
   marisaB: { family: 1, name: 'Marisa B', shtBase: 'ply01b', anmKey: 'player01' },
   sakuyaA: { family: 2, name: 'Sakuya A', shtBase: 'ply02a', anmKey: 'player02' },
-  sakuyaB: { family: 2, name: 'Sakuya B', shtBase: 'ply02b', anmKey: 'player02' }
+  sakuyaB: { family: 2, name: 'Sakuya B', shtBase: 'ply02b', anmKey: 'player02' },
+  // TH08 Border Team: human reads ply00a, focused Yukari reads ply00as.
+  reimuYukari: { family: 0, name: 'Reimu & Yukari', shtBase: 'ply00a', anmKey: 'player00' }
 };
 
 // Th07.exe per-character bomb functions (exe-bombs.md §2, addresses
@@ -45,7 +50,10 @@ const BOMB_PARAMS: Record<CharacterId, { unfocused: [number, number, number]; fo
   // Spark. The focused Final Spark remains 0.2f (FUN_0040af70).
   marisaB: { unfocused: [300, 300, 0.4], focused: [340, 390, 0.2] },
   sakuyaA: { unfocused: [160, 210, 1.0], focused: [250, 290, 0.3] },
-  sakuyaB: { unfocused: [160, 260, 2.0], focused: [300, 420, 1.5] }
+  sakuyaB: { unfocused: [160, 260, 2.0], focused: [300, 420, 1.5] },
+  // Stage 1 evidence replay does not bomb; safe envelope until the exact
+  // v1.00d callback simulation is wired into the scene.
+  reimuYukari: { unfocused: [70, 200, 1.0], focused: [60, 120, 1.0] }
 };
 
 // Th07.exe FUN_00407740 @ 0x407740. Each bomb form supplies one float32
@@ -63,7 +71,8 @@ const BOMB_CHERRY_DRAIN: Record<CharacterId, {
   marisaA: { unfocused: [0.30, 8000], focused: [0.33, 9000] },
   marisaB: { unfocused: [0.35, 8000], focused: [0.41, 10000] },
   sakuyaA: { unfocused: [0.28, 6000], focused: [0.29, 6500] },
-  sakuyaB: { unfocused: [0.26, 5500], focused: [0.29, 6000] }
+  sakuyaB: { unfocused: [0.26, 5500], focused: [0.29, 6000] },
+  reimuYukari: { unfocused: [0, 0], focused: [0, 0] }
 };
 
 export function bombCherryDrainPerFrame(
@@ -281,7 +290,7 @@ export class Player {
   constructor(character: CharacterId, anms: Record<string, Anm>) {
     this.character = character;
     const spec = CHARACTERS[character];
-    const sht = TH07_DATA.sht as Record<string, string>;
+    const sht = (character === 'reimuYukari' ? TH08_DATA.sht : TH07_DATA.sht) as Record<string, string>;
     this.unfocused = new Sht(sht[spec.shtBase]);
     this.focused = new Sht(sht[`${spec.shtBase}s`]);
     this.anm = anms[spec.anmKey];
