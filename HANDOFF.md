@@ -119,3 +119,19 @@ future session with a working X11/longer window should finish it.
   0x4a619e fires and the gdb 'commands' loop prints + auto-continues). On a
   host where the original boots (real GPU or wine with GL), the same script
   produces the trace; it is not a code bug.
+
+## Update (2026-08-15, fourth pass — trace blocker root-caused)
+
+The native trace's failure is now root-caused to the container, not the
+harness: wine 10 on this image provides ONLY wow64 mode (no separate
+win32 prefix — `WINEARCH=win32` is rejected), and Th08.exe's Direct3D 8
+device creation hangs under wow64 + Xvfb's software GLX: the process
+spins at 99.5% CPU without ever opening th08.dat (verified via
+WINEDEBUG=+file: zero game-data CreateFile calls in 300s). The exe-entry
+breakpoint DOES fire (0x4a619e), proving the gdb-stub pipeline and the
+breakpoint mechanism both work; nothing past startup is reachable here.
+
+What would unblock it: a host with a real GPU (wine D3D on hardware GL),
+or a wine build with 32-bit support, or running the trace natively on
+Windows. The harness (scripts/native-trace.mjs) is ready and correct for
+that environment.
