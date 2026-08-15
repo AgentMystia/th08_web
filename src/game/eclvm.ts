@@ -739,6 +739,7 @@ export class StageRuntime {
         fireRankCount2High: 0,
         capturedFire: null,
         autoFireDeadline: 0,
+        autoFireNext: 0,
         fireOriginX: 0,
         fireOriginY: 0,
         transformType: -1,
@@ -2256,8 +2257,12 @@ export class StageRuntime {
     const s = e.ecl;
     const t = s.th08!;
     if (e.hp <= 0 || t.autoFireDeadline <= 0 || !t.capturedFire) return;
-    if (s.ctx.time < t.autoFireDeadline) return;
-    this.fireTh08Raw(game, e, t.capturedFire);
+    // Periodic: fire each time the clock crosses the next deadline, then
+    // advance by the interval (FUN_00423150's fire+reset pair).
+    while (t.autoFireNext > 0 && s.ctx.time >= t.autoFireNext) {
+      this.fireTh08Raw(game, e, t.capturedFire);
+      t.autoFireNext += t.autoFireDeadline;
+    }
   }
 
   // Re-run a captured raw 11-dword FIRE instruction image (the 44-byte block
@@ -4487,7 +4492,8 @@ export class StageRuntime {
           const fifth = Math.trunc(iv / 5);
           iv = iv + fifth + Math.trunc((-2 * fifth * game.rank) / 32);
         }
-        t.autoFireDeadline = iv > 0 ? ctx.time + iv : 0;
+        t.autoFireDeadline = iv;
+        t.autoFireNext = iv > 0 ? ctx.time + iv : 0;
         if (op === 106 && iv > 0) game.rng.u16InRange(iv);
         return null;
       }

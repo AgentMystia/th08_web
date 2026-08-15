@@ -614,8 +614,13 @@ export interface Th08EclState {
   // +0x3034: captured raw FIRE instruction (11 dwords) while flags bit 17 is
   // set (ins_107), replayed by the auto-fire tick.
   capturedFire: Int32Array | null;
-  // +0x3060: auto-fire deadline (ins_105/106); 0 = disarmed.
+  // +0x3060: auto-fire deadline (ins_105/106); 0 = disarmed. The native
+  // timer fires when its elapsed reaches the deadline, then resets elapsed
+  // (FUN_004065f0(0) after FUN_00422720 in FUN_00423150, all.c:16287-16291)
+  // — a PERIODIC emitter: every `interval` frames.
   autoFireDeadline: number;
+  // Next ctx.time the auto-fire is due (armed = deadline + arming time).
+  autoFireNext: number;
   // Bullet-template fire origin x/y (+0x2dd0/+0x2dd4, vars 10079/10080).
   fireOriginX: number;
   fireOriginY: number;
