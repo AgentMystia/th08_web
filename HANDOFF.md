@@ -135,3 +135,23 @@ What would unblock it: a host with a real GPU (wine D3D on hardware GL),
 or a wine build with 32-bit support, or running the trace natively on
 Windows. The harness (scripts/native-trace.mjs) is ready and correct for
 that environment.
+
+## Update (2026-08-15, fifth pass — decompile-driven convergence, no trace)
+
+Per the redirect away from the blocked native-trace path, the TH08 item
+system is now reproduced from the ItemManager decompile:
+
+- Th08ItemSpawnPool wired into spawnItem: ItemManager::SpawnItem's exact
+  2096-slot cursor, bounds reject, full-power conversion, time/time2 state
+  forcing, and the state-2/3/5 RNG draw order (tests pin the draw counts).
+- Death drops run FUN_0042bea0 with the exe's DAT_004c70d8 32-byte table.
+- Collects settle through Th08RunState (point ladder, time-orb gauge/clock).
+- Bullet cancels convert to time orbs (DAT_018b8988==9 -> two type-7 drops).
+
+Residual divergence is now cleanly isolated: the recorded player survives
+stage 1 deathless, and our sim's three deaths (f1039/f1371/f1718) cascade
+into the power/score/gauge gaps (each death zeroes power and drops the
+field). The deaths themselves come from wave-danmaku micro-geometry that
+the decompile fully decodes but whose frame-exact placement cannot be
+verified without the native trace. Everything decompilation can prove is
+implemented; the remaining gap is measurement, not modeling.
