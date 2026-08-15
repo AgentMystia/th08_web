@@ -697,7 +697,7 @@ export class StageScene implements GameHost {
   // type 6, promoted to type 9 after Stage 6-8's pre-boss dialogue setup.
   // FUN_0042819f performs its initial field clear first and writes 9 only
   // afterward, so this must be mutable state rather than a stage constant.
-  private cancelItemType: 'cherry' | 'case9Cherry' | 'point' = 'cherry';
+  private cancelItemType: 'cherry' | 'case9Cherry' | 'point' | 'time' = 'cherry';
   constructor(
     private assets: GameAssets,
     private audio: AudioBus,
@@ -759,7 +759,7 @@ export class StageScene implements GameHost {
     if (character === 'reimuYukari') {
       this.cherry = null;
       this.runState = new Th08RunState(difficulty);
-      this.cancelItemType = 'point';
+      this.cancelItemType = 'time';
     } else {
     this.cherry = new CherrySystem(
       {
