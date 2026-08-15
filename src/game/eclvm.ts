@@ -173,6 +173,14 @@ const RANDOM_ITEMS: ItemType[] = [
 // approximation at point of use (flagged per AGENTS.md §7).
 const BULLET_HITBOX_BY_SPRITE = [4, 6, 4, 6, 4, 4, 4, 10, 5, 8, 24];
 
+// Th08.exe .data @ VA 0x4c70d8: the 32-entry 1-in-3 default-drop table
+// (FUN_0042bea0's DAT_00f54ce2-cycled bytes). Values are TH08 ItemType ids.
+const TH08_DROP_TABLE = [0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0,
+  1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0];
+// TH08 ItemType enum ids (ItemManager.hpp) -> the engine's item type names.
+const TH08_ITEM_TYPES = ['powerSmall', 'point', 'powerBig', 'bomb', 'powerFull',
+  'extend', 'pointStar', 'time', 'pointSmall', 'unknown9', 'time2'] as const;
+
 // ---- TH08 (Th08.exe v1.00d) interpreter tables --------------------------------
 //
 // TH08 renumbered the ECL opcode table wholesale. TH08_OP_REMAP lists every
@@ -4066,6 +4074,14 @@ export class StageRuntime {
     e: Enemy,
     bombContactThisFrame: boolean
   ): void {
+    // TH08 routes death drops through FUN_0042bea0 (all.c:20959): the
+    // item-drop mode (+0x3304, ECL var 10092) picks the branch: >=0 spawns
+    // that item type, -1 is the 1-in-3 global random drop, <=-2 (the
+    // default) drops nothing; +0x330c adds that many ±64px jittered sub-drops.
+    if (this.ecl.version === 8) {
+      this.spawnDeathDropTh08(game, e, bombContactThisFrame);
+      return;
+    }
     // Th07.exe (v1.00b) FUN_0041ed50 @ 0x420169/0x4201b4 passes local_18
     // directly to FUN_00430970 as spawnMode. FUN_0043a980 sets local_18=1
     // when any live attack slot overlaps while player+0x16a20 is active.
@@ -4086,6 +4102,44 @@ export class StageRuntime {
     game.spawnEffectParticles(e.ecl.deathAnm2 + 4, e.x, e.y, 3, 0xffffffff);
     const type = ITEM_TABLE[itemDrop];
     if (type) game.spawnItem(type, e.x, e.y, options);
+  }
+
+  // TH08 death drop (FUN_0042bea0 @ all.c:20959). Item types are the TH08
+  // ItemType enum ids (ItemManager.hpp): 0 powerSmall, 1 point, 2 powerBig,
+  // 3 bomb, 4 powerFull, 5 extend, 6 pointStar, 7 time, 8 pointSmall, 9,
+  // 10 time2.
+  private spawnDeathDropTh08(game: GameHost, e: Enemy, bombContactThisFrame: boolean): void {
+    const t = e.ecl.th08;
+    const itemDrop = e.ecl.itemDrop;
+    const spawnMode = bombContactThisFrame ? 1 : 0;
+    if (itemDrop < 0) {
+      if (itemDrop === -1) {
+        // 1-in-3 global random drop: DAT_00f54ce0 counter % 3, type from the
+        // 32-entry table DAT_004c70d8 cycled by DAT_00f54ce2.
+        if (this.randomSpawnIndex % 3 === 0) {
+          game.spawnEffectParticles((t?.dropEffectId ?? 0) + 4, e.x, e.y, 6, 0xffffffff);
+          const typeId = TH08_DROP_TABLE[this.randomItemIndex++ % TH08_DROP_TABLE.length];
+          game.spawnItem(TH08_ITEM_TYPES[typeId] ?? 'point', e.x, e.y, { state: spawnMode });
+        }
+        this.randomSpawnIndex++;
+      }
+    } else {
+      game.spawnEffectParticles((t?.dropEffectId ?? 0) + 4, e.x, e.y, 3, 0xffffffff);
+      const type = TH08_ITEM_TYPES[itemDrop];
+      if (type) game.spawnItem(type, e.x, e.y, { state: spawnMode });
+    }
+    // +0x330c: extra jittered sub-drops (frand*128-64 per axis, one raw draw
+    // choosing power(0) vs point(1) per drop), then the field zeroes.
+    const extra = t?.deathDropB ?? 0;
+    if (extra > 0) {
+      for (let i = 0; i < extra; i++) {
+        const x = Math.fround(e.x + game.rng.f() * 128 - 64);
+        const y = Math.fround(e.y + game.rng.f() * 128 - 64);
+        const typeId = game.rng.u16() < 0x80 ? 0 : 1;
+        game.spawnItem(TH08_ITEM_TYPES[typeId] ?? 'point', x, y, { state: spawnMode });
+      }
+      if (t) t.deathDropB = 0;
+    }
   }
 
   // =========================================================================

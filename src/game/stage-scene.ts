@@ -21,6 +21,7 @@ import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoot
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
 import { Th08BorderBombSim } from './th08-border-bombs';
+import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import { TH08_HUD } from './th08-hud-layout';
 import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
@@ -69,7 +70,19 @@ const ITEM_SPRITES: Record<ItemType, number> = {
   cherry: 10, // type 6: grey cancel-item box (FUN_00421a40 writes type 6)
   bigCherry: 11, // type 7: boxed pink petal
   pointBullet: 12, // type 8: unboxed petal used by the Border-break circle
-  case9Cherry: 13 // type 9: pink petal; shares type 7's authored sprite rect
+  case9Cherry: 13, // type 9: pink petal; shares type 7's authored sprite rect
+  // TH08 item types (TH08 ItemType ids in eclvm's TH08_ITEM_TYPES): mapped to
+  // the nearest TH08 etama item sprite; precise TH08 sprite ids are pending
+  // (flagged until the item-ANM table is decoded).
+  powerSmall: 4,
+  powerBig: 6,
+  powerFull: 8,
+  extend: 9,
+  pointStar: 10,
+  time: 10,
+  pointSmall: 5,
+  unknown9: 10,
+  time2: 10
 };
 // Per-type offscreen indicator arrows sit 10 embedded ids after their item
 // (emb14-21, same order) — drawn while an item is still above the top edge.
@@ -684,7 +697,7 @@ export class StageScene implements GameHost {
   // type 6, promoted to type 9 after Stage 6-8's pre-boss dialogue setup.
   // FUN_0042819f performs its initial field clear first and writes 9 only
   // afterward, so this must be mutable state rather than a stage constant.
-  private cancelItemType: 'cherry' | 'case9Cherry' = 'cherry';
+  private cancelItemType: 'cherry' | 'case9Cherry' | 'point' = 'cherry';
   constructor(
     private assets: GameAssets,
     private audio: AudioBus,
@@ -746,6 +759,7 @@ export class StageScene implements GameHost {
     if (character === 'reimuYukari') {
       this.cherry = null;
       this.runState = new Th08RunState(difficulty);
+      this.cancelItemType = 'point';
     } else {
     this.cherry = new CherrySystem(
       {
@@ -1019,6 +1033,18 @@ export class StageScene implements GameHost {
   }
 
   private syncItemSlots(): void {
+    // TH08: the spawn pool's `active` flags track the live ItemEntities by
+    // poolSlot; a dead entity releases its pool slot before the TH07-style
+    // slot rebuild below runs.
+    if (this.th08ItemPool) {
+      for (const item of this.items) {
+        if (item.dead) {
+          const slot = this.th08ItemPool.items[item.poolSlot];
+          if (slot && slot.poolSlot === item.poolSlot) slot.active = false;
+        }
+      }
+      return; // TH08 uses the spawn pool's own 2096-slot cursor, not itemSlots
+    }
     this.itemSlots ??= new Array(ITEM_POOL_CAP).fill(null);
     if (!Number.isInteger(this.itemPoolCursor)) this.itemPoolCursor = 0;
     if (this.slotsConsistent(this.items, this.itemSlots, ITEM_POOL_CAP, (e) => !e.dead)) return;
@@ -1499,7 +1525,50 @@ export class StageScene implements GameHost {
     }
   }
 
+  private th08ItemPool: Th08ItemSpawnPool | null = null;
+
+  // TH08 item spawn: the pool decides slot + type + state + velocity with the
+  // native RNG draw order; the resulting ItemEntity joins the same list the
+  // renderer/updater already walks, linked by poolSlot so the pool's `active`
+  // flag tracks the entity's life.
+  private spawnItemTh08(type: ItemType, x: number, y: number, options: { state?: number; vx?: number; vy?: number; tweenTarget?: { tx: number; ty: number } }): void {
+    this.th08ItemPool ??= new Th08ItemSpawnPool();
+    const pool = this.th08ItemPool;
+    const spawned = pool.spawn({
+      x, y,
+      type: type as import('./th08-item-spawn').Th08ItemType,
+      state: options.state,
+      rng: this.rng,
+      playerDead: !this.playerObj.alive,
+      power: this.playerObj.power
+    });
+    if (!spawned) return;
+    const item: ItemEntity = {
+      id: this.id++,
+      poolSlot: spawned.poolSlot,
+      x: spawned.x,
+      y: spawned.y,
+      vx: spawned.vx,
+      vy: spawned.vy,
+      type: spawned.type,
+      age: 0,
+      state: spawned.state,
+      ...(spawned.targetX !== undefined
+        ? { tween: { sx: spawned.x, sy: spawned.y, tx: spawned.targetX, ty: spawned.targetY ?? 0, elapsed: 0, frac: 0 } }
+        : {})
+    };
+    this.insertByPoolSlot(this.items, item);
+  }
+
   spawnItem(type: ItemType, x: number, y: number, options: { state?: number; vx?: number; vy?: number; tweenTarget?: { tx: number; ty: number } } = {}): void {
+    // TH08: allocate through the committed Th08ItemSpawnPool, which encodes
+    // ItemManager::SpawnItem's exact decisions (2096-slot rotating cursor,
+    // out-of-bounds x reject, full-power power→pointSmall, time/time2 state
+    // forcing, state-2 tween target + state-3/5 velocity RNG draw order).
+    if (this.runState) {
+      this.spawnItemTh08(type, x, y, options);
+      return;
+    }
     // Th07.exe FUN_00430970 @ 0x430970: a rotating next-fit cursor scans the
     // fixed 1100-slot pool, advancing once for every tested slot and leaving
     // the cursor immediately after the allocation. The item manager later
@@ -4902,10 +4971,62 @@ export class StageScene implements GameHost {
     }
   }
 
+  // TH08 item collection (ItemManager cases, reference/re-specs/
+  // th08-decomp-items/ + th08-decomp-state/): point/power feed the run
+  // state's ladder, time orbs feed the gauge + clock + orb counters, power
+  // raises the SHT power level.
+  private collectItemTh08(it: ItemEntity): void {
+    const run = this.runState!;
+    const p = this.playerObj;
+    const atOrAbovePoC = it.y < p.sht.pocLineY;
+    switch (it.type) {
+      case 'point': {
+        const r = run.collectPoint({ atOrAbovePoC });
+        this.score = run.score;
+        this.spawnScorePopup(r.award, it.x, it.y, 0xffffffff, true);
+        break;
+      }
+      case 'pointSmall': case 'pointStar': {
+        const r = run.collectPointSmall({ atOrAbovePoC });
+        this.score = run.score;
+        this.spawnScorePopup(r.award, it.x, it.y, 0xffffffff, true);
+        break;
+      }
+      case 'powerSmall': p.power = Math.min(128, p.power + 1); break;
+      case 'powerBig': p.power = Math.min(128, p.power + 8); break;
+      case 'powerFull': p.power = 128; break;
+      case 'bomb': p.bombs = Math.min(8, p.bombs + 1); break;
+      case 'extend': p.lives = Math.min(8, p.lives + 1); break;
+      case 'time': case 'time2': {
+        // Time orb (CollectTimeOrb, FUN_004412b0): score + orb counter +
+        // gauge ±111 when the spell timer reads zero + the night clock.
+        const r = run.collectTimeOrb({
+          specialScoringMode: false,
+          timerCurrent: this.spellcard ? 1 : 0,
+          playerRole: p.focusHeld ? 1 : 0
+        });
+        this.score = run.score;
+        if (r.gaugeDelta != null && r.gaugeDelta !== 0) run.addYoukaiGauge(r.gaugeDelta);
+        break;
+      }
+      case 'unknown9': break;
+      default: break;
+    }
+  }
+
   private collectItem(it: ItemEntity): void {
     const p = this.playerObj;
     it.dead = true;
     this.playSfx(21);
+    // TH08 collect dispatch: the TH08 item types settle through the run
+    // state's native scoring (CollectPoint/CollectPointSmall/CollectTimeOrb,
+    // reference/re-specs/th08-decomp-items/), not the TH07 cherry path. The
+    // legacy pointItems counter (HUD's Point row) tracks the same collects.
+    if (this.runState) {
+      this.collectItemTh08(it);
+      if (it.type === 'point') this.pointItems++;
+      return;
+    }
     switch (it.type) {
       case 'power':
       case 'bigPower': {

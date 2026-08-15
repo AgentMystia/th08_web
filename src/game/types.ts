@@ -3,7 +3,10 @@ import type { AnmRunner } from '../formats/anm';
 
 export type ItemType =
   | 'power' | 'point' | 'bigPower' | 'bomb' | 'fullPower' | 'life'
-  | 'cherry' | 'bigCherry' | 'pointBullet' | 'case9Cherry';
+  | 'cherry' | 'bigCherry' | 'pointBullet' | 'case9Cherry'
+  // TH08 ItemType enum names (ItemManager.hpp); the TH08 path spawns these.
+  | 'powerSmall' | 'powerBig' | 'powerFull' | 'extend' | 'pointStar'
+  | 'time' | 'pointSmall' | 'unknown9' | 'time2';
 
 export interface EnemyBullet {
   id: number;
