@@ -19,6 +19,7 @@ import {
 import { PlayerEffects } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
 import { Th08RunState } from './th08-state';
+import { TH08_HUD } from './th08-hud-layout';
 import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
 import { DialogueRunner, portraitSprite } from './dialogue';
 import { stageBgmTrack } from './bgm';
@@ -181,6 +182,11 @@ const FRONT = {
 // ascii.png HUD numeral font: 8x12 digit glyphs in a row at texture y=208,
 // digit d at x=8*d (front.anm/ascii.anm spec §5.1). The sole HUD digit font.
 const DIGIT_W = 8;
+// TH08 HUD: 13px digit advance (TH08_HUD.digitAdvance) and the front.png
+// 16x16 life/bomb icon pair at (64,80)/(80,80).
+const TH08_ADV = 13;
+const TH08_ICON_LIFE: readonly number[] = [64, 80, 16, 16];
+const TH08_ICON_BOMB: readonly number[] = [80, 80, 16, 16];
 const DIGIT_H = 12;
 const DIGIT_Y = 208;
 
@@ -5453,31 +5459,35 @@ export class StageScene implements GameHost {
   private drawFrame(r: Renderer): void {
     const right = PLAYFIELD.x + PLAYFIELD.width; // 416
     const bottom = PLAYFIELD.y + PLAYFIELD.height; // 464
+    // TH08's front.png ships its own tile (32x32 @ 0,224) and strip
+    // (128x16 @ 0,208); TH07's FRONT rects point into TH07's atlas.
+    const strip = this.runState ? [0, 208, 128, 16] as readonly number[] : FRONT.strip128;
+    const tile = this.runState ? [0, 224, 32, 32] as readonly number[] : FRONT.tile32;
     // Top & bottom bands (0..640 × 16), 128px strips.
-    for (let x = 0; x < SCREEN_W; x += FRONT.strip128[2]) {
-      this.blit(r, 'front', FRONT.strip128, x, 0);
-      this.blit(r, 'front', FRONT.strip128, x, bottom);
+    for (let x = 0; x < SCREEN_W; x += strip[2]) {
+      this.blit(r, 'front', strip, x, 0);
+      this.blit(r, 'front', strip, x, bottom);
     }
     // Left column and right sidebar background, 32×32 tiles.
-    for (let y = PLAYFIELD.y; y < bottom; y += FRONT.tile32[3]) {
-      for (let x = 0; x < PLAYFIELD.x; x += FRONT.tile32[2]) this.blit(r, 'front', FRONT.tile32, x, y);
-      for (let x = right; x < SCREEN_W; x += FRONT.tile32[2]) this.blit(r, 'front', FRONT.tile32, x, y);
+    for (let y = PLAYFIELD.y; y < bottom; y += tile[3]) {
+      for (let x = 0; x < PLAYFIELD.x; x += tile[2]) this.blit(r, 'front', tile, x, y);
+      for (let x = right; x < SCREEN_W; x += tile[2]) this.blit(r, 'front', tile, x, y);
     }
   }
 
   // Blits a base-10 integer using the ascii.png 8x12 digit font, top-left
   // corner at (x,y). Optionally zero-pads to `width` digits (scores are
   // fixed-width in the original). Returns the x just past the last digit.
-  private drawNumber(r: Renderer, value: number, x: number, y: number, width = 0, alpha = 1): number {
+  private drawNumber(r: Renderer, value: number, x: number, y: number, width = 0, alpha = 1, advance = DIGIT_W): number {
     let s = String(Math.max(0, Math.trunc(value)));
     if (width > 0) s = s.padStart(width, '0');
     for (let i = 0; i < s.length; i++) {
       const d = s.charCodeAt(i) - 48;
       if (d >= 0 && d <= 9) {
-        this.blit(r, 'ascii', [d * DIGIT_W, DIGIT_Y, DIGIT_W, DIGIT_H], x + i * DIGIT_W, y, alpha);
+        this.blit(r, 'ascii', [d * DIGIT_W, DIGIT_Y, DIGIT_W, DIGIT_H], x + i * advance, y, alpha);
       }
     }
-    return x + s.length * DIGIT_W;
+    return x + s.length * advance;
   }
 
   // Regular background quad VMs run on Std#animationFrame, which never
@@ -5998,7 +6008,83 @@ export class StageScene implements GameHost {
   // stars, the Power bar, and the 東方妖々夢 logo + caption watermark. The
   // Cherry counters are NOT sidebar rows in the original (no such glyphs
   // exist in front.png); they live in a bottom-edge readout, see below.
+  // ---- TH08 sidebar (front.anm entry-0 label scripts -25..-18, on-disk
+  // ids; sequential indices 2..9 per TH08_HUD_FIELDS). The runners position
+  // themselves at their authored resting coordinates (x~416-448 column).
+  private th08HudRunners: AnmRunner[] | null = null;
+
+  private drawSidebarTh08(r: Renderer): void {
+    const front = this.assets.anms.front;
+    if (!this.th08HudRunners) {
+      const base = front.entries[0].spriteBase;
+      const mk = (script: number) =>
+        new AnmRunner(front, script, { entryIndex: 0, spriteIndexOffset: base });
+      // logo (-27), caption (-26), then the eight value labels (-25..-18).
+      this.th08HudRunners = [-27, -26, -25, -24, -23, -22, -21, -20, -19, -18].map(mk);
+      for (const runner of this.th08HudRunners) runner.update();
+    }
+    const p = this.playerObj;
+    const run = this.runState!;
+    const valueX = 488; // TH08_HUD_FIELDS value column
+    // The label scripts fade themselves in (entry alpha 32 -> 255); they
+    // must tick every frame like every other ANM VM.
+    for (const runner of this.th08HudRunners) runner.update();
+    // Logo panel + caption (authors' own positions, 480,208 / 448,336).
+    r.drawAnmFrame(this.th08HudRunners[0].spriteFrame(), 0, 0);
+    r.drawAnmFrame(this.th08HudRunners[1].spriteFrame(), 0, 0);
+    for (let i = 2; i < this.th08HudRunners.length; i++) {
+      r.drawAnmFrame(this.th08HudRunners[i].spriteFrame(), 0, 0);
+    }
+    // TH08's /10 score rule means the live field already reads at display
+    // scale — no appended zero (unlike TH07's "%8d0").
+    this.drawNumber(r, Math.max(this.hiScore, this.score), valueX, 44, 9, 1, TH08_ADV);
+    this.drawNumber(r, this.score, valueX, 60, 9, 1, TH08_ADV);
+    // Lives/bombs icons: front.png 16x16 pair at (64,80)/(80,80), 16px pitch.
+    for (let i = 0; i < Math.max(0, p.lives); i++) {
+      this.blit(r, 'front', TH08_ICON_LIFE, valueX + i * 16, 88);
+    }
+    for (let i = 0; i < Math.max(0, p.bombs); i++) {
+      this.blit(r, 'front', TH08_ICON_BOMB, valueX + i * 16, 104);
+    }
+    // Human/Youkai gauge: a 128-wide bar at y136 whose fill splits around
+    // the center by the gauge value (-10000..10000), left grey / right
+    // periwinkle (TH08_HUD.gauge colors).
+    const ctx = r.ctx;
+    const gauge = TH08_HUD.gauge;
+    const center = gauge.x + gauge.fullPowerWidth / 2;
+    const frac = Math.max(-1, Math.min(1, run.youkaiGauge / 10000));
+    ctx.save();
+    ctx.fillStyle = '#303030';
+    ctx.fillRect(gauge.x, gauge.top, gauge.fullPowerWidth, gauge.bottom - gauge.top);
+    if (frac < 0) {
+      ctx.fillStyle = 'rgba(224,224,224,0.9)';
+      ctx.fillRect(center + frac * 64, gauge.top, -frac * 64, gauge.bottom - gauge.top);
+    } else {
+      ctx.fillStyle = 'rgba(128,224,224,0.55)';
+      ctx.fillRect(center, gauge.top, frac * 64, gauge.bottom - gauge.top);
+    }
+    ctx.restore();
+    // Power row: value digits, "MAX" past 128 (same rule as TH07's row).
+    if (p.power >= 128) r.text('MAX', valueX, 152, { size: 12, color: '#fff' });
+    else this.drawNumber(r, p.power, valueX, 152, 0, 1, TH08_ADV);
+    this.drawNumber(r, this.graze, valueX, 168, 0, 1, TH08_ADV);
+    this.drawNumber(r, run.clockTime, valueX, 184, 0, 1, TH08_ADV);
+
+    if (this.bossActive) {
+      const hp = Math.max(0, this.bossActive.hp);
+      const max = Math.max(1, this.bossActive.maxHp);
+      ctx.fillStyle = '#311';
+      ctx.fillRect(PLAYFIELD.x + 40, PLAYFIELD.y + 6, PLAYFIELD.width - 80, 5);
+      ctx.fillStyle = '#e55';
+      ctx.fillRect(PLAYFIELD.x + 40, PLAYFIELD.y + 6, (PLAYFIELD.width - 80) * (hp / max), 5);
+    }
+  }
+
   private drawSidebar(r: Renderer): void {
+    if (this.runState) {
+      this.drawSidebarTh08(r);
+      return;
+    }
     const ctx = r.ctx;
     const labelX = 432; // resting column for every front.png label (spec §1.2)
     const valueX = 504; // digit readouts start just past the 64px label box
