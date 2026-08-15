@@ -19,6 +19,7 @@ import {
 import { PlayerEffects } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
 import { Th08RunState } from './th08-state';
+import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import { TH08_HUD } from './th08-hud-layout';
 import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
 import { DialogueRunner, portraitSprite } from './dialogue';
@@ -472,6 +473,9 @@ export class StageScene implements GameHost {
   runState: Th08RunState | null = null;
   hiScore = 100000;
   dialogue: DialogueRunner | null = null;
+  // TH08 dialogue (timeline ins_6): the committed Th08DialogueMachine plus
+  // four portrait-slot AnmRunners.
+  th08Dialogue: { machine: Th08DialogueMachine; runners: (AnmRunner | null)[] } | null = null;
   private dialogueResume = false;
   stageFrame = 0;
   stageClear = false;
@@ -1738,7 +1742,116 @@ export class StageScene implements GameHost {
     if (slot) this.audio.sfx(slot[0], slot[1], id);
   }
 
+  // TH08 pre-boss/post-boss conversation (timeline ins_6 -> FUN_0043396d
+  // "msg start %d"). The committed Th08DialogueMachine drives the original
+  // four-portrait MSG semantics (ops 15/16/17/21/22); the entry index maps
+  // directly into the msg blob's entry table (TH08 keeps per-phase entries
+  // rather than TH07's character*10+phase addressing).
+  private startDialogueTh08(index: number): void {
+    const raw = this.runtime.msg.messages[index];
+    if (!raw || raw.length === 0) return;
+    // Keep the TH07 family's pre-dialogue sweep: the native msg-start path
+    // zeroes the message state and the stage's boss-entry ins_95 performs
+    // the field clear; doing it here matches the observed native net effect
+    // (flagged: exact TH08 clear site not yet decompiled).
+    this.cancelBulletsToItems();
+    this.forceCollectAllItems();
+    // Bridge the Msg parser's decoded instructions into the machine's
+    // {time, op, args, text} shape. The parser has already split TH08's
+    // packed op1/op15/op17 payloads (portrait = low i16, script = high).
+    const instructions = raw.map((ins) => ({
+      time: ins.time,
+      op: ins.op,
+      args: ins.op === 1 || ins.op === 2
+        ? [ins.portrait ?? 0, ins.script ?? 0]
+        : ins.op === 15
+          ? [ins.slot ?? 0, ...(ins.interrupts ?? [-1, -1, -1, -1])]
+          : ins.op === 17
+            ? [ins.slot ?? 0, ins.interrupt ?? 0]
+            : ins.args,
+      text: ins.text
+    }));
+    this.th08Dialogue = {
+      machine: new Th08DialogueMachine(instructions, { ownershipSide: 0 }),
+      runners: [null, null, null, null]
+    };
+  }
+
+  private updateTh08Dialogue(input: InputFrame): void {
+    const dlg = this.th08Dialogue;
+    if (!dlg) return;
+    let bits = 0;
+    if (input.held.has('shoot') || input.held.has('confirm')) bits |= TH08_DIALOGUE_INPUT_BITS.confirm;
+    if (input.held.has('up')) bits |= TH08_DIALOGUE_INPUT_BITS.humanDirection;
+    if (input.held.has('down')) bits |= TH08_DIALOGUE_INPUT_BITS.youkaiDirection;
+    if (input.held.has('skip')) bits |= TH08_DIALOGUE_INPUT_BITS.fastForward;
+    const events = dlg.machine.update(bits);
+    for (const event of events) {
+      switch (event.type) {
+        case 'portrait-init':
+        case 'portrait-interrupt':
+        case 'slot-update': {
+          const slot = event.slot;
+          if (slot < 0 || slot > 3) break;
+          // Portrait-slot to face-ANM mapping (PROBABLE, flagged): the
+          // Border Team's two speakers read face_rm00/face_yk00; stage-NPC
+          // slots read the stage face ANM (face_st01 for Wriggle). The
+          // portrait script indexes the anm's ENTRIES (one expression
+          // script each: rm00 -172..-164, yk00 -163..-155).
+          const faceKey = slot === 0 ? 'face_rm00'
+            : slot === 1 ? 'face_yk00'
+              : this.stageDataFaceKey();
+          const faceAnm = (this.assets.anms as Record<string, Anm>)[faceKey];
+          if (!faceAnm) break;
+          const portrait = dlg.machine.state.portraits[slot];
+          if (!portrait.active) {
+            dlg.runners[slot] = null;
+            break;
+          }
+          let runner = dlg.runners[slot];
+          const entryIndex = Math.max(0, Math.min(faceAnm.entries.length - 1, portrait.script));
+          const entry = faceAnm.entries[entryIndex];
+          const scriptId = entry?.scriptIds[0];
+          if (scriptId == null) break;
+          if (!runner || runner.scriptId !== scriptId) {
+            runner = new AnmRunner(faceAnm, scriptId, {
+              entryIndex,
+              spriteIndexOffset: entry?.spriteBase ?? 0
+            });
+            dlg.runners[slot] = runner;
+          }
+          if (portrait.interrupt >= 0) runner.interrupt(portrait.interrupt);
+          break;
+        }
+        case 'sound':
+          if (event.id === 12) this.playSfx(12);
+          break;
+        case 'game-mode':
+          // op22 restarts the entry with the new ownership side.
+          break;
+        case 'done':
+          this.th08Dialogue = null;
+          this.dialogueResume = true;
+          break;
+      }
+    }
+    for (const runner of dlg.runners) runner?.update();
+    if (dlg.machine.state.done) {
+      this.th08Dialogue = null;
+      this.dialogueResume = true;
+    }
+  }
+
+  private stageDataFaceKey(): string {
+    const faceAnms = (TH08_DATA.stages as unknown as { 1?: { faceAnms?: readonly string[] } })[1]?.faceAnms;
+    return faceAnms?.[2] ?? 'face_st01';
+  }
+
   startDialogue(index: number): void {
+    if (this.runState) {
+      this.startDialogueTh08(index);
+      return;
+    }
     // Th07.exe timeline op 8 → FUN_0042819f (all.c:17715-17717): activating
     // a dialogue cancels every bullet+laser into auto-collecting cherry
     // items (FUN_00422ea0(1)), kills every non-boss enemy
@@ -1804,6 +1917,7 @@ export class StageScene implements GameHost {
   }
 
   isDialogueActive(): boolean {
+    if (this.th08Dialogue && !this.th08Dialogue.machine.state.done) return true;
     return !!this.dialogue && !this.dialogue.done;
   }
 
@@ -2361,6 +2475,8 @@ export class StageScene implements GameHost {
         this.dialogueResume = true;
       }
       if (this.dialogue.done) this.dialogue = null;
+    } else if (this.th08Dialogue) {
+      this.updateTh08Dialogue(input);
     }
     // Bomb over: release the interrupt-gated bomb visuals (label 1 is the
     // fade-out path in the player bomb scripts) and tear down the form runner.
@@ -5939,7 +6055,45 @@ export class StageScene implements GameHost {
     }
   }
 
+  // TH08 dialogue presentation: the four portrait slots at their authored
+  // positions (the machine's position codes 3/4/6 map left/right/back like
+  // the native GuiImpl layout) plus the current speaker's two text lines.
+  // Text is canvas-rendered (flagged approximation until the msg text VM
+  // art is decoded, same trade the TH07 dialogue made).
+  private drawTh08Dialogue(r: Renderer): void {
+    const dlg = this.th08Dialogue;
+    if (!dlg) return;
+    const state = dlg.machine.state;
+    const slotX = [80, 464, 272, 272];
+    for (let slot = 0; slot < 4; slot++) {
+      const runner = dlg.runners[slot];
+      if (!runner) continue;
+      const portrait = state.portraits[slot];
+      if (!portrait.active) continue;
+      const frame = runner.spriteFrame();
+      if (!frame) continue;
+      // Position codes: 3 = left active, 4 = side rest, 6 = opposite rest.
+      const x = portrait.position === 3 ? 80 : portrait.position === 6 ? 420 : slotX[slot];
+      r.drawAnmFrame(frame, x + frame.w / 2, 240);
+    }
+    const ctx = r.ctx;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8, 6, 16, 0.82)';
+    ctx.fillRect(48, 336, 544, 130);
+    ctx.strokeStyle = 'rgba(160, 140, 200, 0.6)';
+    ctx.strokeRect(48.5, 336.5, 543, 129);
+    ctx.restore();
+    for (let i = 0; i < state.lines.length; i++) {
+      const line = state.lines[i];
+      if (line) r.text(line, 72, 362 + i * 30, { size: 20, color: '#f0eaf5' });
+    }
+  }
+
   private drawDialogue(r: Renderer): void {
+    if (this.th08Dialogue) {
+      this.drawTh08Dialogue(r);
+      return;
+    }
     const d = this.dialogue;
     if (!d) return;
     const ctx = r.ctx;

@@ -451,6 +451,14 @@ export class StageRuntime {
   }
 
   private runTimelineEvent(game: GameHost, evt: TimelineEvent, t: number): 'hold' | null {
+    // TH08 timeline v2 op 6 is the MSG-start instruction (FUN_00439810 ->
+    // "msg start %d", spec th08-ecl-ops-0x90-0xb7 §3) — not TH07's mirrored
+    // spawn. The ecl.ts v2 parser only treats op 6 as a spawn when its size
+    // is >= 32, so a TH08 ins_6(idx) arrives here with i0 = the entry index.
+    if (this.ecl.version === 8 && evt.op === 6) {
+      game.startDialogue?.(evt.i0 ?? 0);
+      return null;
+    }
     switch (evt.op) {
       case 0:
       case 2:
