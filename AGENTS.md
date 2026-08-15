@@ -19,6 +19,29 @@ the legacy TH07 text below as parent-engine history, not as format authority:
 - Runtime directories will move to `assets/th08-img`, `assets/audio/th08`,
   and `assets/sfx/th08`; nothing under `reference/` or `replay/` may ship.
 
+### TH08 vertical-slice checkpoint (2026-08-15)
+
+TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
+Border Team, dialogue, HUD, and the replay harness are all live. The
+dispatch key is `character === 'reimuYukari'`; the TH07 engine path
+(MenuFlow, CherrySystem, TH07_DATA stage tables, PLAYER_SPRITE_BASE shots)
+is retained verbatim for every other character, keeping the TH07 sim
+suite, golden digest, and `replay:verify` green as the shared-engine
+regression net.
+
+Verification oracle for text-mode reviewers, measured on the TH08 build
+(dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture):
+
+| frame | play (32,16,384,448) | side (424,16,200,448) | lower (32,448,384,16) |
+|---|---|---|---|
+| 300 | bright ≈4.3, texture ≈3.6% | bright ≈30.4, texture ≈35.8% | bright ≈23, texture ≈94% |
+| 800 | bright ≈4.6, texture ≈1.8% | bright ≈30.4, texture ≈35.8% | bright ≈13.6, texture ≈10% |
+| 2500 | bright ≈25, texture ≈8.5% (bullets live) | bright ≈32.8, texture ≈78.8% | bright ≈24.8, texture ≈7.2% |
+
+Native-playfield references live in `reference/native-shots/` (Wine +
+Xvfb userdemo captures, play/side/lower bands in pixel-report.txt).
+
+
 Operating manual for AI agents and contributors. It encodes the working
 rules, the verification loop, the file-format facts, and the orchestration
 protocol that produced the current codebase. Follow it exactly; nearly
