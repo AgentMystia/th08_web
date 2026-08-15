@@ -616,6 +616,9 @@ export interface Th08EclState {
   capturedFire: Int32Array | null;
   // +0x3060: auto-fire deadline (ins_105/106); 0 = disarmed.
   autoFireDeadline: number;
+  // Bullet-template fire origin x/y (+0x2dd0/+0x2dd4, vars 10079/10080).
+  fireOriginX: number;
+  fireOriginY: number;
   // +0x3313: transform ("intangible") type byte; -1 = none.
   transformType: number;
   // +0x3308/+0x330c: ins_144 death-drop pair (extra children count etc.).

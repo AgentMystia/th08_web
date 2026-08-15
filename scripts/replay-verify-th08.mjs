@@ -37,7 +37,9 @@ const scene = new mod.StageScene(
   null,
   stage.rngSeed
 );
-scene.mode = 'arcade';
+// 'test' mode keeps the scene alive past any divergence death so later
+// frames stay observable instead of freezing on the continue screen.
+scene.mode = 'test';
 
 // Minimal T8RP stage-entry restore (the TH08 counterpart of
 // applyReplayStageSnapshot's TH07 fields — the full restore lands with the
@@ -55,6 +57,24 @@ if (scene.runState) {
   scene.runState.pointItemExtends = stage.pointItemExtends;
   scene.runState.nextPointItemExtendThreshold = stage.nextPointItemExtendThreshold;
 }
+
+// RNG budget accounting: every consumer bottoms out in u16(); the recorded
+// stage-2 seed is the original's total draw budget (mod 65536) from the
+// stage-1 seed. Count per-frame draws for earliest-divergence analysis.
+let rngDraws = 0;
+let rngBootstrapDraws = 0;
+{
+  const orig = scene.rng.u16.bind(scene.rng);
+  let inBootstrap = true;
+  scene.rng.u16 = () => {
+    if (inBootstrap) rngBootstrapDraws++;
+    else rngDraws++;
+    return orig();
+  };
+  scene.rngBootstrapDone = () => { inBootstrap = false; };
+}
+
+scene.rngBootstrapDone?.();
 
 const inputBits = (word) => ({
   held: new Set([
@@ -103,6 +123,7 @@ for (let f = 0; f < frames; f++) {
       enemies: scene.enemies.length,
       bullets: scene.enemyBullets.length,
       rng: scene.rng.seed,
+      rngDraws,
       spawns: spawnFrames.length,
       kills: killFrames.length
     });
@@ -112,7 +133,7 @@ for (let f = 0; f < frames; f++) {
 console.log(`frames run: ${frames}`);
 console.log(`spawns: ${spawnFrames.length} (first at f${spawnFrames[0] ?? '-'}, last at f${spawnFrames.at(-1) ?? '-'})`);
 console.log(`kills: ${killFrames.length} (first at f${killFrames[0] ?? '-'})`);
-console.log(`final rng seed: ${scene.rng.seed}`);
+console.log(`final rng seed: ${scene.rng.seed} (draws ${rngDraws}, bootstrap ${rngBootstrapDraws}; stage-2 entry seed 0x${rpy.stages[1].rngSeed.toString(16)} = target)`);
 console.log(`end: score=${scene.score} graze=${scene.graze} enemies=${scene.enemies.length} bullets=${scene.enemyBullets.length} player=(${scene.playerObj.x},${scene.playerObj.y}) lives=${scene.playerObj.lives} bombs=${scene.playerObj.bombs}`);
 if (scene.runState) {
   console.log(`th08 runState: gauge=${scene.runState.youkaiGauge} clock=${scene.runState.clockTime} orbs=${scene.runState.currentTimeOrbs}/${scene.runState.totalTimeOrbs} pointValue=${scene.runState.pointItemValue} extends=${scene.runState.pointItemExtends}`);

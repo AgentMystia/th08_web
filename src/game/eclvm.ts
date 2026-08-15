@@ -200,7 +200,6 @@ const TH08_OP_REMAP: Record<number, number> = {
   70: 48, 71: 50,                   // angular velocity, acceleration
   93: 93, 94: 92,                   // createEnemy 3D relative / absolute
   95: 94,                           // kill sweep (same FUN(8000,0) call)
-  105: 73, 106: 74,                 // auto-fire deadline (± the RNG draw)
   112: 80,                          // bullet sweep to items
   116: 84, 117: 85, 118: 86, 119: 87, 120: 88, 121: 89, // laser slot ops
   123: 91,                          // end spell card
@@ -237,6 +236,15 @@ const TH08_SHIFT_H32 = [0, 1, 1, 2, 2, 3, 4, 0];
 // per-enemy slots, 10037-10044 are eight RUN-GLOBALS shared across all
 // enemies, and everything else is a computed special. See varRead.
 const VAR_BASE = 10000;
+
+// f32 from raw i32 bits (for the TH08 captured-FIRE image, which stores its
+// float operands as IEEE-754 words).
+const __f32box = new Float32Array(1);
+const __i32box = new Int32Array(__f32box.buffer);
+function f32FromBits(bits: number): number {
+  __i32box[0] = bits | 0;
+  return __f32box[0];
+}
 
 
 const warned = new Set<string>();
@@ -731,6 +739,8 @@ export class StageRuntime {
         fireRankCount2High: 0,
         capturedFire: null,
         autoFireDeadline: 0,
+        fireOriginX: 0,
+        fireOriginY: 0,
         transformType: -1,
         deathDropA: 0,
         deathDropB: 0,
@@ -1044,6 +1054,7 @@ export class StageRuntime {
     // again when the manager reaches it later in the same pass.
     this.updateMovementController(e, tailRate);
     this.updateAutoShoot(game, e);
+    if (s.th08) this.updateTh08AutoFire(game, e);
     this.updateAnmPose(e);
     // Armed op122 and op27 slots are HP-gated and run after dispatch, so an
     // instruction armed at t0 takes effect during this same allocation core.
@@ -2232,6 +2243,88 @@ export class StageRuntime {
         warnOnce(`fx${id}`, `bullet-effect id ${id} out of the 24-entry table`);
         return;
     }
+  }
+
+  // TH08 auto-fire (FUN_00423150, all.c:16278): while the bullet pool
+  // (enemy HP) is live and a deadline is armed, the ECL clock reaching the
+  // deadline re-executes the raw FIRE instruction captured at +0x3034 by
+  // ins_107 — every frame at/after the deadline, until the pool empties.
+  // TH08's deadline is a frame count from arming (the ZunTimer at the
+  // enemy's ECL clock); the port models it against ctx.time, which the
+  // dispatcher advances once per core tick.
+  private updateTh08AutoFire(game: GameHost, e: Enemy): void {
+    const s = e.ecl;
+    const t = s.th08!;
+    if (e.hp <= 0 || t.autoFireDeadline <= 0 || !t.capturedFire) return;
+    if (s.ctx.time < t.autoFireDeadline) return;
+    this.fireTh08Raw(game, e, t.capturedFire);
+  }
+
+  // Re-run a captured raw 11-dword FIRE instruction image (the 44-byte block
+  // at +0x3034): header + 8 dwords of args. Routed back through fireTh08's
+  // gate/mode logic with var resolution disabled (the raw image's operands
+  // were resolved at capture time in the exe — but the var-resolved bits
+  // were the EXE's live-var reads, so re-resolve where the data asks).
+  private fireTh08Raw(game: GameHost, e: Enemy, raw: Int32Array): void {
+    const s = e.ecl;
+    const t = s.th08!;
+    if (e.hp <= 0) return;
+    const mode = raw[1] & 0xffff;
+    const instrLike = {
+      args: 12, // dword layout starts after the 12-byte header
+      id: mode,
+      offset: 0,
+      time: 0,
+      size: raw[2] & 0xffff,
+      rankMask: ((raw[2] >>> 16) & 0xffff) >> 8,
+      paramMask: (raw[2] >>> 16) & 0xffff
+    };
+    void instrLike;
+    // Read the fields straight from the captured image: header dwords 0-2,
+    // then args at dwords 3..10. FUN_00422720 reads args with its paramMask
+    // still attached; the image carries the mask, so var-refs re-resolve.
+    const v = this.ecl.view;
+    void v;
+    const gi = (d: number) => raw[3 + d] | 0;
+    const gf = (d: number) => f32FromBits(raw[3 + d]);
+    const sprite = raw[3] & 0xffff;
+    const offset = (raw[3] >>> 16) & 0xffff;
+    const count1raw = gi(1);
+    const count2raw = gi(2);
+    const angle1 = gf(5);
+    const speed1 = gf(3);
+    const angle2 = gf(6);
+    const speed2 = gf(4);
+    const flags = gi(8);
+    if ((flags & 0x8000) !== 0 && (t.flags & 0x800) === 0) return;
+    if ((flags & 0x10000) !== 0 && (t.flags & 0x800) !== 0) return;
+    if (t.suppressRadiusSq > 0) {
+      const dx = game.player.x - e.x;
+      const dy = game.player.y - e.y;
+      if (dx * dx + dy * dy < t.suppressRadiusSq) return;
+    }
+    const rank = game.rank;
+    const lerpI = (lo: number, hi: number) => Math.trunc((hi - lo) * rank / 32) + lo;
+    const lerpF = (lo: number, hi: number) => Math.fround(Math.fround((hi - lo) * rank) / 32 + lo);
+    const count1 = Math.max(1, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
+    const count2 = Math.max(1, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
+    const rankSpeed = lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
+    const props: BulletProps = {
+      sprite,
+      offset,
+      count1,
+      count2,
+      speed1: speed1 !== 0 ? Math.max(0.3, Math.fround(speed1 + rankSpeed)) : 0,
+      speed2: Math.max(0.3, Math.fround(speed2 + Math.fround(rankSpeed / 2))),
+      angle1,
+      angle2,
+      flags,
+      sfx: s.bulletSfx,
+      exSlots: s.bulletExSlots.slice(),
+      aimMode: mode - 96
+    };
+    s.bulletProps = props;
+    this.spawnBullets(game, e, props);
   }
 
   private updateAutoShoot(game: GameHost, e: Enemy): void {
@@ -4051,6 +4144,11 @@ export class StageRuntime {
       case 10070: return s.angularVelocity;
       case 10071: return s.speed;
       case 10072: return s.acceleration;
+      // 10079/10080: fire origin x/y (+0x2dd0/+0x2dd4 in the bullet template
+      // family) — stage-1 emitters snapshot a fire position there and read
+      // it back for aimed volleys.
+      case 10079: return t.fireOriginX;
+      case 10080: return t.fireOriginY;
       case 10092: return s.itemDrop;
       case 10093: return e.score;
     }
@@ -4095,6 +4193,8 @@ export class StageRuntime {
       case 10070: s.angularVelocity = f32; return;
       case 10071: s.speed = f32; return;
       case 10072: s.acceleration = f32; return;
+      case 10079: t.fireOriginX = f32; return;
+      case 10080: t.fireOriginY = f32; return;
       case 10092: s.itemDrop = Math.trunc(value); return;
       case 10093: e.score = Math.trunc(value); return;
     }
@@ -4377,6 +4477,18 @@ export class StageRuntime {
       case 109: // re-fire the current template (0 uses in shipped data)
         if (s.bulletProps) this.spawnBullets(game, e, s.bulletProps);
         return null;
+      case 105: case 106: { // auto-fire deadline (FUN_00422720's caller):
+        // value + rankLerpInt(v/5, -v/5) (same formula as TH07 ops 73/74);
+        // ins_106 adds exactly ONE raw RNG draw (FUN_00406ef0(v)).
+        let iv = gi(0);
+        if (iv !== 0) {
+          const fifth = Math.trunc(iv / 5);
+          iv = iv + fifth + Math.trunc((-2 * fifth * game.rank) / 32);
+        }
+        t.autoFireDeadline = iv > 0 ? ctx.time + iv : 0;
+        if (op === 106 && iv > 0) game.rng.u16InRange(iv);
+        return null;
+      }
       case 107: // capture FIREs ON (flags bit 17): ops 96-104 store their raw
         // instruction at +0x3034 for the auto-fire tick (all.c:12289-12291)
         t.flags |= 0x20000;
