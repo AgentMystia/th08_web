@@ -451,6 +451,13 @@ export class Player {
     let advancedOnReverse = false;
     if (focused !== this.focusHeld) {
       this.focusHeld = focused;
+      // TH08 Border Team: the human/youkai sprite swap is immediate with
+      // the focus flip (no 8-frame glide between different characters);
+      // refresh the pose runner here since pose changes key off direction.
+      if (this.character === 'reimuYukari') {
+        const script = focused ? 5 : 0;
+        if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
+      }
       this.focusTransition = focused ? 'in' : 'out';
       if (this.focusGlideFrame < GLIDE_FRAMES) {
         // FUN_0043be00 states 2 and 4 use the same reversal sequence: advance
@@ -520,6 +527,16 @@ export class Player {
     const pose = movingLeft ? 'left' : movingRight ? 'right' : 'idle';
     if (pose === this.poseState) return;
     this.poseState = pose;
+    // TH08 Border Team (player00.anm, per reference/re-specs/th08-player.md):
+    // script 0 = the human (Reimu) pose, script 5 = the youkai (Yukari)
+    // pose; focus swaps them IMMEDIATELY (the SHT pair's unfocused/focused
+    // swap drives both sprite and speed in one branch). The four direction
+    // scripts TH07 uses are specific to that game's player art.
+    if (this.character === 'reimuYukari') {
+      const script = this.focusHeld ? 5 : 0;
+      if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
+      return;
+    }
     // playerXX.anm movement scripts (Th07.exe FUN_0043be00 @ all.c:28120-28143,
     // table at +0x29ef4..+0x29f00): 0 idle, 1 bank-left, 2 return-from-left,
     // 3 bank-right, 4 return-from-right. Scripts 3/4 are scripts 1/2 with the
@@ -656,11 +673,17 @@ export class Player {
   private makeBullet(shot: ShtShot): PlayerBullet | null {
     // SHT sprite is a global ANM SCRIPT id (base 1024): playerXX.anm shot
     // scripts live at 64+, their impact variants at +0x20 (96+).
-    const scriptId = shot.sprite - PLAYER_SPRITE_BASE;
+    const scriptId = this.character === 'reimuYukari'
+      ? shot.sprite // TH08 SHT sprites are entry-local ids in player00.anm
+      : shot.sprite - PLAYER_SPRITE_BASE;
     if (!this.anm.hasScript(scriptId)) return null;
     const runner = new AnmRunner(this.anm, scriptId);
     const rect = this.anm.sprites.get(scriptId) ?? this.anm.sprites.get(64);
     const source = shot.orb === 1 || shot.orb === 2 ? this.orbOffset(shot.orb) : { x: 0, y: 0 };
+    // TH08 has no paired +0x20 impact-script family in player00.anm's 19
+    // entry-0 scripts; the runner plays the flight script and the bullet
+    // dies with it (TH07 re-arms an explicit impact VM instead).
+    const impactScript = this.character === 'reimuYukari' ? scriptId : scriptId + 0x20;
     return {
       poolSlot: -1,
       // FUN_00438b70 writes spawn position and velocity into the player's
@@ -683,7 +706,7 @@ export class Player {
       state: 'fired',
       hitAge: 0,
       runner,
-      impactScript: scriptId + 0x20,
+      impactScript,
       orb: shot.orb,
       anchorX: shot.x,
       rect: rect

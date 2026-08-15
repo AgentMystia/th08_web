@@ -19,6 +19,7 @@ import {
 import { PlayerEffects } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
 import { Th08RunState } from './th08-state';
+import { Th08SeekingOptionShot } from './th08-option-shot';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import { TH08_HUD } from './th08-hud-layout';
 import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
@@ -2341,7 +2342,10 @@ export class StageScene implements GameHost {
         if (p.character === 'sakuyaB') this.allocateBombClearRegion(p.x, p.y, 800, 0, 1);
       }
       this.focusHeld = p.focusHeld;
-      if (p.focusTransition === 'in') {
+      // TH08 has no TH07 effect-24 focus burst (etama.anm v3 has no script
+      // 26 in entry 1); the Border Team's focus presentation is the
+      // human/youkai sprite swap instead.
+      if (p.focusTransition === 'in' && !this.runState) {
         const entryIndex = 1;
         const entry = this.assets.anms.etama.entries[entryIndex];
         // Th07.exe (v1.00b) FUN_0043c9a5 @ 0x43c99b creates effect id 24
@@ -3156,10 +3160,23 @@ export class StageScene implements GameHost {
       // one last frame of history helper boxes (Extra PRE2832 witness).
       if (b.dead) {
         this.playerBulletSlots[slot] = null;
+        this.th08Seekers?.delete(slot);
         continue;
       }
       if (b.state === 'fired') {
-        if (b.shotType === 1 || b.shotType === 2) this.steerHomingBullet(b, homingTarget);
+        if (b.behaviorFunc === 1 && this.runState) {
+          // TH08 SHT funcs[0] = 1 (FUN_00450240/FUN_00450320 — the Border
+          // Team's focused Yukari seeking option): the committed
+          // Th08SeekingOptionShot steers toward the live homing target,
+          // accelerates +1/3 toward speed 10 when targetless, clamps
+          // [1,10], and re-heads its ANM VM via atan2(vy, vx).
+          const seeker = this.th08SeekerFor(b);
+          seeker.update(homingTarget);
+          b.vx = Math.fround(seeker.vx);
+          b.vy = Math.fround(seeker.vy);
+          b.speed = seeker.speed;
+          b.angle = seeker.heading;
+        } else if (b.shotType === 1 || b.shotType === 2) this.steerHomingBullet(b, homingTarget);
         else if (b.shotType === 3) {
           // MarisaA missile, Th07.exe FUN_00439650 (exe-player-funcs1.md §4):
           // per-frame random vertical boost from spawn, no age gate, no cap,
@@ -3208,7 +3225,10 @@ export class StageScene implements GameHost {
       // FUN_0043a290 advances the split age counter at the tail, after the
       // behavior callback, position integration, cull, and ANM tick.
       b.age += rate;
-      if (b.dead && this.playerBulletSlots[slot] === b) this.playerBulletSlots[slot] = null;
+      if (b.dead && this.playerBulletSlots[slot] === b) {
+        this.playerBulletSlots[slot] = null;
+        this.th08Seekers?.delete(slot);
+      }
     }
     this.compactLive(this.playerBullets);
     this.refreshActiveAttackSlots();
@@ -3558,6 +3578,17 @@ export class StageScene implements GameHost {
   // algorithms bar 4 constants). Operates directly on b.vx/b.vy — angle is
   // never consulted or written. `target` is the per-frame shared cache from
   // updatePlayerBullets, not a per-bullet nearest search.
+  private th08Seekers = new Map<number, Th08SeekingOptionShot>();
+
+  private th08SeekerFor(b: PlayerBullet): Th08SeekingOptionShot {
+    let seeker = this.th08Seekers.get(b.poolSlot);
+    if (!seeker) {
+      seeker = new Th08SeekingOptionShot(b.x, b.y, b.angle, b.speed);
+      this.th08Seekers.set(b.poolSlot, seeker);
+    }
+    return seeker;
+  }
+
   private steerHomingBullet(b: PlayerBullet, target: { x: number; y: number } | null): void {
     const maxSpeed = b.shotType === 1 ? 10 : 18;
     const accel = b.shotType === 1 ? 0.33333334 : 0.6;
