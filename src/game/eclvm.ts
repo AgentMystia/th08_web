@@ -54,10 +54,17 @@ function nativeAngleTowardPlayer(
 // normal-state bullet-manager tick, including the spawn-ANM transition tick.
 // Unselected slots and 0x2000 grace slots can be skipped in one invocation,
 // but at most ONE movement behavior is promoted before returning.
-export function advanceBulletExBehavior(bullet: EnemyBullet, activationRate = 1): void {
+// TH08 (FUN_0042ffc0): the same ordered queue with the cond-stall rule, plus
+// the immediate commands 0x20000 (wait gate), 0x4000 (prototype transform),
+// 0x80000 (sfx), 0x40000 (fade-kill), which arrive through the optional host.
+export function advanceBulletExBehavior(
+  bullet: EnemyBullet,
+  activationRate = 1,
+  host?: { playSfx?(id: number): void; transformPrototype?(b: EnemyBullet, proto: number, spriteShift: number): void }
+): void {
   if (!bullet.exSlots) return;
   let idx = bullet.exBehaviorIndex ?? 0;
-  while (idx < 5) {
+  while (idx < bullet.exSlots.length) {
     const slot = bullet.exSlots[idx];
     if (!slot || slot.opcode === 0) return;
     // cond==0 waits at this slot while ANY earlier behavior flag is active.
@@ -70,6 +77,29 @@ export function advanceBulletExBehavior(bullet: EnemyBullet, activationRate = 1)
       // movement budget; native immediately examines the next queue entry.
       bullet.graceFrames = Math.max(bullet.graceFrames ?? 0, slot.arg3 | 0);
       continue;
+    }
+    // TH08 immediate queue commands (FUN_0042ffc0 cases, all.c:23050-23086):
+    // they never set an exFlags behavior bit and the walk continues inline.
+    if (slot.opcode === 0x20000) {
+      // Wait gate: arm the bullet's command timer for arg3 frames; the +0xdac
+      // handler holds the queue there until it elapses (all.c:23507-23514).
+      bullet.exWaitFrames = Math.max(bullet.exWaitFrames ?? 0, slot.arg3 | 0);
+      continue;
+    }
+    if (slot.opcode === 0x4000) {
+      // Prototype transform: swap the bullet's prototype block to arg3 and
+      // shift its sprite by arg4 (all.c:23066-23074).
+      host?.transformPrototype?.(bullet, slot.arg3 | 0, slot.arg4 | 0);
+      continue;
+    }
+    if (slot.opcode === 0x80000) {
+      host?.playSfx?.(slot.arg3 | 0);
+      continue;
+    }
+    if (slot.opcode === 0x40000) {
+      // Fade-kill (bullet state 5 at all.c:23061-23062).
+      bullet.dead = true;
+      return;
     }
     switch (slot.opcode) {
       case 1:
@@ -749,6 +779,9 @@ export class StageRuntime {
       bulletProps: null,
       bulletSfx: 0,
       bulletSfxInterval: 0,
+      // TH07's op-79 queue is five slots; TH08's ins_111 record area at
+      // enemy+0x2e44 spans the whole copied template block (stage 1 uses
+      // slots 0-9) — 16 covers the shipped data.
       bulletExSlots: [null, null, null, null, null],
       shootDisabled: false,
       shootInterval: 0,
@@ -843,6 +876,7 @@ export class StageRuntime {
       // enemy+0x2ca8/+0x2cc8) live in state.th08 — they are NOT part of the
       // saved call frame.
       state.vars = parent ? parent.ecl.vars.slice() : new Float64Array(30);
+      state.bulletExSlots = new Array(16).fill(null);
       state.th08 = {
         enemyInts: new Int32Array(8),
         enemyFloats: new Float64Array(8),
@@ -3944,7 +3978,12 @@ export class StageRuntime {
         // FUN_00421e90 calls FUN_004229f0 once after copying the queue into
         // the allocated fixed slot. Spawn-state bullets wait until their ANM
         // transition before the bullet manager promotes another slot.
-        advanceBulletExBehavior(bullet, game.slowRate ?? 1);
+        advanceBulletExBehavior(bullet, game.slowRate ?? 1, this.ecl.version === 8
+          ? {
+            playSfx: (id: number) => game.playSfx(id),
+            transformPrototype: (b, proto, shift) => this.th08BulletTransform(b, proto, shift)
+          }
+          : undefined);
         if (game.addEnemyBullet) {
           if (!game.addEnemyBullet(bullet)) return;
         } else {
@@ -4713,7 +4752,7 @@ export class StageRuntime {
         // (cond), rec[2]=arg3 (interval), rec[3]=arg4 (maxTimes),
         // rec[0]=arg5 (angle), rec[1]=arg6 (speed; -999.9 = keep current).
         const slot = gi(0);
-        if (slot >= 0 && slot < 5) {
+        if (slot >= 0 && slot < 16) {
           s.bulletExSlots[slot] = {
             opcode: gi(4), cond: gi(8), arg3: gi(12), arg4: gi(16),
             f0: gf(20), f1: gf(24)
@@ -5063,5 +5102,18 @@ export class StageRuntime {
       return 6;
     }
     return 4;
+  }
+
+  // Bullet command 0x4000 (FUN_0042ffc0, all.c:23066-23074): swap the
+  // bullet's prototype block (DAT_00f54e90 + proto*0xd44) and shift its live
+  // sprite by spriteShift (FUN_0045e430 current+shift).
+  th08BulletTransform(bullet: EnemyBullet, proto: number, spriteShift: number): void {
+    if (!TH08_BULLET_PROTOTYPES[proto]) return;
+    bullet.sprite = proto;
+    bullet.spriteOffset = bullet.spriteOffset + spriteShift;
+    bullet.rect = this.bulletRectTh8(proto, bullet.spriteOffset);
+    const hb = this.th08BulletHitbox(proto);
+    bullet.grazeW = hb;
+    bullet.grazeH = hb;
   }
 }

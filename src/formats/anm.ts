@@ -628,6 +628,33 @@ export class AnmRunner {
       case 26: // shift texture u — not reproducible with plain Canvas drawImage
       case 27: // shift texture v
         break;
+      case 80: // TH08 v3 UScroll/VScroll: continuous UV scroll velocities.
+      case 81: // The canvas port keeps the base sprite (no UV wrap); the
+        // values are recorded so the opcode stream stays in sync.
+        break;
+      case 84: // TH08 v3 Color2: second color channel (r,g,b ints). The
+        // canvas renderer has a single tint channel — folded onto it here
+        // (APPROXIMATION, flagged).
+        this.colorRgb = ((v.i32(a) & 0xff) << 16) | ((v.i32(a + 4) & 0xff) << 8) | (v.i32(a + 8) & 0xff);
+        break;
+      case 85: // Alpha2: second alpha channel. Both fold onto the primary
+        // channel here (single-tint renderer) — APPROXIMATION, flagged.
+        this.alpha = v.i32(a) & 0xff;
+        break;
+      case 86: { // Color2Time (color interp, same arg shape as op 33)
+        const packed = v.u32(a + 8);
+        this.colorInterp = {
+          start: this.frame,
+          duration: Math.max(1, v.i32(a)),
+          formula: v.i32(a + 4),
+          from: [(this.colorRgb >> 16) & 0xff, (this.colorRgb >> 8) & 0xff, this.colorRgb & 0xff],
+          to: [(packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff]
+        };
+        break;
+      }
+      case 87: // Alpha2Time (fade interp, same arg shape as op 34)
+        this.fadeInterp = { start: this.frame, duration: Math.max(1, v.i32(a)), formula: v.i32(a + 4), from: [this.alpha], to: [v.i32(a + 8) & 0xff] };
+        break;
       case 28: // visibility
         this.visible = !!v.i32(a);
         break;
@@ -690,6 +717,12 @@ export class AnmRunner {
         break;
       case 42: // decrement variable
         this.setVal(v.f32(a), this.getVal(v.f32(a)) - this.getVal(v.f32(a + 4)));
+        break;
+      case 44: // TH08 v3 float multiply: var[a] = var[b] * var[c]
+        this.setVal(v.f32(a), this.getVal(v.f32(a + 4)) * this.getVal(v.f32(a + 8)));
+        break;
+      case 49: // TH08 v3 integer set-add: var[a] = var[b] + var[c]
+        this.setVal(v.i32(a), Math.trunc(this.getVal(v.i32(a + 4))) + Math.trunc(this.getVal(v.i32(a + 8))));
         break;
       case 50: // add
         this.setVal(v.f32(a), this.getVal(v.f32(a + 4)) + this.getVal(v.f32(a + 8)));

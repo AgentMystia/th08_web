@@ -22,6 +22,9 @@ export interface EnemyBullet {
   // off-screen cull is skipped entirely and collision keeps running — how
   // patterns park bullets outside the field before they sweep in.
   graceFrames?: number;
+  // TH08 queue command 0x20000 (bullet+0xdac bit handler, all.c:23507): the
+  // queue parks for this many frames while the bullet keeps its motion.
+  exWaitFrames?: number;
   // Frames spent continuously off-screen (exe bullet+0xbfe): dir-change/
   // bounce bullets (mask 0xdc0) survive up to 128 before dying; others die
   // immediately, draining any leftover count first.

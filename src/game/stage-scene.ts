@@ -619,6 +619,13 @@ export class StageScene implements GameHost {
   // Global sprite id of etama entry 1's embedded sprite 0 (the etama2.png
   // item sheet); see ITEM_SPRITES above.
   private readonly etamaItemBase: number;
+  // Host callbacks for TH08 bullet queue commands (0x4000 transform needs the
+  // runtime's prototype tables; 0x80000 plays a sound).
+  private readonly th08BulletExHost = {
+    playSfx: (id: number) => this.playSfx(id),
+    transformPrototype: (b: EnemyBullet, proto: number, spriteShift: number) =>
+      this.runtime.th08BulletTransform(b, proto, spriteShift)
+  };
   private readonly th08ItemRunners: (AnmRunner | null)[] | null = null;
   // Script-driven bomb visuals (see spawnBombEffects).
   private readonly playerEffects: PlayerEffects;
@@ -2035,6 +2042,13 @@ export class StageScene implements GameHost {
     if (!this.stageResultsActive) this.activateStageResults();
     if (this.stageClear) return;
     this.stageClear = true;
+    // TH08: the night clock advances at the stage tally — FUN_0043c35f's
+    // per-stage switch pays +2 when the stage's time-orb quota is missed,
+    // +1 when met (the recorded Lunatic stage 1 ends at clockTime 1, i.e.
+    // met). The stage-1 quota displays as /3000 on the Time row.
+    if (this.runState) {
+      this.runState.addClockTime(this.runState.currentTimeOrbs >= 3000 ? 1 : 2);
+    }
     this.clearTimer = 1;
   }
 
@@ -4453,8 +4467,13 @@ export class StageScene implements GameHost {
     }
     // Constructor promotion happens in FUN_00421e90. Every normal-state
     // manager tick performs exactly one further queue pass BEFORE executing
-    // active behavior routines (FUN_004241c0 @ all.c:16120).
-    advanceBulletExBehavior(b, rate);
+    // active behavior routines (FUN_004241c0 @ all.c:16120). TH08's 0x20000
+    // wait gate parks the queue here while the bullet's motion continues.
+    if ((b.exWaitFrames ?? 0) > 0) {
+      b.exWaitFrames = (b.exWaitFrames ?? 0) - 1;
+    } else {
+      advanceBulletExBehavior(b, rate, this.th08BulletExHost);
+    }
     if (b.exFlags & 1) {
       // speed-ramp (FUN_00423840): velocity = polar(angle, speed + 5·decay)
       // for 17 frames; then just clears the bit. Never writes the speed
@@ -6520,8 +6539,9 @@ export class StageScene implements GameHost {
     // Point row: items toward the next extend (native "26/100").
     this.drawNumber(r, this.pointItems, valueX, 168, 0, 1, TH08_ADV);
     r.text('/' + run.nextPointItemExtendThreshold, valueX + 28, 168, { size: 12, color: '#ddd' });
-    // Time row: the night clock against its 3000 target.
-    this.drawNumber(r, run.clockTime, valueX, 184, 0, 1, TH08_ADV);
+    // Time row: the stage's time-orb progress toward the 3000 quota
+    // (native "825/3000"); the night clock itself advances at the tally.
+    this.drawNumber(r, run.stageTimeOrbs, valueX, 184, 0, 1, TH08_ADV);
     r.text('/3000', valueX + 28, 184, { size: 12, color: '#ddd' });
     // Human/youkai rate gauge at the playfield's bottom-left: percent readout,
     // a split-center bar (human grey left / youkai periwinkle right) with the
