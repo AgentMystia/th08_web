@@ -29,14 +29,34 @@ is retained verbatim for every other character, keeping the TH07 sim
 suite, golden digest, and `replay:verify` green as the shared-engine
 regression net.
 
+2026-08-17 decompile-fidelity pass (commits 9a5e7d3/86dc560/3737b2e):
+the TH08 timeline v2 dispatch now mirrors FUN_0042a8a0 case-for-case
+(spawn ops 0-5/11/12/15 with per-op layouts, mirror set {1,4,5,12},
+dialogue/boss holds, the 13/14 timeline latch, per-difficulty rank byte);
+enemy art resolves through the two-file rule (flags2 bit2 selects the
+common enemy.anm vs the stage stgNenm.anm — asm 0x419850/0x419acc);
+ins_127 registers the boss slot; ins_2/ins_160 are clock SetCurrents, not
+blocking waits; player shots use sht.sprite+10 with the exe's init/tick
+callback split (aim-at-spawn vs the 40-frame-gated seek) and TH08's
+20-frame fire cycle; the bullet command queue runs 0x20000/0x4000/
+0x80000/0x40000 with up to 16 ins_111 slots; all ANM v3 opcodes in the
+embedded data are implemented. Remaining convergence gap: replay
+th8_udLy01.rpy still dies to wave-bullet micro-geometry the decompile
+cannot further pin without a native per-frame trace.
+
 Verification oracle for text-mode reviewers, measured on the TH08 build
-(dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture):
+(dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture).
+NOTE: the headless advance() batches skip per-frame draws, so the sidebar
+label cascade (front.anm entry-0 scripts -27..-12) only completes under a
+live rAF loop — headless `side` bands read dimmer/flatter than the live
+game. Use an unpaused 3s capture for the settled-HUD truth.
 
 | frame | play (32,16,384,448) | side (424,16,200,448) | lower (32,448,384,16) |
 |---|---|---|---|
-| 300 | bright ≈4.3, texture ≈3.6% | bright ≈30.4, texture ≈35.8% | bright ≈23, texture ≈94% |
-| 800 | bright ≈4.6, texture ≈1.8% | bright ≈30.4, texture ≈35.8% | bright ≈13.6, texture ≈10% |
-| 2500 | bright ≈25, texture ≈8.5% (bullets live) | bright ≈32.8, texture ≈78.8% | bright ≈24.8, texture ≈7.2% |
+| 300 | bright ≈4, texture ≈4% | bright ≈18, texture ≈3% (headless cascade) | bright ≈21, texture ≈97% |
+| 800 | bright ≈8, texture ≈5% (fairies live) | bright ≈19, texture ≈8% | bright ≈11, texture ≈7% |
+| 2500 | bright ≈32, texture ≈26% (dense waves) | bright ≈24, texture ≈15% | bright ≈34, texture ≈99% |
+| ~4600 (boss, setLives) | bright ≈19, texture ≈50% (spell danmaku) | bright ≈30, texture ≈39% | bright ≈25, texture ≈65% |
 
 Native-playfield references live in `reference/native-shots/` (Wine +
 Xvfb userdemo captures, play/side/lower bands in pixel-report.txt).

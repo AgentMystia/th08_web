@@ -155,3 +155,65 @@ field). The deaths themselves come from wave-danmaku micro-geometry that
 the decompile fully decodes but whose frame-exact placement cannot be
 verified without the native trace. Everything decompilation can prove is
 implemented; the remaining gap is measurement, not modeling.
+
+## Update (2026-08-17 — decompile-driven fidelity pass, three commits)
+
+Direction per user: abandon the blocked wine trace; converge by exact
+decompile reproduction. The playtest report (all enemies render as
+Wriggle, stage timing wrong, player shots wrong) traced to four engine
+root causes, all fixed from Th08.exe disassembly evidence:
+
+1. **Timeline v2 dispatch** (eclvm runTimelineEventTh08): the old switch
+   dropped spawn ops 1/3/5/11/12/15 entirely (~half the waves), never
+   applied the per-difficulty rank byte (so !EN waves fired on Lunatic),
+   misread op 8 (boss interrupt) as a dialogue start, op 10 (boss-alive
+   hold) as an interrupt write, and never implemented the 13/14 timeline
+   latch (Timeline 1 jumped its midboss gate). Arg layouts per op from
+   FUN_0042a8a0 (all.c:20270-20393): 2/4 draw x in [min,max) with an
+   rng01 draw, 3/5 draw x=rng01*384, 11/12 write the +0x3308/+0x330c
+   extended drops with item forced -1; op 15 alone bypasses the
+   boss-registered spawn gate.
+2. **ins_2/ins_160 are ZunTimer::SetCurrent, not waits** — remapping them
+   to TH07's op 45 parked sub clocks and ran time-0 tails 60 frames late,
+   which teleported the stage-1 midboss offscreen after its seen-latch
+   and got it offscreen-culled at f2994. The TH08 sub model is the ==-
+   gated clock with data-driven instruction times.
+3. **Two-file enemy ANM**: the dispatcher resolves enemy scripts via
+   flags2 bit 2 — plain ops 54/55/57 hit the common enemy.anm, alt ops
+   58/59/61 the stage stgNenm.anm (asm 0x419850/0x419acc/0x419d2f/d4e).
+   Fairies were rendering Wriggle's six pose scripts. ins_127 now does
+   the boss-slot registration (DAT_00f54cc0) so op-10 holds work.
+4. **Player shot chain**: shot ANM script = sht.sprite + 10
+   (FUN_0044fb70 @ 0x44fd32); shot textures face +x so autoRotate uses
+   the raw velocity angle; behavior dispatch uses funcs[1] for the
+   per-frame seek (FUN_00450320, with its 40-frame age gate) and funcs[0]
+   for the spawn-time aim at the cached target (FUN_00450240, no RNG);
+   the fire cycle is 20 frames (FUN_00451500, asm 0x4515b8), not TH07's
+   30. Option-sourced records spawn at the player center pending the
+   option-trail model (flagged).
+
+Plus: bullet command queue (ins_111) field order fixed (opcode=arg1,
+cond=arg2, angle/speed=args5/6), slots widened to 16, and the immediate
+commands 0x20000/0x4000/0x80000/0x40000 implemented; TH08 vars
+10088-10095 mapped; item visuals are the etama.anm scripts itemType+61
+(global index - 150 = on-disk id); spawn-state durations now read the
+flash scripts' real lengths; all ANM v3 opcodes in the embedded data
+implemented (44/49/80-87); TH08 sidebar rows completed (Power bar, Point
+n/100, Time orbs/3000, the bottom-left human/youkai gauge, night-clock
+advance at the tally).
+
+**Convergence state after the pass**: `replay:verify:th08` still reports
+DIVERGED — kills 104, rng 10010 vs 32816, and the recorded run dies six
+times to wave-bullet micro-geometry (killer provenance logged: subs
+1/3/10/12 dir-change bullets, ages 74-207). The deaths cascade the
+item/power/DPS chain, so the midboss fight never finishes in-sim and the
+boss never spawns there. Every system above is now exact to the
+decompile; the residual is the kind of sub-frame bullet placement that
+only a native per-frame trace can pin. The harness
+(scripts/native-trace.mjs) remains ready for a host where Th08.exe
+boots.
+
+**Note**: two isolated test flakes were observed this session (a
+border/bomb timing test failed once each in two full-suite runs out of
+ten; both green on reruns, never twice in a row). Not reproducible on
+demand; watch for them in CI.

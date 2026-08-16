@@ -3879,27 +3879,15 @@ export class StageRuntime {
         // FUN_00421e90 @ 0x4226ec-0x42279c also backs the initial position
         // up by four velocity vectors before the reduced-speed intro begins.
         const hasSpawnState = (flags & 0xe) !== 0;
-        // TH08 spawn-state durations come from the prototype's flash script
-        // family (proto 0's trio = 10/15/30 frames; the generic small/large
-        // trios mirror TH07's 10/16/32; the 64px bubble family runs 24) —
-        // th08-bullet-anm.md §3. APPROXIMATION pending per-script duration
-        // extraction from etama.anm.
         let spawnDuration: number;
         let spawnMoveScale: number;
         if (this.ecl.version === 8) {
-          if (!hasSpawnState) {
-            spawnDuration = 0;
-            spawnMoveScale = 1;
-          } else if (p.sprite === 10) {
-            spawnDuration = 24;
-            spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : 1 / 3;
-          } else if (p.sprite === 0) {
-            spawnDuration = flags & 2 ? 10 : flags & 4 ? 15 : 30;
-            spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : 1 / 3;
-          } else {
-            spawnDuration = flags & 2 ? 10 : flags & 4 ? 16 : 32;
-            spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
-          }
+          // TH08: the duration is the prototype's flash SCRIPT length read
+          // from etama.anm (proto cols 1-3 per state flag 2/4/8) — e.g. the
+          // 21/22/23 trio runs 10/15/30, the 24 family 30/30/30, the bubble
+          // family's script 27 runs 24.
+          spawnDuration = !hasSpawnState ? 0 : this.th08FlashDuration(p.sprite, flags);
+          spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
         } else {
           spawnDuration = !hasSpawnState ? 0
             : p.sprite === 10 ? 24
@@ -5102,6 +5090,41 @@ export class StageRuntime {
       return 6;
     }
     return 4;
+  }
+
+  private th08FlashDurationCache = new Map<number, number>();
+
+  // Spawn-state lifetime = the prototype's flash script length, read from
+  // etama.anm: state flags 2/4/8 select proto cols 1/2/3, and the duration
+  // is the script's own remove/static instruction time.
+  private th08FlashDuration(type: number, flags: number): number {
+    const col = flags & 2 ? 1 : flags & 4 ? 2 : 3;
+    const proto = TH08_BULLET_PROTOTYPES[type];
+    if (!proto) return 10;
+    const scriptIndex = proto[col];
+    const cached = this.th08FlashDurationCache.get(scriptIndex);
+    if (cached !== undefined) return cached;
+    let duration = 10;
+    const ref = this.etamaScriptByGlobalIndex(scriptIndex);
+    if (ref) {
+      const v = this.bulletAnm.view;
+      let off = this.bulletAnm.scriptRefInEntry(ref.entryIndex, ref.localId).start;
+      for (let guard = 0; guard < 256 && off + 8 <= v.length; guard++) {
+        const op = v.u16(off);
+        const len = v.u16(off + 2);
+        const time = v.i16(off + 4);
+        if (len < 8) break;
+        if (op === 1 || op === 2) {
+          // A static/remove at t0 means no transition (proto 10's main);
+          // otherwise the state lasts until the remove's frame.
+          duration = time > 0 ? time : (op === 2 ? 0 : 10);
+          break;
+        }
+        off += len;
+      }
+    }
+    this.th08FlashDurationCache.set(scriptIndex, duration);
+    return duration;
   }
 
   // Bullet command 0x4000 (FUN_0042ffc0, all.c:23066-23074): swap the
