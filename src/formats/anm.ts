@@ -315,6 +315,8 @@ export class AnmRunner {
   private alpha = 255;
   private colorRgb = 0xffffff;
   private blendAdd = false;
+  // TH08 ANM v3 op83 metadata (playerBulletHitAnimationType).
+  private hitAnimationType = 0;
   private mirrored = false;
   private flipY = false;
   private cornerRelative = false;
@@ -719,6 +721,14 @@ export class AnmRunner {
         this.waitTimeout = this.frame + duration;
         break;
       }
+      case 82: // TH08 ANM v3 BlendMode (AnmManager.cpp:320): nonzero = additive
+        this.blendAdd = v.i32(a) !== 0;
+        break;
+      case 83: // TH08 ANM v3 Ins83: player-bullet hit animation type marker
+        // (AnmManager.cpp:558). Visual-side metadata; the TH08 port lets the
+        // flight script end the bullet, so this only suppresses the warning.
+        this.hitAnimationType = v.i32(a);
+        break;
       case 80: { // timed hold: arm a frame counter from a float arg
         // Th07.exe (v1.00b) FUN_0044aa20 case 0x50: the argument is read as a
         // float and the hold persists while its int truncation stays > 0.

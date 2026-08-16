@@ -87,6 +87,13 @@ const ITEM_SPRITES: Record<ItemType, number> = {
 // Per-type offscreen indicator arrows sit 10 embedded ids after their item
 // (emb14-21, same order) — drawn while an item is still above the top edge.
 const ITEM_ARROW_OFFSET = 10;
+// TH08 ItemType enum (ItemManager.hpp:9-21) in declaration order; the item's
+// etama.anm visual script is 61 + id (ItemManager.cpp:112).
+const TH08_ITEM_TYPE_IDS: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const TH08_ITEM_TYPE_SLOT: Partial<Record<ItemType, number>> = {
+  powerSmall: 0, point: 1, powerBig: 2, bomb: 3, powerFull: 4, extend: 5,
+  pointStar: 6, time: 7, pointSmall: 8, unknown9: 9, time2: 10
+};
 // Native g_FullPowerScoreBonus (ItemManager.cpp:17, TH07 0x0049ecf8): the
 // score paid by the Nth power item collected at full power. The counter
 // increments BEFORE indexing and clamps at 30 (ItemManager.cpp:247-251), so
@@ -612,6 +619,7 @@ export class StageScene implements GameHost {
   // Global sprite id of etama entry 1's embedded sprite 0 (the etama2.png
   // item sheet); see ITEM_SPRITES above.
   private readonly etamaItemBase: number;
+  private readonly th08ItemRunners: (AnmRunner | null)[] | null = null;
   // Script-driven bomb visuals (see spawnBombEffects).
   private readonly playerEffects: PlayerEffects;
   // Reserved generic-effect slot used by the player option state machine.
@@ -861,6 +869,29 @@ export class StageScene implements GameHost {
     this.runtime.reset();
     this.runtime.initializeRandomCounters(this.rng);
     this.etamaItemBase = assets.anms.etama.entries[1].spriteBase;
+    // TH08 item visuals are ANM VMs in etama.anm: ItemManager::SpawnItem runs
+    // the global script (itemType + 61) per item (ItemManager.cpp:112). One
+    // cached runner per type stands in for the per-item VMs — APPROXIMATION:
+    // same-type items pulse in phase-locked sync (the stage-1 item scripts
+    // consume no RNG, so the shared runner is draw-order neutral).
+    this.th08ItemRunners = character === 'reimuYukari'
+      ? TH08_ITEM_TYPE_IDS.map((typeId) => {
+        // The exe's etama global script index is (itemType + 61); on disk
+        // etama.anm's script ids run -150..-35 (global = id + 150).
+        const anm = assets.anms.etama;
+        const targetId = 61 + typeId - 150;
+        for (let entryIndex = 0; entryIndex < anm.entries.length; entryIndex++) {
+          const entry = anm.entries[entryIndex];
+          if (!entry.scriptIds.includes(targetId)) continue;
+          return new AnmRunner(anm, targetId, {
+            entryIndex,
+            spriteIndexOffset: entry.spriteBase,
+            rng: this.rng
+          });
+        }
+        return null;
+      })
+      : null;
     this.playerObj = new Player(character, assets.anms);
     this.playerEffects = new PlayerEffects(this.playerObj.anm);
     this.bombContext = this.createBombContext();
@@ -3299,14 +3330,13 @@ export class StageScene implements GameHost {
         continue;
       }
       if (b.state === 'fired') {
-        if (b.behaviorFunc === 1 && this.runState) {
-          // TH08 SHT funcs[0] = 1 (FUN_00450240/FUN_00450320 — the Border
-          // Team's focused Yukari seeking option): the committed
-          // Th08SeekingOptionShot steers toward the live homing target,
-          // accelerates +1/3 toward speed 10 when targetless, clamps
-          // [1,10], and re-heads its ANM VM via atan2(vy, vx).
+        if (b.tickFunc === 1 && this.runState) {
+          // TH08 SHT tick callback 1 (FUN_00450320): the unfocused Border
+          // pair's per-frame seek. Gates on the shot's own age: past frame 39
+          // (0x27) the exe falls to the targetless branch (accelerate 1/3,
+          // clamp 10) even while a target is fresh.
           const seeker = this.th08SeekerFor(b);
-          seeker.update(homingTarget);
+          seeker.update(b.age < 40 ? homingTarget : null);
           b.vx = Math.fround(seeker.vx);
           b.vy = Math.fround(seeker.vy);
           b.speed = seeker.speed;
@@ -3374,7 +3404,21 @@ export class StageScene implements GameHost {
     const volley = this.playerObj.fire(this.slowRate, allowSpawn);
     let playedShotSfx = false;
     for (const b of volley) {
-      if (b.behaviorFunc === 4) this.aimBulletAtSpawn(b);
+      if (this.runState && b.behaviorFunc === 1) {
+        // TH08 SHT init callback 1 (FUN_00450240): with a cached target, the
+        // fresh shot's velocity rotates onto the target bearing plus the
+        // record's split offset — normalize(atan2 + rec.angle + pi/2), no RNG
+        // (FUN_0043edb0 is a pure [-pi,pi) wrap). ply00as uses -pi/2 (exact
+        // aim) at low power and ±0.03 rad splits higher up.
+        const target = this.homingAim;
+        if (target) {
+          const spread = Math.fround(b.angle + Math.PI / 2);
+          const aim = Math.fround(Math.atan2(target.y - b.y, target.x - b.x) + spread);
+          b.angle = aim;
+          b.vx = Math.fround(Math.cos(aim) * b.speed);
+          b.vy = Math.fround(Math.sin(aim) * b.speed);
+        }
+      } else if (b.behaviorFunc === 4) this.aimBulletAtSpawn(b);
       else if (b.behaviorFunc === 5) {
         const spread = b.angle - -Math.PI / 2;
         // The spread angle reads the LIVE angle (player+0xb7e58, already
@@ -4817,6 +4861,11 @@ export class StageScene implements GameHost {
   private updateItems(): void {
     const p = this.playerObj;
     const sht = p.sht;
+    if (this.th08ItemRunners) {
+      // The per-type item VMs tick once per frame (the stage-1 scripts only
+      // run deterministic color/alpha interps).
+      for (const runner of this.th08ItemRunners) runner?.update(this.slowRate);
+    }
     // Th07.exe FUN_00430c10 @ all.c:21958-21961: the PoC trigger is
     // (power >= 128 OR difficulty > 3 [Extra/Phantasm]) AND player.y <
     // pocLine (strict FCOMP <). DAT_0061c260 is the difficulty byte, not the
@@ -5412,7 +5461,10 @@ export class StageScene implements GameHost {
         const frame = b.runner.spriteFrame();
         if (!frame) continue;
         const opts: { rotation?: number; scaleY?: number; alpha?: number } = {};
-        if (frame.autoRotate) opts.rotation = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+        // TH08's shot textures point along +x in the sheet (the needle strip
+        // at player00 (0,144,64,16)), so face-motion rotation is the raw
+        // velocity angle; TH07's textures point up and need the +pi/2.
+        if (frame.autoRotate) opts.rotation = Math.atan2(b.vy, b.vx) + (this.runState ? 0 : Math.PI / 2);
         // Beam types stretch their 14px segment over the live beam length
         // (exe writes the VM scaleY each frame: FUN_004396a0/FUN_004398e0).
         if (b.scaleYOverride != null) opts.scaleY = b.scaleYOverride;
@@ -5499,6 +5551,20 @@ export class StageScene implements GameHost {
         // Items falling above the top edge peek in as their per-type arrow
         // sprite (original UX; etama2 emb14-21, +10 from the item id).
         const above = it.y < 0;
+        if (this.th08ItemRunners) {
+          // TH08: the item's etama.anm script (itemType + 61) supplies the
+          // sprite; above-screen items draw their plain sprite pinned to the
+          // top edge (the TH08 arrow variant is undecoded — flagged).
+          const slot = TH08_ITEM_TYPE_SLOT[it.type];
+          const frame = slot != null ? this.th08ItemRunners[slot]?.spriteFrame() : null;
+          if (frame) {
+            r.drawSpriteInBatch(frame.imageKey, frame.x, frame.y, frame.w, frame.h,
+              ox + it.x, oy + Math.max(8, it.y), 0, 1,
+              (frame.alpha / 255) * (above ? 0.85 : 1),
+              frame.blendAdd ? 'lighter' : 'source-over');
+          }
+          continue;
+        }
         const emb = ITEM_SPRITES[it.type] + (above ? ITEM_ARROW_OFFSET : 0);
         const sprite = this.assets.anms.etama.sprites.get(this.etamaItemBase + emb);
         if (sprite) {
@@ -6431,36 +6497,56 @@ export class StageScene implements GameHost {
     // scale — no appended zero (unlike TH07's "%8d0").
     this.drawNumber(r, Math.max(this.hiScore, this.score), valueX, 44, 9, 1, TH08_ADV);
     this.drawNumber(r, this.score, valueX, 60, 9, 1, TH08_ADV);
-    // Lives/bombs icons: front.png 16x16 pair at (64,80)/(80,80), 16px pitch.
+    // Lives/bombs icons: front.png 16x16 pair at (64,80)/(80,80), 16px pitch,
+    // rows y88/y104 (GuiImpl draw: 488+i*16 @ 88/104, draw-game-scene.c:162-192).
     for (let i = 0; i < Math.max(0, p.lives); i++) {
       this.blit(r, 'front', TH08_ICON_LIFE, valueX + i * 16, 88);
     }
     for (let i = 0; i < Math.max(0, p.bombs); i++) {
       this.blit(r, 'front', TH08_ICON_BOMB, valueX + i * 16, 104);
     }
-    // Human/Youkai gauge: a 128-wide bar at y136 whose fill splits around
-    // the center by the gauge value (-10000..10000), left grey / right
-    // periwinkle (TH08_HUD.gauge colors).
     const ctx = r.ctx;
-    const gauge = TH08_HUD.gauge;
-    const center = gauge.x + gauge.fullPowerWidth / 2;
-    const frac = Math.max(-1, Math.min(1, run.youkaiGauge / 10000));
+    // Power row (y136): the 128-wide bar fills white with power/128 and the
+    // value prints on it (native rows at 136/152/168/184).
     ctx.save();
     ctx.fillStyle = '#303030';
-    ctx.fillRect(gauge.x, gauge.top, gauge.fullPowerWidth, gauge.bottom - gauge.top);
-    if (frac < 0) {
-      ctx.fillStyle = 'rgba(224,224,224,0.9)';
-      ctx.fillRect(center + frac * 64, gauge.top, -frac * 64, gauge.bottom - gauge.top);
-    } else {
-      ctx.fillStyle = 'rgba(128,224,224,0.55)';
-      ctx.fillRect(center, gauge.top, frac * 64, gauge.bottom - gauge.top);
-    }
+    ctx.fillRect(valueX, 136, 128, 12);
+    ctx.fillStyle = 'rgba(240,240,240,0.85)';
+    ctx.fillRect(valueX, 136, Math.min(128, Math.max(0, p.power)), 12);
     ctx.restore();
-    // Power row: value digits, "MAX" past 128 (same rule as TH07's row).
-    if (p.power >= 128) r.text('MAX', valueX, 152, { size: 12, color: '#fff' });
-    else this.drawNumber(r, p.power, valueX, 152, 0, 1, TH08_ADV);
-    this.drawNumber(r, this.graze, valueX, 168, 0, 1, TH08_ADV);
+    if (p.power >= 128) r.text('MAX', valueX + 2, 137, { size: 11, color: '#222' });
+    else this.drawNumber(r, p.power, valueX + 2, 137, 0, 1, TH08_ADV);
+    this.drawNumber(r, this.graze, valueX, 152, 0, 1, TH08_ADV);
+    // Point row: items toward the next extend (native "26/100").
+    this.drawNumber(r, this.pointItems, valueX, 168, 0, 1, TH08_ADV);
+    r.text('/' + run.nextPointItemExtendThreshold, valueX + 28, 168, { size: 12, color: '#ddd' });
+    // Time row: the night clock against its 3000 target.
     this.drawNumber(r, run.clockTime, valueX, 184, 0, 1, TH08_ADV);
+    r.text('/3000', valueX + 28, 184, { size: 12, color: '#ddd' });
+    // Human/youkai rate gauge at the playfield's bottom-left: percent readout,
+    // a split-center bar (human grey left / youkai periwinkle right) with the
+    // 人/妖 end markers, and the point-item value below.
+    {
+      const gx = 66;
+      const gy = 442;
+      const pct = (run.youkaiGauge / 100).toFixed(2) + '%';
+      r.text(pct, gx, gy - 8, { size: 11, color: run.youkaiGauge < 0 ? '#eee' : '#9cf' });
+      ctx.save();
+      ctx.fillStyle = '#282028';
+      ctx.fillRect(gx, gy, 112, 6);
+      const frac = Math.max(-1, Math.min(1, run.youkaiGauge / 10000));
+      if (frac < 0) {
+        ctx.fillStyle = 'rgba(232,232,232,0.9)';
+        ctx.fillRect(gx + 56 + frac * 56, gy, -frac * 56, 6);
+      } else {
+        ctx.fillStyle = 'rgba(140,160,255,0.85)';
+        ctx.fillRect(gx + 56, gy, frac * 56, 6);
+      }
+      ctx.restore();
+      r.text('人', gx - 14, gy - 2, { size: 11, color: '#eee' });
+      r.text('妖', gx + 116, gy - 2, { size: 11, color: '#9cf' });
+      this.drawNumber(r, run.pointItemValue, gx + 14, gy + 12, 0, 1, TH08_ADV);
+    }
 
     if (this.bossActive) {
       const hp = Math.max(0, this.bossActive.hp);

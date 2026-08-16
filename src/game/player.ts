@@ -109,8 +109,12 @@ export interface PlayerBullet {
   damage: number;
   shotType: number;
   // ShtShot.funcs[0], the spawn-time behavior selector: 4 = aim at an enemy
-  // at spawn (SakuyaA focused); 5 = SakuyaB orbit-angle bank.
+  // at spawn (SakuyaA focused); 5 = SakuyaB orbit-angle bank. TH08 Border
+  // Team: 1 = aim at the cached target at spawn (FUN_00450240).
   behaviorFunc: number;
+  // ShtShot.funcs[1], the per-tick behavior selector (TH08 uses it: 1 = the
+  // seeking option tick FUN_00450320). Always 0 on the TH07 shot tables.
+  tickFunc: number;
   hitboxW: number;
   hitboxH: number;
   sfxId: number; // from ShtShot.sfxId; playback not wired up (stage-scene.ts uses a fixed fire sound instead)
@@ -662,7 +666,10 @@ export class Player {
         this.fireFrame++;
       }
     }
-    if (this.fireFrame > 29) {
+    if (this.fireFrame > (this.character === 'reimuYukari' ? 19 : 29)) {
+      // TH08 runs a 20-frame shot cycle, not TH07's 30: Th08.exe
+      // FUN_00451500 resets the fire timer to -1 once it reaches 0x14 and
+      // re-arms it to 0 while Z stays held (asm 0x4515b8-0x451606).
       this.fireFrame = -1;
       this.fireFrameFrac = 0;
       this.prevFireFrame = -999;
@@ -673,13 +680,22 @@ export class Player {
   private makeBullet(shot: ShtShot): PlayerBullet | null {
     // SHT sprite is a global ANM SCRIPT id (base 1024): playerXX.anm shot
     // scripts live at 64+, their impact variants at +0x20 (96+).
+    // TH08 (Th08.exe shot spawner FUN_0044fb70 @ 0x44fd32-0x44fd44): the shot
+    // VM runs player00.anm script (sht.sprite + 10) — scripts 0-9 are the
+    // Reimu/Yukari pose family, the shot scripts start at 10.
     const scriptId = this.character === 'reimuYukari'
-      ? shot.sprite // TH08 SHT sprites are entry-local ids in player00.anm
+      ? shot.sprite + 10
       : shot.sprite - PLAYER_SPRITE_BASE;
     if (!this.anm.hasScript(scriptId)) return null;
     const runner = new AnmRunner(this.anm, scriptId);
     const rect = this.anm.sprites.get(scriptId) ?? this.anm.sprites.get(64);
-    const source = shot.orb === 1 || shot.orb === 2 ? this.orbOffset(shot.orb) : { x: 0, y: 0 };
+    // TH08: option-sourced records (src >= 1) copy the LIVE option struct
+    // position (player+0x6b0 + (src-1)*0x2f4 in the exe). The option trail is
+    // not modeled yet (flagged); a stationary team has the option resting on
+    // the player, so spawn at the player center.
+    const source = this.character === 'reimuYukari'
+      ? { x: 0, y: 0 }
+      : shot.orb === 1 || shot.orb === 2 ? this.orbOffset(shot.orb) : { x: 0, y: 0 };
     // TH08 has no paired +0x20 impact-script family in player00.anm's 19
     // entry-0 scripts; the runner plays the flight script and the bullet
     // dies with it (TH07 re-arms an explicit impact VM instead).
@@ -699,6 +715,7 @@ export class Player {
       damage: shot.damage,
       shotType: shot.shotType,
       behaviorFunc: shot.funcs[0],
+      tickFunc: shot.funcs[1],
       hitboxW: shot.hitboxW,
       hitboxH: shot.hitboxH,
       sfxId: shot.sfxId,
