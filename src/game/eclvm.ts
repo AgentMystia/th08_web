@@ -4046,6 +4046,12 @@ export class StageRuntime {
     let value = 2000;
     for (const enemy of game.enemies) {
       if (enemy === owner || enemy.ecl.isBoss) continue;
+      // TH08 sweep gate (FUN_0042efb0(8000,0), all.c:22367): only active,
+      // non-intangible (flags bit1), non-exempt (flags2 bit6) enemies are
+      // swept — controllers like stage-1's ambient Sub14 set bit6 via
+      // ins_80(56) and must survive boss entries.
+      const t8 = enemy.ecl.th08;
+      if (t8 && ((t8.flags & 2) !== 0 || (t8.flags2 & 0x40) !== 0)) continue;
       const drops = this.clearNonBossEnemy(game, enemy, sweepItems);
       for (const drop of drops) {
         // FUN_004217c0: escalating popup per swept drop — white while
@@ -4061,6 +4067,8 @@ export class StageRuntime {
   private clearNonBossEnemies(game: GameHost, owner: Enemy): void {
     for (const enemy of game.enemies) {
       if (enemy === owner || enemy.ecl.isBoss) continue;
+      const t8 = enemy.ecl.th08;
+      if (t8 && ((t8.flags & 2) !== 0 || (t8.flags2 & 0x40) !== 0)) continue;
       this.clearNonBossEnemy(game, enemy, false);
     }
   }

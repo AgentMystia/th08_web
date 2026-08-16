@@ -128,7 +128,11 @@ const EFFECT_DRAW_COST: Record<number, number> = {
   // not this effect (see onPlayerHit).
   12: 0, 13: 0, 14: 0, 15: 0,
   17: 6, 18: 6, 20: 22, 22: 6, 23: 0,
-  26: 14, 27: 12, 29: 6, 30: 16, 31: 16, 32: 6, 33: 6
+  26: 14, 27: 12, 29: 6, 30: 16, 31: 16, 32: 6, 33: 6,
+  // TH08 effect 51 (the stage-1 ambient firefly family, etama script 73):
+  // five ANM random ops (2x ins_60 float + 3x ins_59 int) at two u16 draws
+  // each (Global.hpp GetRandomF32/U32InRange).
+  51: 10
 };
 const ENEMY_POOL_CAP = 0x1e0;
 const PLAYER_BULLET_POOL_CAP = 0x60;
@@ -136,6 +140,10 @@ const ENEMY_BULLET_POOL_CAP = 0x400;
 const BOMB_CLEAR_REGION_CAP = 0x60;
 const ITEM_POOL_CAP = 0x44c;
 const EFFECT_POOL_CAP = 400;
+// TH08's effect pool is 512 slots (FUN_00425430's 0x200-slot scan with 0xd8
+// strides), TH07's 400. The slot array sizes to the superset; the cursor
+// loops below cap at this field.
+const EFFECT_POOL_CAP_TH08 = 512;
 // Th07.exe v1.00b _DAT_0048eb98 (file value 0x38d1b717), used by
 // FUN_00423910 @ 0x4239e4/0x423a05 before recomputing an accel heading.
 const NATIVE_VELOCITY_EPSILON_F32 = 9.999999747378752e-5;
@@ -149,7 +157,9 @@ const EFFECT_SCRIPT_LIFE: Record<number, number> = {
   12: 40, 13: Infinity, 14: Infinity, 15: Infinity,
   17: 60, 18: 240, 19: 120, 20: 300, 21: 40, 22: 90,
   24: Infinity, 26: 300, 27: 300, 29: 30, 30: 300, 31: 300,
-  32: 90, 33: 120
+  32: 90, 33: 120,
+  // TH08 effect 51: etama script 73 removes at frame 241.
+  51: 241
 };
 const CLEAR_LOADING_ANM = ['loading', 'loading2', 'loading3'] as const;
 // Player::BreakBorder flings its 32 effect-29 petals along 32 fixed
@@ -389,7 +399,8 @@ export class StageScene implements GameHost {
   private itemSlots: (ItemEntity | null)[] = new Array(ITEM_POOL_CAP).fill(null);
   private itemPoolCursor = 0;
   particles: EffectParticle[] = [];
-  private readonly effectSlots: (EffectParticle | null)[] = new Array(EFFECT_POOL_CAP).fill(null);
+  private readonly effectSlots: (EffectParticle | null)[] = new Array(EFFECT_POOL_CAP_TH08).fill(null);
+  private effectPoolCap = EFFECT_POOL_CAP;
   private effectPoolCursor = 0;
   // GameHost's power view must be the live run-global player field. Keeping a
   // second numeric copy here made ECL op119 see zero after replay snapshots,
@@ -775,6 +786,7 @@ export class StageScene implements GameHost {
       this.cherry = null;
       this.runState = new Th08RunState(difficulty);
       this.cancelItemType = 'time';
+      this.effectPoolCap = EFFECT_POOL_CAP_TH08;
     } else {
     this.cherry = new CherrySystem(
       {
@@ -1159,13 +1171,13 @@ export class StageScene implements GameHost {
   }
 
   private syncEffectSlots(): void {
-    if (this.slotsConsistent(this.particles, this.effectSlots, EFFECT_POOL_CAP, (e) => e.age < e.life)) return;
+    if (this.slotsConsistent(this.particles, this.effectSlots, this.effectPoolCap, (e) => e.age < e.life)) return;
     this.effectSlots.fill(null);
     const live = this.particles.filter((particle) => particle && particle.age < particle.life);
     const rebuilt: EffectParticle[] = [];
     for (const particle of live) {
       let slot = Number.isInteger(particle.poolSlot) ? particle.poolSlot : -1;
-      if (slot < 0 || slot >= EFFECT_POOL_CAP || this.effectSlots[slot] !== null) {
+      if (slot < 0 || slot >= this.effectPoolCap || this.effectSlots[slot] !== null) {
         slot = this.effectSlots.indexOf(null);
       }
       if (slot < 0) continue;
@@ -1694,9 +1706,9 @@ export class StageScene implements GameHost {
     // where a four-snow request at processing frame 939 finds only two slots.
     const requested = Math.max(0, count | 0);
     const spec = EFFECT_DRAW_COST[effectId];
-    for (let tries = 0, remaining = requested; tries < EFFECT_POOL_CAP && remaining > 0; tries++) {
+    for (let tries = 0, remaining = requested; tries < this.effectPoolCap && remaining > 0; tries++) {
       const slot = this.effectPoolCursor;
-      this.effectPoolCursor = (this.effectPoolCursor + 1) % EFFECT_POOL_CAP;
+      this.effectPoolCursor = (this.effectPoolCursor + 1) % this.effectPoolCap;
       if (this.effectSlots[slot] !== null) continue;
 
       let particle: EffectParticle;
@@ -3471,6 +3483,11 @@ export class StageScene implements GameHost {
   // then skipped by later enemies (replacing the old inner-loop `break`).
   private collidePlayerShots(e: Enemy): void {
     if (!this.shotCollisionEnabled || !this.playerShotCollisionClockAdvanced) return;
+    // TH08: enemy flags bit 4 (set/cleared by ins_80/81) disables the whole
+    // contact block — collision, damage, and homing-target publication
+    // (all.c:21448 gates the scan on it clear). Controllers like stage-1's
+    // ambient Sub14 hold it set permanently.
+    if (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
     if (!e.ecl.shotCollision || !e.ecl.interactable || e.ecl.invisible || e.dead) return;
     this.collidePlayerShotsInBox(e, e.ecl.hitbox);
     const second = e.ecl.hitbox2;
@@ -3741,6 +3758,8 @@ export class StageScene implements GameHost {
     // intentionally NOT gated on canTakeDamage, and a lethal target remains
     // cached for the next player tick.
     if (e.dead || !e.ecl.interactable || e.ecl.invisible || !e.ecl.shotCollision) return;
+    // TH08 flags bit 4 also suppresses the homing-target publication.
+    if (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
     const px = this.playerObj.x;
     const py = this.playerObj.y;
     const sakuya = this.playerObj.character.startsWith('sakuya');
@@ -3904,6 +3923,7 @@ export class StageScene implements GameHost {
   private collideEnemyBody(e: Enemy): void {
     const p = this.playerObj;
     if (this.gameOver || !p.alive || !e.ecl.collisionEnabled ||
+        (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) ||
         !e.ecl.interactable || e.ecl.invisible || e.dead) return;
     // FUN_0041ebc0 runs first at the live head, then at position-history
     // indices 1,7,13,... below. Each call performs graze before body hit.
