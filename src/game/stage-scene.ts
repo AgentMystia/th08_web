@@ -2206,7 +2206,10 @@ export class StageScene implements GameHost {
   cancelBulletsToItems(): void {
     for (const b of this.enemyBullets) {
       if (b.dead) continue;
+      // TH08 (all.c:23531-23533): a cancelled bullet spawns TWO time orbs
+      // when the mode global reads 9 (stage 1 always does).
       this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
+      if (this.runState) this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
     }
     this.clearEnemyBullets(true);
     // FUN_00422ea0(1) also converts each non-immune live laser at its
@@ -2224,6 +2227,8 @@ export class StageScene implements GameHost {
     for (const b of this.enemyBullets) {
       if (b.dead) continue;
       this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
+      // TH08 pays a second time orb per cancelled bullet (all.c:23531-23533).
+      if (this.runState) this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
       // FUN_00423100 @ all.c:15624: escalating popup per bullet — white
       // while ramping, yellow once the 8000 cap is reached.
       this.spawnScorePopup(value, b.x, b.y, value < 8000 ? 0xffffffff : 0xffffff00);
@@ -3970,9 +3975,25 @@ export class StageScene implements GameHost {
       borderUnfocused ? 3 : 1,
       borderUnfocused ? 0xffff8080 : 0xffffffff
     );
-    // FUN_0043bb30 @ 0x43bc81-0x43bc8d: effect allocation precedes the
+    // FUN_0043bb30 @ 0x43bc81-8d: effect allocation precedes the
     // rank award; every bullet/laser/body graze contributes six points.
     this.adjustRank(6);
+    if (this.runState) {
+      // TH08 graze (FUN_0044a930): the award is FUN_004181f0(2000), doubling
+      // to 4000 under the gauge-extreme condition (the exe's compare reads
+      // FUN_00406da0 — PROBABLE mapping to the ±8000 extremes, flagged).
+      // While any boss slot is registered, the graze also drops a time orb
+      // (item type 10 -> time/state-5) at the contact — the native orb
+      // income stream (all.c:36844-36862).
+      const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
+      if (!this.bombActiveThisFrame) this.graze++;
+      this.addScore(extreme ? 4000 : 2000);
+      if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
+        this.spawnItem('time2', sourceX, sourceY, {});
+      }
+      this.playSfx(30);
+      return;
+    }
     // Th07.exe (v1.00b) FUN_0043bb30 @ 0x43bb3b-0x43bb8a: an active bomb
     // suppresses both the stage and total graze counters, but deliberately
     // does NOT suppress the +200 score, rank, spell-graze bonus, Cherry or
