@@ -217,3 +217,40 @@ boots.
 border/bomb timing test failed once each in two full-suite runs out of
 ten; both green on reruns, never twice in a row). Not reproducible on
 demand; watch for them in CI.
+
+## Update (2026-08-17, seventh pass — first-death forensics + flag semantics)
+
+Verifier-directed decompile work on the first phantom death (f1024, Sub3's
+f884 aimed-fan middle layer). Every link verified exe-exact, so the bullet
+is fully accounted for in our sim: spawn f850, double-tick day counted,
+mode-4 easing confirmed 1-(1-t)^2 (all.c:10733), volley phase at
+ctx.time 34 (deadline 33 + arm tick), aim = exact atan2 at the fire-tick
+inputs (player 128.54,369.37 / enemy 192,75.21 -> 1.7833 rad), fan
+{0,±0.0898,±0.1795}, layer speeds 3.0125/2.310/1.608 at rank 10, spawn
+backup 4 velocity vectors, spawn-state /2. The contact at f1024 is inside
+the exe's own AABB by ~3px — so the native miss must come from a sub-frame
+volley-phase/position difference that the snapshot chain cannot pin.
+
+New evidence-driven fixes landed (commit 3e61e5c):
+- The field sweep exemption: FUN_0042efb0 spares flags2-bit6 enemies —
+  Sub14 (the stage-1 ambient emitter) was dying to every boss-entry
+  sweep, and to the seeking pair before that (flags bit4 = the TH08
+  collision-disable: contact, damage, AND homing-target publication are
+  all gated on it clear, all.c:21448). Sub37's boss body now stays
+  intangible for its authored 150-frame entrance.
+- Effect pool: TH08 runs 512 slots (FUN_0042efb0 scan), effect 51 modeled
+  from etama script 73 (241-frame life, 10 u16s/spawn).
+
+**RNG-residue note (important correction)**: the native "budget" is only
+known mod 65536 (the seed residue) — 32816 OR 98352 OR ... Our ambient
+stream alone draws ~53k at full rate, so the native's true count is
+probably 98352, with the ~40k gap being the boss-fight economy that never
+runs while the midboss fight stalls. The residue can only converge once
+the deaths are fixed.
+
+**Rank/graze audit**: TH08's per-event rank awards all match the exe
+(+6 graze @0x44aa14, +1 power-small, +3/+10 point, -1600 death,
++200 extend, survival +100 per 2400-240*lives frames). The graze COUNTER
+steps +1..+3 per event in the native (FUN_00406d10/40 tier reads on four
+manager threshold words) — our +1/event undercounts the field (270 vs 536)
+without a geometry gap; the tier table is undecoded (flagged).
