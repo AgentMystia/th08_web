@@ -4712,16 +4712,23 @@ export class StageRuntime {
         if (s.bulletProps) this.spawnBullets(game, e, s.bulletProps);
         return null;
       case 105: case 106: { // auto-fire deadline (FUN_00422720's caller):
-        // value + rankLerpInt(v/5, -v/5) (same formula as TH07 ops 73/74);
-        // ins_106 adds exactly ONE raw RNG draw (FUN_00406ef0(v)).
+        // value + rankLerp(v/5, -v/5) (FUN_00421ba0 — same formula as TH07
+        // ops 73/74). ins_105 zeroes the fire timer at arming (first volley
+        // one deadline later); ins_106 starts it at FUN_00406ef0(deadline) —
+        // a u32 % deadline draw (TWO u16s) — so its first volley lands
+        // deadline - phase frames out.
         let iv = gi(0);
         if (iv !== 0) {
           const fifth = Math.trunc(iv / 5);
           iv = iv + fifth + Math.trunc((-2 * fifth * game.rank) / 32);
         }
         t.autoFireDeadline = iv;
-        t.autoFireNext = iv > 0 ? ctx.time + iv : 0;
-        if (op === 106 && iv > 0) game.rng.u16InRange(iv);
+        if (iv > 0 && op === 106) {
+          const phase = game.rng.u32InRange(iv);
+          t.autoFireNext = ctx.time + Math.max(1, iv - phase);
+        } else {
+          t.autoFireNext = iv > 0 ? ctx.time + iv : 0;
+        }
         return null;
       }
       case 107: // capture FIREs ON (flags bit 17): ops 96-104 store their raw
