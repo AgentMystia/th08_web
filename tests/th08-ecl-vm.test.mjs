@@ -248,6 +248,165 @@ test('TH08 stage 1 boots and spawns waves through the real timeline', () => {
   assert.ok(game.enemies.every((enemy) => Number.isFinite(enemy.x) && Number.isFinite(enemy.y)));
 });
 
+// ---- timeline v2 (FUN_0042a8a0) --------------------------------------------
+
+// TH08 v2 timeline record: i32 time, u16 op, u8 size, u8 rank, args at +8.
+function tlEvent(time, op, args = [], rank = 0xff) {
+  const SPAWN32 = new Set([0, 1, 15]);
+  const size = SPAWN32.has(op) ? 32 : 8 + args.length * 4;
+  const bytes = new Uint8Array(Math.max(size, 8));
+  const view = new DataView(bytes.buffer);
+  view.setInt32(0, time, true);
+  view.setUint16(4, op, true);
+  view.setUint8(6, bytes.length, true);
+  view.setUint8(7, rank, true);
+  args.forEach((arg, index) => {
+    if (arg.type === 'f32') view.setFloat32(8 + index * 4, arg.value, true);
+    else view.setInt32(8 + index * 4, arg.value, true);
+  });
+  return bytes;
+}
+
+function makeEcl8Timelines(subs, timelines) {
+  const headerSize = 4 + 4 + (16 + subs.length) * 4;
+  const sentinel = new Uint8Array(12);
+  new DataView(sentinel.buffer).setUint32(0, 0xffffffff, true);
+  const tlEnd = new Uint8Array(8);
+  new DataView(tlEnd.buffer).setInt32(0, -1, true);
+  const tlBodies = timelines.map((tl) => concat([...tl, tlEnd]));
+  const bodies = subs.map((sub) => concat([...sub, sentinel]));
+  const tlSize = tlBodies.reduce((sum, b) => sum + b.length, 0);
+  const total = headerSize + tlSize + bodies.reduce((sum, body) => sum + body.length, 0);
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0x0800, true);
+  view.setUint16(4, subs.length, true);
+  view.setUint16(6, timelines.length, true);
+  let offset = headerSize;
+  tlBodies.forEach((body, index) => {
+    view.setUint32(8 + index * 4, offset, true);
+    out.set(body, offset);
+    offset += body.length;
+  });
+  bodies.forEach((body, index) => {
+    view.setUint32(4 + 4 + (16 + index) * 4, offset, true);
+    out.set(body, offset);
+    offset += body.length;
+  });
+  return out;
+}
+
+const tlSpawn = (time, sub, rank = 0xff, op = 0) =>
+  tlEvent(time, op, [i32(sub), f32(120), f32(-16), i32(50), i32(-2), i32(500)], rank);
+
+test('TH08 stage-1 real timelines parse with the v2 per-op layouts', () => {
+  const ecl = new StageRuntime(TH08_DATA.stages[1], {
+    etama, enemy: enemyAnm, effect: effectAnm
+  }).ecl;
+  assert.equal(ecl.timelines.length, 2);
+  const hist = (events) => {
+    const m = {};
+    for (const e of events) m[e.op] = (m[e.op] ?? 0) + 1;
+    return m;
+  };
+  // Binary ground truth walked from the embedded ecldata1.ecl.
+  assert.deepEqual(hist(ecl.timelines[0]), { 0: 103, 1: 29, 6: 2, 7: 3, 8: 1, 10: 3, 14: 1 });
+  assert.deepEqual(hist(ecl.timelines[1]), { 0: 47, 13: 1 });
+  const mirror = ecl.timelines[0].find((e) => e.op === 1);
+  assert.ok(mirror && mirror.life === 150 && typeof mirror.x === 'number');
+});
+
+test('TH08 timeline: op1 mirror spawn, rank filter, and the 13/14 latch', () => {
+  // TL0: rank-gated spawns at t=1/2, mirror spawn t=3, latch release t=5.
+  // TL1: parks on ins_13(1) at t=0, spawn at t=1 must wait for the release.
+  const ecl = makeEcl8Timelines(
+    [[instruction(0, 1)], [instruction(0, 1)], [instruction(0, 1)], [instruction(0, 1)]],
+    [
+      [
+        tlSpawn(1, 0, 0x01),          // Easy-only: never fires on Lunatic
+        tlSpawn(2, 1, 0x08),          // Lunatic: fires
+        tlSpawn(3, 2, 0xff, 1),       // mirror spawn
+        tlEvent(5, 14, [i32(1)])      // release timeline 1
+      ],
+      [
+        tlEvent(0, 13, [i32(1)]),     // park until released
+        tlSpawn(1, 3)                 // fires only after the release
+      ]
+    ]
+  );
+  const runtime = new StageRuntime(
+    { ...TH08_DATA.stages[1], ecl },
+    { etama, enemy: enemyAnm, effect: effectAnm }
+  );
+  const game = makeHost();
+  const logAt = [];
+  for (let frame = 0; frame < 10; frame++) {
+    game.frame = frame;
+    runtime.update(game);
+    logAt.push(runtime.spawnLog.length);
+  }
+  const subs = runtime.spawnLog.map((s) => s.sub);
+  assert.ok(!subs.includes(0), 'Easy-only event fired on Lunatic');
+  assert.ok(subs.includes(1), 'Lunatic event missing');
+  assert.ok(subs.includes(2), 'mirror spawn missing');
+  assert.equal(runtime.spawnLog.find((s) => s.sub === 2)?.time, 3);
+  // The parked timeline releases at frame 5 and its time-1 spawn lands at 6.
+  const t1Index = subs.indexOf(3);
+  assert.ok(t1Index >= 0, 'latched timeline never fired');
+  assert.ok(logAt[4] === t1Index, `latched spawn fired before release: ${logAt}`);
+  assert.ok(logAt[6] === t1Index + 1, `latched spawn late: ${logAt}`);
+});
+
+test('TH08 timeline: spawn ops drop while a boss is registered, op15 bypasses', () => {
+  const ecl = makeEcl8Timelines(
+    [
+      [instruction(0, 1)],
+      [instruction(0, 127, [i32(0)]), instruction(30, 1)], // registers boss slot 0
+      [instruction(0, 1)],
+      [instruction(0, 1)]
+    ],
+    [[tlSpawn(1, 2), tlSpawn(2, 3, 0xff, 15)]]
+  );
+  const runtime = new StageRuntime(
+    { ...TH08_DATA.stages[1], ecl },
+    { etama, enemy: enemyAnm, effect: effectAnm }
+  );
+  const game = makeHost();
+  // Arm the timeline cursors first (production constructs + resets before any
+  // enemy exists; the first update() would otherwise reset boss state).
+  runtime.update(game);
+  // Register a boss before the timeline spawns.
+  const boss = runtime.spawnEclEnemy(game, { subId: 1, x: 192, y: 100, life: 1000 });
+  runTicks(runtime, game, boss, 3);
+  assert.ok(boss.ecl.isBoss, 'ins_127 did not register the boss slot');
+  for (let frame = 1; frame < 6; frame++) {
+    game.frame = frame;
+    runtime.update(game);
+  }
+  const subs = runtime.spawnLog.map((s) => s.sub);
+  assert.ok(!subs.includes(2), 'op0 spawn escaped the boss gate');
+  assert.ok(subs.includes(3), 'op15 spawn was gated');
+});
+
+test('TH08 enemy anm file follows flags2 bit2: plain ops common, alt ops stage', () => {
+  const commonAnm = new Anm(TH08_DATA.anm.enemy, 'enemy');
+  const ecl = makeEcl8([
+    [instruction(0, 55, [i32(0)]), instruction(10, 1)],  // plain dirAnmRun
+    [instruction(0, 59, [i32(0)]), instruction(10, 1)]   // alt dirAnmRun
+  ]);
+  const runtime = new StageRuntime(
+    { ...TH08_DATA.stages[1], ecl },
+    { etama, enemy: commonAnm, effect: effectAnm, enemyStage: enemyAnm }
+  );
+  const game = makeHost();
+  const fairy = runtime.spawnEclEnemy(game, { subId: 0, x: 100, y: 100, life: 100 });
+  const boss = runtime.spawnEclEnemy(game, { subId: 1, x: 200, y: 100, life: 100 });
+  runTicks(runtime, game, fairy, 2);
+  runTicks(runtime, game, boss, 2);
+  assert.equal(fairy.ecl.anmRunner?.anm, commonAnm, 'plain op did not use enemy.anm');
+  assert.equal(boss.ecl.anmRunner?.anm, enemyAnm, 'alt op did not use stg1enm.anm');
+});
+
 test('TH08 conditional jump remap: ins_51 (float >=) guards a call', () => {
   // If 10045 (playerX) >= 192, set 10000 = 1, else 10000 = 2.
   const runtime = makeRuntime([[

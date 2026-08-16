@@ -191,7 +191,11 @@ const TH08_ITEM_TYPES = ['powerSmall', 'point', 'powerBig', 'bomb', 'powerFull',
 // a TH07 case — is handled by executeTh08's raw-numbered cases instead.
 const TH08_OP_REMAP: Record<number, number> = {
   0: 0, 1: 1,                       // nop, ret (all.c:10806)
-  2: 45, 160: 45,                   // wait: both encodings call FUN_004065f0
+  // NOT 2/160: TH08's ins_2 is ZunTimer::SetCurrent on the SUB clock (case 1,
+  // all.c:10808-10816) and ins_160 SetCurrents a MANAGER timer (+0x5354) —
+  // neither is TH07's blocking wait; remapping them to op 45 froze sub
+  // clocks and reordered every time-0 instruction past the park (the stage-1
+  // midboss teleported 60 frames late and was offscreen-culled).
   4: 2, 5: 3,                       // jump, loop
   6: 4, 7: 5,                       // setInt/setFloat var
   8: 10, 9: 11,                     // random-sign assigns
@@ -339,6 +343,13 @@ export class StageRuntime {
   readonly std: Std;
   readonly msg: Msg;
   readonly enemyAnm: Anm;
+  // TH08 loads TWO enemy ANM files per stage (Th08.exe
+  // EnemyManager::AddedCallback @ 0x42ebf0: slot 7 = enemy.anm, slot 8 =
+  // stgNenm.anm). The dispatcher picks per enemy via flags2 bit 2 (cleared by
+  // the plain anm ops 54/55/57 -> the common file, set by the alt ops
+  // 58/59/61 -> the stage file; asm 0x419850/0x419acc/0x419d2f/0x419d4e).
+  // Undefined on the TH07 path, which keeps its single merged file.
+  readonly enemyAnmStage: Anm | undefined;
   readonly bulletAnm: Anm;
   readonly effectAnm: Anm;
   // TH07 runs several timelines in parallel (stage 1: main waves + ambience).
@@ -362,6 +373,14 @@ export class StageRuntime {
   bossSlots: (Enemy | null)[] = [];
   // Th07.exe DAT_00495bf4: true while any boss entity is registered.
   private bossRegistered = false;
+  // TH08 DAT_00f54e1c: four-slot parallel-timeline latch table (timeline ops
+  // 13 consume / 14 release; -1 = free). TH08 DAT_00f54e2c: spawn-suppress
+  // flag written by sub op 175 and OR-ed into the timeline boss gate.
+  private timelineLatches = [-1, -1, -1, -1];
+  private timelineSpawnSuppress = 0;
+  // TH08 ECL-manager timer (+0x5354), written by ins_160; see the case-160
+  // comment in executeTh08.
+  private th08ManagerTimer = 0;
   // Th07.exe DAT_012f40a8: GLOBAL spell-card-active state (op90 sets 1,
   // op91 clears). Every enemy's FIRE — boss AND op92/93 helpers — skips the
   // non-spell rank count/speed scaling while it is set. This was previously
@@ -385,13 +404,21 @@ export class StageRuntime {
   // reachable counter semantics still include the branch.
   private slowCounterExtraStep = false;
 
-  constructor(stage: StageData, anms: { etama: Anm; enemy: Anm; effect: Anm }) {
+  constructor(stage: StageData, anms: { etama: Anm; enemy: Anm; effect: Anm; enemyStage?: Anm }) {
     this.ecl = new Ecl(stage.ecl);
     this.std = new Std(stage.std);
     this.msg = new Msg(stage.msg);
     this.enemyAnm = anms.enemy;
+    this.enemyAnmStage = anms.enemyStage;
     this.bulletAnm = anms.etama;
     this.effectAnm = anms.effect;
+  }
+
+  // The anm file an enemy script resolves against: the stage file while
+  // flags2 bit 2 is set (TH08 two-file rule), else the common file.
+  private enemyAnmFor(s: EclState): Anm {
+    if (!this.enemyAnmStage || !s.th08) return this.enemyAnm;
+    return (s.th08.flags2 & 4) !== 0 ? this.enemyAnmStage : this.enemyAnm;
   }
 
   private logLifecycle(game: GameHost, ev: string, e: Enemy, a?: number): void {
@@ -404,6 +431,9 @@ export class StageRuntime {
     this.bulletPoolCursor = 0;
     this.bossSlots = [];
     this.bossRegistered = false;
+    this.timelineLatches = [-1, -1, -1, -1];
+    this.timelineSpawnSuppress = 0;
+    this.th08ManagerTimer = 0;
     this.spellActive = false;
     this.currentSpellId = -1;
     this.slowCounterExtraStep = false;
@@ -467,14 +497,7 @@ export class StageRuntime {
   }
 
   private runTimelineEvent(game: GameHost, evt: TimelineEvent, t: number): 'hold' | null {
-    // TH08 timeline v2 op 6 is the MSG-start instruction (FUN_00439810 ->
-    // "msg start %d", spec th08-ecl-ops-0x90-0xb7 §3) — not TH07's mirrored
-    // spawn. The ecl.ts v2 parser only treats op 6 as a spawn when its size
-    // is >= 32, so a TH08 ins_6(idx) arrives here with i0 = the entry index.
-    if (this.ecl.version === 8 && evt.op === 6) {
-      game.startDialogue?.(evt.i0 ?? 0);
-      return null;
-    }
+    if (this.ecl.version === 8) return this.runTimelineEventTh08(game, evt);
     switch (evt.op) {
       case 0:
       case 2:
@@ -524,6 +547,95 @@ export class StageRuntime {
       }
       default:
         warnOnce(`tl${evt.op}`, `unhandled timeline op ${evt.op}`);
+        return null;
+    }
+  }
+
+  // TH08 timeline v2 dispatch, case-by-case from the exe's own interpreter
+  // (FUN_0042a8a0, all.c:20220-20393). Differences from TH07: spawn ops are
+  // 0-5/11/12/15 with per-op arg layouts, mirror ops are 1/4/5/12, op 6
+  // starts a message, op 7 holds while the message manager is active, op 8
+  // writes a boss interrupt, op 10 holds while a boss slot is alive, ops
+  // 13/14 are the parallel-timeline latch table (DAT_00f54e1c), and every
+  // event carries a per-difficulty rank byte — (rank & (1<<difficulty)) == 0
+  // skips the body while the cursor still advances (DAT_0160f53c = 1 <<
+  // difficulty, all.c:27733). Spawn ops 0-5/11/12 are DROPPED while a boss is
+  // registered (FUN_0042f320) or the op-175 suppress flag is set
+  // (DAT_00f54e2c); op 15 bypasses that gate.
+  private runTimelineEventTh08(game: GameHost, evt: TimelineEvent): 'hold' | null {
+    if (((evt.rank ?? 0xff) & (1 << game.difficulty)) === 0) return null;
+    switch (evt.op) {
+      case 0: case 1: case 2: case 3: case 4: case 5:
+      case 11: case 12: case 15: {
+        if (evt.op !== 15 && (this.bossRegistered || this.timelineSpawnSuppress !== 0)) return null;
+        // TH08 spawn coordinates are literal (the TH07 -990 randomization
+        // sentinel does not exist in FUN_0042a8a0); ops 2/4 and 3/5 draw
+        // their x through FUN_0040d390 = rng01()*range.
+        let x = evt.x ?? 0;
+        if (evt.op === 2 || evt.op === 4) {
+          x = Math.fround(game.rng.range(Math.fround((evt.xMax ?? 0) - (evt.x ?? 0))) + (evt.x ?? 0));
+        } else if (evt.op === 3 || evt.op === 5) {
+          x = Math.fround(game.rng.range(384));
+        }
+        const mirrored = evt.op === 1 || evt.op === 4 || evt.op === 5 || evt.op === 12;
+        const extDrops = evt.op === 11 || evt.op === 12;
+        this.spawnLog.push({ t: 0, time: evt.time, sub: evt.arg0 });
+        const enemy = this.spawnEclEnemy(game, {
+          subId: evt.arg0,
+          x, y: evt.y ?? 0, z: 0,
+          life: evt.life ?? -1,
+          item: extDrops ? -1 : (evt.item ?? -1),
+          score: evt.score ?? -1,
+          mirrored
+        });
+        if (extDrops && !enemy.dead) {
+          // Written AFTER the spawn core returns (all.c:20354-20355).
+          enemy.ecl.th08!.deathDropA = evt.dropA ?? 0;
+          enemy.ecl.th08!.deathDropB = evt.dropB ?? 0;
+        }
+        return null;
+      }
+      case 6:
+        // MSG start (FUN_00439810, "msg start %d").
+        game.startDialogue?.(evt.i0 ?? 0);
+        return null;
+      case 7:
+        // Hold while the message manager is active (FUN_0043587e).
+        return game.isDialogueActive?.() ? 'hold' : null;
+      case 8: {
+        // Boss interrupt write: bossSlots[i0].+0x2d30 = (u16)i1.
+        const boss = this.bossSlots[evt.i0 ?? 0];
+        if (this.isEnemyActive(game, boss)) boss!.ecl.pendingInterrupt = evt.i1 ?? 0;
+        return null;
+      }
+      case 9:
+        // FUN_00406fa0: float write into a manager sub-struct (+0x98), exact
+        // target unproven; unused by every stage-1 timeline.
+        warnOnce('tl9', 'unhandled TH08 timeline op 9');
+        return null;
+      case 10: {
+        // Hold while boss slot i0 is alive (boss != null && flags bit0).
+        const boss = this.bossSlots[evt.i0 ?? 0];
+        return this.isEnemyActive(game, boss) ? 'hold' : null;
+      }
+      case 13: {
+        // Consume a parallel-timeline latch; park (hold) while it is absent.
+        const idx = this.timelineLatches.indexOf(evt.i0 ?? 0);
+        if (idx < 0) return 'hold';
+        this.timelineLatches[idx] = -1;
+        return null;
+      }
+      case 14: {
+        // Release a parallel timeline: insert into the first free latch slot.
+        const free = this.timelineLatches.indexOf(-1);
+        if (free >= 0) this.timelineLatches[free] = evt.i0 ?? 0;
+        return null;
+      }
+      case 16:
+        // DAT_0164d0bb = 1 (player-side stage-event flag); unused in stage 1.
+        return null;
+      default:
+        warnOnce(`tl${evt.op}`, `unhandled TH08 timeline op ${evt.op}`);
         return null;
     }
   }
@@ -725,13 +837,16 @@ export class StageRuntime {
       // the op90-94 spawner copies 30 dwords of it, covering this range plus
       // trailing frame padding): [0..7] ints 10000-10007, [8..15] floats
       // 10016-10023, [16..19] ints 10036-10039, [20..23] ints 10053-10056,
-      // [24..27] floats 10057-10060. Enemy-scope locals (10008-10015 int,
-      // 10024-10031 float, exe enemy+0x2ca8/+0x2cc8) live in state.th08 —
-      // they are NOT part of the saved call frame.
-      state.vars = parent ? parent.ecl.vars.slice() : new Float64Array(28);
+      // [24..27] floats 10057-10060, [28]/[29] floats 10094/10095 (VMframe
+      // +0x68/+0x6c — the ins_38 angle→vector pair targets).
+      // Enemy-scope locals (10008-10015 int, 10024-10031 float, exe
+      // enemy+0x2ca8/+0x2cc8) live in state.th08 — they are NOT part of the
+      // saved call frame.
+      state.vars = parent ? parent.ecl.vars.slice() : new Float64Array(30);
       state.th08 = {
         enemyInts: new Int32Array(8),
         enemyFloats: new Float64Array(8),
+        scratch88: new Float64Array(6),
         poolCopyA: 0,
         poolCopyB: 0,
         pendingDynCall: -1,
@@ -2374,21 +2489,26 @@ export class StageRuntime {
 
   setCurrentAnm(e: Enemy, script: number): void {
     const s = e.ecl;
-    if (script < 0 || s.currentAnm === script) return;
+    if (script < 0) return;
+    const anm = this.enemyAnmFor(s);
+    // The same script id can live in both TH08 enemy files — the cache key
+    // must include the file or a file switch would keep the stale runner.
+    if (s.currentAnm === script && s.anmRunnerAnm === anm) return;
     s.currentAnm = script;
-    s.anmRunner = this.makeEnemyAnmRunner(script, s.anmRunner ?? undefined);
+    s.anmRunnerAnm = anm;
+    s.anmRunner = this.makeEnemyAnmRunner(script, s.anmRunner ?? undefined, anm);
   }
 
-  private makeEnemyAnmRunner(script: number, inheritSpriteFrom?: AnmRunner): AnmRunner | null {
+  private makeEnemyAnmRunner(script: number, inheritSpriteFrom?: AnmRunner, anm: Anm = this.enemyAnm): AnmRunner | null {
     // Enemy ECL uses the executable loader's concatenated script ids. ANM
     // entries store local ids independently; stg6enm global 147..155 are
     // stg6enm2 local 0..8. Keep the flat fallback for the small test mocks
     // and any single-entry data lacking the additive resolver.
-    const resolved = typeof this.enemyAnm.resolveGlobalScript === 'function'
-      ? this.enemyAnm.resolveGlobalScript(script)
+    const resolved = typeof anm.resolveGlobalScript === 'function'
+      ? anm.resolveGlobalScript(script)
       : null;
     if (resolved) {
-      return new AnmRunner(this.enemyAnm, resolved.localId, {
+      return new AnmRunner(anm, resolved.localId, {
         entryIndex: resolved.entryIndex,
         spriteIndexOffset: resolved.spriteBase,
         rng: this.anmRng,
@@ -2399,8 +2519,8 @@ export class StageRuntime {
         inheritSpriteFrom
       });
     }
-    return this.enemyAnm.hasScript(script)
-      ? new AnmRunner(this.enemyAnm, script, { rng: this.anmRng, inheritSpriteFrom })
+    return anm.hasScript(script)
+      ? new AnmRunner(anm, script, { rng: this.anmRng, inheritSpriteFrom })
       : null;
   }
 
@@ -4170,6 +4290,8 @@ export class StageRuntime {
     if (id >= 10057 && id <= 10060) return s.vars[24 + (id - 10057)];
     if (id >= 10008 && id <= 10015) return t.enemyInts[id - 10008];
     if (id >= 10024 && id <= 10031) return t.enemyFloats[id - 10024];
+    if (id >= 10088 && id <= 10093) return t.scratch88[id - 10088];
+    if (id >= 10094 && id <= 10095) return s.vars[28 + (id - 10094)];
     switch (id) {
       // The RNG vars draw from the shared 16-bit generator FUN_0043ecc0
       // ((s^0x9630)+0x9aad, rotate-left-2) — the same stream as TH07.
@@ -4229,6 +4351,8 @@ export class StageRuntime {
     if (id >= 10036 && id <= 10039) { s.vars[16 + (id - 10036)] = integer; return; }
     if (id >= 10053 && id <= 10056) { s.vars[20 + (id - 10053)] = integer; return; }
     if (id >= 10008 && id <= 10015) { t.enemyInts[id - 10008] = integer; return; }
+    if (id >= 10088 && id <= 10093) { t.scratch88[id - 10088] = integer; return; }
+    if (id >= 10094 && id <= 10095) { s.vars[28 + (id - 10094)] = integer; return; }
     switch (id) {
       case 10040: game.difficulty = integer; return;
       case 10041: game.rank = integer; return;
@@ -4245,6 +4369,8 @@ export class StageRuntime {
     if (id >= 10016 && id <= 10023) { s.vars[8 + (id - 10016)] = f32; return; }
     if (id >= 10057 && id <= 10060) { s.vars[24 + (id - 10057)] = f32; return; }
     if (id >= 10024 && id <= 10031) { t.enemyFloats[id - 10024] = f32; return; }
+    if (id >= 10088 && id <= 10093) { t.scratch88[id - 10088] = f32; return; }
+    if (id >= 10094 && id <= 10095) { s.vars[28 + (id - 10094)] = f32; return; }
     switch (id) {
       case 10042: e.x = f32; return;
       case 10043: e.y = f32; return;
@@ -4281,6 +4407,23 @@ export class StageRuntime {
 
     switch (op) {
       case 3: return null; // no case 2 in the exe switch: dead opcode (spec §op3)
+      case 2:
+        // ins_2(n) = ZunTimer::SetCurrent on the SUB's own clock (exe case 1,
+        // all.c:10808-10816: current = n, fraction and the -999 previous
+        // sentinel cleared). The data uses it to re-base the clock (e.g.
+        // ins_2([10000])); the == fetch gate then skips or waits to reach
+        // later instruction times exactly like the native loop.
+        ctx.time = gi(0);
+        ctx.timeFrac = 0;
+        return null;
+      case 160:
+        // ins_160(n) = ZunTimer::SetCurrent on the ECL-MANAGER timer at
+        // +0x5354 (exe case 0x9f, th08-stage1.md) — NOT the sub's clock, so
+        // the sub flow is unaffected. The manager timer's consumer is
+        // unproven (PROBABLE: boss-entrance/stage-clock bookkeeping); the
+        // value is retained for future evidence.
+        this.th08ManagerTimer = gi(0);
+        return null;
       case 20: setIntVar(gi(0), gi(4) + gi(8)); return null;   // int a+b
       case 21: setIntVar(gi(0), gi(4) - gi(8)); return null;   // int a-b
       case 22: setIntVar(gi(0), gi(4) * gi(8)); return null;   // int a*b
@@ -4337,9 +4480,11 @@ export class StageRuntime {
         s.periodicExportArmed = frame.periodicExportArmed;
         return 'flow';
       }
-      case 54: case 58: // setMainAnm (58 = auto-direction on, flags2 bit2)
-        this.setCurrentAnm(e, v.i32(a));
+      case 54: case 58: // setMainAnm: 54 = common enemy.anm, 58 = stage stgNenm.anm
+        // Th08.exe resolves the script against the file the op selects, then
+        // latches that choice in flags2 bit 2 (asm 0x419850/0x419acc).
         t.flags2 = op === 58 ? t.flags2 | 4 : t.flags2 & ~4;
+        this.setCurrentAnm(e, v.i32(a));
         return null;
       case 55: case 59: { // setDirectionAnmRun(base) (59 = auto-dir on)
         // FUN_00421de0 writes six u16 pose scripts in an interleaved field
@@ -4356,13 +4501,14 @@ export class StageRuntime {
         return null;
       }
       case 57: case 61: { // setSubAnm(index, script): TH08 has TWO slots
-        // (enemy+0x2b0 + i*0x2a4); script < 0 disables via u16 0xFFFF.
+        // (enemy+0x2b0 + i*0x2a4); script < 0 disables via u16 0xFFFF. 57
+        // resolves against the common file, 61 against the stage file.
+        t.flags2 = op === 61 ? t.flags2 | 4 : t.flags2 & ~4;
         const slot = v.i32(a) | 0;
         const script = v.i32(a + 4);
         if (slot === 0 || slot === 1) {
-          s.anmSlots[slot] = script < 0 ? null : { script, runner: this.makeEnemyAnmRunner(script) };
+          s.anmSlots[slot] = script < 0 ? null : { script, runner: this.makeEnemyAnmRunner(script, undefined, this.enemyAnmFor(s)) };
         }
-        t.flags2 = op === 61 ? t.flags2 | 4 : t.flags2 & ~4;
         return null;
       }
       case 62: // re-apply the last direction pose (all.c:11477-11484)
@@ -4561,13 +4707,16 @@ export class StageRuntime {
         s.shootDisabled = false;
         return null;
       case 110: s.shootOffset = { x: gf(0), y: gf(4), z: 0 }; return null;
-      case 111: { // bullet transform record (op-79 analog, 6 floats,
-        // scattered field order per all.c:12321-12373)
+      case 111: { // bullet transform record (TH07 op-79 analog; exe case 0x6e
+        // all.c:12321-12373): 6-float record at enemy+0x2e44+slot*0x18 in a
+        // scattered arg order — rec[4]=arg1 (opcode/flags), rec[5]=arg2
+        // (cond), rec[2]=arg3 (interval), rec[3]=arg4 (maxTimes),
+        // rec[0]=arg5 (angle), rec[1]=arg6 (speed; -999.9 = keep current).
         const slot = gi(0);
         if (slot >= 0 && slot < 5) {
           s.bulletExSlots[slot] = {
-            opcode: gi(20), cond: gi(24), arg3: gi(12), arg4: gi(16),
-            f0: gf(4), f1: gf(8)
+            opcode: gi(4), cond: gi(8), arg3: gi(12), arg4: gi(16),
+            f0: gf(20), f1: gf(24)
           };
         }
         if (s.bulletProps) s.bulletProps.exSlots = s.bulletExSlots.slice();
@@ -4593,16 +4742,28 @@ export class StageRuntime {
         return null;
       }
       case 126: t.dynCallTable[gi(4)] = gi(0); return null;
-      case 127: { // intangible/transform on (>=0) / off (<0)
+      case 127: { // boss-slot register (>=0) / unregister (<0) — DAT_00f54cc0
+        // (all.c:12664-12720, spec §127). Registering also makes the enemy
+        // intangible (flags bit1) and clears its fire-suppress radius; the
+        // exe's anm-interrupt/effect-VM side effects (FUN_00422bb0/
+        // FUN_0042a820/FUN_00422be0) are visual-only and not modeled.
         const arg = gi(0);
+        if (s.bossSlot != null && this.bossSlots[s.bossSlot] === e) this.bossSlots[s.bossSlot] = null;
         if (arg < 0) {
+          s.bossSlot = null;
+          s.isBoss = false;
           t.flags &= ~2;
           t.transformType = -1;
         } else {
+          s.bossSlot = arg;
+          s.isBoss = true;
+          this.bossSlots[arg] = e;
           t.flags |= 2;
           t.transformType = arg;
           t.suppressRadiusSq = 0;
         }
+        this.logLifecycle(game, 'bossSlot', e, arg);
+        this.syncBossPresence(game);
         return null;
       }
       case 128: {
@@ -4673,6 +4834,11 @@ export class StageRuntime {
         game.spawnEffectParticles(gi(0) + 0x20, e.x, e.y, 1, 0xffffffff);
         return null;
       }
+      case 175:
+        // DAT_00f54e2c: manager-wide timeline spawn suppress (all.c:13492,
+        // case 0xae). OR-ed with the boss gate by spawn ops 0-5/11/12.
+        this.timelineSpawnSuppress = gi(0);
+        return null;
       case 176: {
         // dialogue-mode global rework + force flag bit 30: the side bits
         // feed the TH08 dialogue presenter (Step 2c).

@@ -1,5 +1,5 @@
 import type { Rng } from '../core/rng';
-import type { AnmRunner } from '../formats/anm';
+import type { Anm, AnmRunner } from '../formats/anm';
 
 export type ItemType =
   | 'power' | 'point' | 'bigPower' | 'bomb' | 'fullPower' | 'life'
@@ -504,6 +504,9 @@ export interface EclState {
   bossTimerFrac?: number;
   currentAnm: number;
   anmRunner: AnmRunner | null;
+  // The anm file the runner was built from (TH08 two-file selection; the
+  // same script id can exist in both enemy.anm and stgNenm.anm).
+  anmRunnerAnm?: Anm | null;
   anmSlots: ({ script: number; runner: AnmRunner | null } | null)[];
   anmExDefaults: number;
   anmExFarLeft: number;
@@ -597,6 +600,10 @@ export interface Th08EclState {
   // Vars 10008-10015 (enemy+0x2ca8) / 10024-10031 (enemy+0x2cc8).
   enemyInts: Int32Array;
   enemyFloats: Float64Array;
+  // Vars 10088-10093 (enemy+0x3358..+0x336c): six more enemy-scope scratch
+  // dwords (th08-ecl-ops-0x00-0x2f.md §3). 10094/10095 are frame-scope
+  // (VMframe +0x68/+0x6c) and live in EclState.vars[28]/[29] instead.
+  scratch88: Float64Array;
   // +0x2e00/+0x2e04: pool copies written alongside HP by ins_131.
   poolCopyA: number;
   poolCopyB: number;

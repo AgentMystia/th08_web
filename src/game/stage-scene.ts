@@ -843,11 +843,21 @@ export class StageScene implements GameHost {
       difficulty
     );
     }
-    this.runtime = new StageRuntime(stageData, {
-      etama: assets.anms.etama,
-      enemy: this.enemyAnm,
-      effect: this.effectAnm
-    });
+    this.runtime = new StageRuntime(stageData, character === 'reimuYukari'
+      ? {
+          // TH08 two-file enemy ANM (Th08.exe 0x42ebf0): the common
+          // enemy.anm is file A, the stage's stgNenm.anm file B; the
+          // dispatcher picks per enemy via flags2 bit 2.
+          etama: assets.anms.etama,
+          enemy: anms['enemy'],
+          effect: this.effectAnm,
+          enemyStage: this.enemyAnm
+        }
+      : {
+          etama: assets.anms.etama,
+          enemy: this.enemyAnm,
+          effect: this.effectAnm
+        });
     this.runtime.reset();
     this.runtime.initializeRandomCounters(this.rng);
     this.etamaItemBase = assets.anms.etama.entries[1].spriteBase;

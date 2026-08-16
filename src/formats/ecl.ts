@@ -27,13 +27,20 @@ export interface TimelineEvent {
   op: number;
   size: number;
   rank?: number;
-  // Spawn events (ops 0/2/4/6): position + life/item/score as i32s.
+  // Spawn events: position + life/item/score as i32s. TH07 spawn ops are
+  // 0/2/4/6; TH08 uses 0-5/11/12/15 with per-op layouts (see parseTimeline).
   x?: number;
   y?: number;
   z?: number;
   life?: number;
   item?: number;
   score?: number;
+  // TH08 op 2/4 only: spawn x is drawn from [x, xMax] at runtime.
+  xMax?: number;
+  // TH08 op 11/12 only: extended death-drop fields (enemy +0x3308/+0x330c),
+  // item is forced to -1 and score moves to the last dword.
+  dropA?: number;
+  dropB?: number;
   // Other events: two raw int args.
   i0?: number;
   i1?: number;
@@ -84,17 +91,49 @@ export class Ecl {
         if (size < 8) break;
         if (off + size > v.length) break;
         const evt: TimelineEvent = { time, arg0: 0, op, size, rank };
-        // TH08 timeline v2 (th08-stage1.md + FUN_0042a8a0's switch at
-        // all.c:20270-20393): op 6 is a 12-byte MSG-start, NOT the 32-byte
-        // spawn of TH07's table. Spawn family = 0-5 and 11/12/15.
-        const isSpawn = size >= 32 && (op <= 5 || op === 11 || op === 12 || op === 15);
-        if (isSpawn) {
+        // TH08 timeline v2 layouts from the exe's own switch (FUN_0042a8a0,
+        // all.c:20270-20393). Each spawn op has its OWN arg layout:
+        //   0/1/15 size 32: sub, x, y, life, item, score
+        //   2/4    size 36: sub, xMin, xMax, y, life, item, score
+        //   3/5    size 28: sub, y, life, item, score  (x = rng01()*384)
+        //   11/12  size 36: sub, x, y, life, dropA(+0x3308), dropB(+0x330c),
+        //          score   (item forced to -1 by the engine)
+        // op 6 is a 12-byte MSG-start, NOT a spawn.
+        if ((op <= 1 || op === 15) && size >= 32) {
           evt.arg0 = v.i32(off + 8);
           evt.x = v.f32(off + 12);
           evt.y = v.f32(off + 16);
           evt.life = v.i32(off + 20);
           evt.item = v.i32(off + 24);
           evt.score = v.i32(off + 28);
+        } else if (op === 2 || op === 4) {
+          if (size >= 36) {
+            evt.arg0 = v.i32(off + 8);
+            evt.x = v.f32(off + 12);
+            evt.xMax = v.f32(off + 16);
+            evt.y = v.f32(off + 20);
+            evt.life = v.i32(off + 24);
+            evt.item = v.i32(off + 28);
+            evt.score = v.i32(off + 32);
+          }
+        } else if (op === 3 || op === 5) {
+          if (size >= 28) {
+            evt.arg0 = v.i32(off + 8);
+            evt.y = v.f32(off + 12);
+            evt.life = v.i32(off + 16);
+            evt.item = v.i32(off + 20);
+            evt.score = v.i32(off + 24);
+          }
+        } else if (op === 11 || op === 12) {
+          if (size >= 36) {
+            evt.arg0 = v.i32(off + 8);
+            evt.x = v.f32(off + 12);
+            evt.y = v.f32(off + 16);
+            evt.life = v.i32(off + 20);
+            evt.dropA = v.i32(off + 24);
+            evt.dropB = v.i32(off + 28);
+            evt.score = v.i32(off + 32);
+          }
         } else if (size >= 16) {
           evt.i0 = v.i32(off + 8);
           evt.i1 = v.i32(off + 12);
