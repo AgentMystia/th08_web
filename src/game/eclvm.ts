@@ -430,6 +430,11 @@ export class StageRuntime {
   // pattern parameters here and child emitters read them back.
   globalsInt = new Int32Array(4);
   globalsFloat = new Float64Array(4);
+  // TH08's run-global FLOAT bank: vars 10061-10068 map to the eight globals
+  // DAT_004ece20..004ece3c (Th08.exe float resolver cases 0x274d-0x2754).
+  // Boss pattern subs write shared rotation/phase parameters here and child
+  // emitters read them back (stage-1 boss subs 26/38/44/48 write 10065).
+  th08RunFloats = new Float64Array(8);
   // Every native ANM VM consumes the same gameplay RNG at 0x495e00.
   // Enemy runners are created from ECL dispatch, so retain the host stream
   // for constructors reached indirectly by pose changes and auxiliary slots.
@@ -475,6 +480,7 @@ export class StageRuntime {
     this.lifecycleLog = [];
     this.globalsInt.fill(0);
     this.globalsFloat.fill(0);
+    this.th08RunFloats.fill(0);
     this.std.reset();
   }
 
@@ -4378,6 +4384,8 @@ export class StageRuntime {
     if (id >= 10057 && id <= 10060) return s.vars[24 + (id - 10057)];
     if (id >= 10008 && id <= 10015) return t.enemyInts[id - 10008];
     if (id >= 10024 && id <= 10031) return t.enemyFloats[id - 10024];
+    // 10061-10068: the eight run-global floats (DAT_004ece20..3c).
+    if (id >= 10061 && id <= 10068) return this.th08RunFloats[id - 10061];
     if (id >= 10088 && id <= 10093) return t.scratch88[id - 10088];
     if (id >= 10094 && id <= 10095) return s.vars[28 + (id - 10094)];
     switch (id) {
@@ -4415,6 +4423,16 @@ export class StageRuntime {
       case 10070: return s.angularVelocity;
       case 10071: return s.speed;
       case 10072: return s.acceleration;
+      // 10099 (resolver case 0x2773): the replay-playback flag read — zero in
+      // live play (which is what the recorded run was), so live-path
+      // conditionals match the recording. A future T8RP browser playback
+      // must revisit this (native reads DAT_0164d0b4's bits 9/2).
+      case 10099: return 0;
+      // 10098 has NO case in the exe's own float resolver (all.c:14691 falls
+      // to the literal default) — boss sub37's op50 compares it against 2 and
+      // never matches, exactly like the literal below. Cased here only to
+      // keep the console clean.
+      case 10098: return 10098;
       // 10079/10080: fire origin x/y (+0x2dd0/+0x2dd4 in the bullet template
       // family) — stage-1 emitters snapshot a fire position there and read
       // it back for aimed volleys.
@@ -4457,6 +4475,8 @@ export class StageRuntime {
     if (id >= 10016 && id <= 10023) { s.vars[8 + (id - 10016)] = f32; return; }
     if (id >= 10057 && id <= 10060) { s.vars[24 + (id - 10057)] = f32; return; }
     if (id >= 10024 && id <= 10031) { t.enemyFloats[id - 10024] = f32; return; }
+    // 10061-10068: the eight run-global floats (DAT_004ece20..3c), f32-stored.
+    if (id >= 10061 && id <= 10068) { this.th08RunFloats[id - 10061] = f32; return; }
     if (id >= 10088 && id <= 10093) { t.scratch88[id - 10088] = f32; return; }
     if (id >= 10094 && id <= 10095) { s.vars[28 + (id - 10094)] = f32; return; }
     switch (id) {
