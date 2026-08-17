@@ -4747,6 +4747,13 @@ export class StageScene implements GameHost {
       const dim = p.invulnFrames > 0 && (p.invulnFrames & 7) < 2;
       r.drawAnmFrame(pf, ox + p.x, oy + p.y, dim ? { color: 0x404040 } : {});
     }
+    // TH08 Border Team familiar (the ghostly Yukari, player00.anm script 18)
+    // floats at the focused option anchor — a separate ANM VM drawn above the
+    // main sprite (exe FUN_0044e9e0 → FUN_00463210).
+    if (this.runState && p.th08OptionLive && p.th08OptionRunner) {
+      const ff = p.th08OptionRunner.spriteFrame();
+      if (ff) r.drawAnmFrame(ff, ox + p.th08OptionX, oy + p.th08OptionY, {});
+    }
   }
 
   private drawLasers(r: Renderer, ox: number, oy: number): void {
@@ -4962,9 +4969,22 @@ export class StageScene implements GameHost {
     // (state==1 || ((power>=128 || diff>=4) && y<pocY) || hasBorder): items keep
     // homing during the death/respawn window. Only the collection gate below
     // (CalcItemBoxCollision, ALIVE/INVULNERABLE/BORDER-only) is state-gated.
-    const pocActive = () =>
-      (p.power >= 128 || this.difficulty > 3)
-      && p.y < sht.pocLineY;
+    // Th07.exe FUN_00430c10 @ all.c:21958-21961: the PoC trigger is
+    // (power >= 128 OR difficulty > 3 [Extra/Phantasm]) AND player.y <
+    // pocLine (strict FCOMP <). DAT_0061c260 is the difficulty byte, not the
+    // character/shot selector; treating it as Sakuya made Lunatic drops home
+    // eleven to twenty-four frames too early in the replay oracle.
+    // TH08's rule differs (ItemManager all.c:31059-31062): the latch fires
+    // when player.y < pocLine AND (power >= 128 [DAT_004b5b30 as a double]
+    // OR player+3 focus state != 0 [DAT_017d5efb] OR role byte 1/6). For the
+    // Border Team (role 0) that is exactly "focused OR full power" — focused
+    // below 128 can line-collect, at 128 any form can. TH07's power/Extra
+    // rule is retained for TH07 characters only.
+    const pocActive = this.runState
+      ? () => (p.power >= 128 || p.focusHeld) && p.y < sht.pocLineY
+      : () =>
+          (p.power >= 128 || this.difficulty > 3)
+          && p.y < sht.pocLineY;
     const rate = Math.fround(this.slowRate);
     for (const it of this.items) {
       it.age++;

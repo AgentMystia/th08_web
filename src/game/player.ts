@@ -256,6 +256,8 @@ export class Player {
   th08OptionX = 0;
   th08OptionY = 0;
   th08OptionLive = false;
+  // The familiar's own ANM VM (player00 script 18), live only while focused.
+  th08OptionRunner: AnmRunner | null = null;
   invulnFrames = 0;
   // Player state-3's timer is the native {integer current, f32 fraction}
   // pair at +0x16a08/+0x16a04, retreated through FUN_00436a06. Keeping one
@@ -382,6 +384,10 @@ export class Player {
           this.th08OptionX = anchorX;
           this.th08OptionY = anchorY;
           this.th08OptionLive = true;
+          // The familiar (FUN_0044e3a0 state 1) runs player00.anm script 18 —
+          // the ghostly Yukari hover cycle (sprites 22-28) floating at the
+          // option anchor. It is a separate ANM VM from the main sprite.
+          if (this.anm.hasScript(18)) this.th08OptionRunner = new AnmRunner(this.anm, 18);
         } else {
           const k = Math.fround(Math.fround(0.2) * Math.fround(rate));
           this.th08OptionX = Math.fround(this.th08OptionX + Math.fround((anchorX - this.th08OptionX) * k));
@@ -389,6 +395,7 @@ export class Player {
         }
       } else {
         this.th08OptionLive = false;
+        this.th08OptionRunner = null;
       }
     }
     if (this.invulnFrames > 0) {
@@ -463,6 +470,7 @@ export class Player {
     }
     this.updatePose(input);
     this.runner.update(rate);
+    this.th08OptionRunner?.update(rate);
     // FUN_0043be00 nests SakuyaB's option-angle controller under held Z,
     // message-inactive, and unfocused. Releasing fire or holding focus freezes
     // the angle; the option layout still reads the frozen value every tick.
