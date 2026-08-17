@@ -247,6 +247,15 @@ export class Player {
   lives = 2;
   bombs = 3;
   power = 0;
+  // TH08 Border Team focused option (Yukari's shikigami familiar): the exe
+  // runs a per-frame 0.2-lerp toward (player.x, max(32, player.y - 96))
+  // (FUN_0044e770) and snaps to that anchor on the focus-in intro state
+  // (FUN_0044e3a0 state 1). Option-sourced SHT records spawn from this live
+  // position (player+0x6b0 read in the FUN_0044fb70 spawner). The option's
+  // enemy-lunge sub-states are flagged/unimplemented.
+  th08OptionX = 0;
+  th08OptionY = 0;
+  th08OptionLive = false;
   invulnFrames = 0;
   // Player state-3's timer is the native {integer current, f32 fraction}
   // pair at +0x16a08/+0x16a04, retreated through FUN_00436a06. Keeping one
@@ -363,6 +372,25 @@ export class Player {
     const movementSpeedMult = this.bombTimer > 0 ? this.bombSpeedMult : 1;
     let bombEndedThisTick = false;
     this.updateFocusGlide(input.held.has('focus'), rate);
+    if (this.character === 'reimuYukari') {
+      // The focused option follows its anchor with the exe's 0.2 lerp
+      // (FUN_0044e770); on focus-in it snaps to the anchor first.
+      const anchorX = this.x;
+      const anchorY = Math.max(32, Math.fround(this.y - 96));
+      if (this.focusHeld) {
+        if (!this.th08OptionLive) {
+          this.th08OptionX = anchorX;
+          this.th08OptionY = anchorY;
+          this.th08OptionLive = true;
+        } else {
+          const k = Math.fround(Math.fround(0.2) * Math.fround(rate));
+          this.th08OptionX = Math.fround(this.th08OptionX + Math.fround((anchorX - this.th08OptionX) * k));
+          this.th08OptionY = Math.fround(this.th08OptionY + Math.fround((anchorY - this.th08OptionY) * k));
+        }
+      } else {
+        this.th08OptionLive = false;
+      }
+    }
     if (this.invulnFrames > 0) {
       const rateF32 = Math.fround(rate);
       if (rateF32 > 0.99) {
@@ -710,12 +738,13 @@ export class Player {
     if (!this.anm.hasScript(scriptId)) return null;
     const runner = new AnmRunner(this.anm, scriptId);
     const rect = this.anm.sprites.get(scriptId) ?? this.anm.sprites.get(64);
-    // TH08: option-sourced records (src >= 1) copy the LIVE option struct
-    // position (player+0x6b0 + (src-1)*0x2f4 in the exe). The option trail is
-    // not modeled yet (flagged); a stationary team has the option resting on
-    // the player, so spawn at the player center.
+    // TH08: option-sourced records (src >= 1) spawn from the focused
+    // option's live trail position (player+0x6b0, FUN_0044fb70). Unfocused
+    // records are all src 0 (the player center).
     const source = this.character === 'reimuYukari'
-      ? { x: 0, y: 0 }
+      ? (shot.orb >= 1 && this.th08OptionLive
+        ? { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) }
+        : { x: 0, y: 0 })
       : shot.orb === 1 || shot.orb === 2 ? this.orbOffset(shot.orb) : { x: 0, y: 0 };
     // TH08 has no paired +0x20 impact-script family in player00.anm's 19
     // entry-0 scripts; the runner plays the flight script and the bullet
