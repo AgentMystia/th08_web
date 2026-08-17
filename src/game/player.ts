@@ -495,10 +495,31 @@ export class Player {
     // playback and never matches live retail behavior.
     let dx = 0;
     let dy = 0;
-    if (input.held.has('up')) dy = -1;
+    if (this.character === 'reimuYukari') {
+      // TH08 FUN_0044aec0 (asm 0x44aec0+): diagonal masks win first in the
+      // order UL(0x50), DL(0x60), UR(0x90), DR(0xa0); the singles chain then
+      // takes DOWN over up and LEFT over right — the opposite of TH07's
+      // FUN_0043be00 priority (up, then right). The stage-1 Lunatic recording
+      // holds left+right for 14 frames starting at f123; TH07's chain moves
+      // the player right where the original moves left.
+      const up = input.held.has('up');
+      const down = input.held.has('down');
+      const left = input.held.has('left');
+      const right = input.held.has('right');
+      if (up && left) { dx = -1; dy = -1; }
+      else if (down && left) { dx = -1; dy = 1; }
+      else if (up && right) { dx = 1; dy = -1; }
+      else if (down && right) { dx = 1; dy = 1; }
+      else if (down) dy = 1;
+      else if (up) dy = -1;
+      else if (left) dx = -1;
+      else if (right) dx = 1;
+    } else if (input.held.has('up')) dy = -1;
     else if (input.held.has('down')) dy = 1;
-    if (input.held.has('left')) dx = -1;
-    if (input.held.has('right')) dx = 1;
+    if (this.character !== 'reimuYukari') {
+      if (input.held.has('left')) dx = -1;
+      if (input.held.has('right')) dx = 1;
+    }
     const diagonal = dx !== 0 && dy !== 0;
     const baseSpeed = diagonal
       ? (this.focusHeld ? sht.diagFocusedSpeed : sht.diagSpeed)
