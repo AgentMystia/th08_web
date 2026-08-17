@@ -4872,10 +4872,10 @@ export class StageRuntime {
       }
       case 122: return this.declareSpellTh08(game, e, instr);
       case 124: {
-        // aux anm/sound request (FUN_0045d660): draws exactly ONE raw RNG
-        // value into its 12-channel ring. The ring's visual/audio output is
-        // not modeled yet, but the draw is kept for RNG fidelity.
-        game.rng.u16();
+        // aux anm/sound request (FUN_0045d660): writes the arg + enemy x into
+        // a 12-channel ring. FUN_0045d660 calls NO rng (its FUN_004a3e70 is a
+        // float→int helper) — a phantom u16 draw here desynced the stream by
+        // one draw per op-124 (the boss spell subs fire it constantly).
         return null;
       }
       case 126: t.dynCallTable[gi(4)] = gi(0); return null;
