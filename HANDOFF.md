@@ -434,3 +434,27 @@ band f800/f2500 shifted (needle ×1.5 changed kill cadence — exe-correct);
 side/lower bands byte-consistent with the AGENTS baseline (18/19/24 and
 97/7/99). Playtest server: `python3 -m http.server 8000 --directory
 /workspace` (dist rebuilt).
+
+## 2026-08-18 second forensic pass — the fire-position hypothesis disproven
+
+The completion review proposed the ECL FIRE reads a different enemy
+position field (+0x2d34 logical vs +0x2d88 ANM, ~2.16px phase). Decoded
+from the exe: FUN_00422720 @ 0x4227f8 builds the fire origin as
+vec3add(enemy+0x2d88, enemy+0x2db8); +0x2d88 is synced at the ECL loop
+head (0x418520) as +0x2d34 + the spawn-anchor +0x2d40 (only ever written
+at op91/timeline child creation, zero for stage-1 firers) BEFORE the
+instruction dispatch — the native fire origin is the step-START position,
+exactly what we use (f530 ring center (320, 67.0) = the pre-move value).
+Decisive counter-evidence: two of the seven killers (the f916 and f2105
+volleys behind deaths f1011/f2197) are fired by STATIONARY enemies
+(pre == post position) — no position field or interp ordering can shift
+those volleys at all. Also disproven this pass: the player Y clamp
+(FUN_0043c686 initializes the clamp box 8/16/368/416 → x∈[8,376],
+y∈[16,432], byte-equal to the inherited TH07 values; death#7's y=432.00
+IS the native clamp). The f684 killer's full flight re-integrated
+numerically: 280.2px over 155 ticks = 146 full moves + 9 half-speed
+spawn-state moves — constant velocity with the 9-tick spawn state,
+exactly our model. Every geometric link (fire origin, volley
+modes/angle-set equivalence, layer speeds, rank bump, spawn state,
+killbox AABB/sizes, graze order, clamp, hitbox) is exe-verified; the
+residual requires a native per-frame trace (wine prerequisite).

@@ -3850,6 +3850,15 @@ export class StageRuntime {
     // fields (+0x2bd8/+0x2bdc), and FUN_00421e90 copies those bits verbatim
     // into bullet+0xb8c/+0xb90.  These are gameplay coordinates before the
     // first same-frame bullet-manager move, not merely render precision.
+    // TH08 v1.00d cross-check: FUN_00422720 @ 0x4227f8 builds the template
+    // position as vec3add(enemy+0x2d88, enemy+0x2db8), where +0x2d88 is the
+    // ANM position synced at the ECL loop head (0x418520: +0x2d88 = +0x2d34
+    // + the spawn-anchor +0x2d40, zero for stage-1 spawners) BEFORE the
+    // instruction dispatch — i.e. the step-START position, exactly this
+    // pre-movement e.x. Verified against the f530 ring: our origin (320,
+    // 67.0) equals the enemy's step-head position, and two of the seven
+    // phantom-death killers (f916/f2105 volleys) fire from STATIONARY
+    // enemies, so no position-field phase can explain them.
     const shootX = Math.fround(origin?.x ?? e.x + e.ecl.shootOffset.x);
     const shootY = Math.fround(origin?.y ?? e.y + e.ecl.shootOffset.y);
     // Test-only observability (PLAN.md Phase 0 / LIFE-001): last frame this
