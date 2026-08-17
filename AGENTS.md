@@ -580,6 +580,28 @@ all three modes plus pause cursor ownership were exercised. CI runs
 `npm run replay:verify` before the Pages build, so Stage 1-6 convergence is a
 deployment gate rather than a manual-only checkpoint.
 
+
+## 7. Approximations registry (known, flagged, improvable)
+
+TH08-slice additions (2026-08-17, all with inline comments at the site):
+- Border Team option-sourced shots spawn at the player center: the exe
+  reads the live option-trail struct (player+0x6b0+(src-1)*0x2f4) — the
+  trail model is unimplemented.
+- TH08 graze award is 2000, doubling to 4000 under a gauge-extreme
+  condition (FUN_00406da0's compare reads an unrecovered threshold pair;
+  mapped to the ±8000 extremes as PROBABLE).
+- The graze COUNTER steps +1..+3 per event in the native (FUN_00406d10/40
+  reads on manager threshold u16s at +0x3ddfc..0x3de02); ours steps +1.
+  Field 536 vs 270 in the verifier is the counting convention, not a
+  geometry gap (event counts match).
+- Night-clock stage-tally quota: stage-1 shows /3000 (DAT_004c77f0 row
+  confirmed); the exact +1/+2 branch threshold read is unrecovered.
+- TH08 bullet-command queue: 0x400000/0x800000/0x1000000 (timer-arm /
+  homing-ish / child-spawn) are unused by stage 1 and warn-only.
+- Effect-51 visuals use the generic spark fallback; only its lifetime
+  (241f) and draw cost (10 u16) are modeled. UV-scroll ops 80/81 record
+  but do not scroll (canvas renderer).
+
 ## 7. Approximations registry (known, flagged, improvable)
 
 Each also has an inline comment at its code site. Do not silently "fix"
