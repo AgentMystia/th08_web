@@ -5049,7 +5049,18 @@ export class StageScene implements GameHost {
         const dy = Math.fround(it.vy * rate);
         it.x = Math.fround(it.x + dx);
         it.y = Math.fround(it.y + dy);
-        if (it.vy >= 3) it.vy = 3;
+        if (this.runState && it.state === 1) {
+          // TH08's homing branch jumps straight to the collect test
+          // (all.c:31064-31070) — no gravity tail pollutes the latch.
+        } else if (this.runState) {
+          // TH08 ItemManager (all.c:31109-31121): once the item's y reaches
+          // 3.0 the fall speed SNAPS to 3.0; above that the 0.03·rate
+          // gravity applies. The gradual-to-cap TH07 model left items
+          // floating through the mid-field far slower than native, mistiming
+          // every collection window on the recorded route.
+          if (it.y >= 3) it.vy = 3;
+          else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * rate));
+        } else if (it.vy >= 3) it.vy = 3;
         else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * rate));
         // ItemManager::OnUpdate: `arcadeRegionSize.y + 16.0f <= y` — the
         // 448+16 boundary despawns INCLUSIVELY at exactly 464.

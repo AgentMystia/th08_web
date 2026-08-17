@@ -89,7 +89,9 @@ export class Th08ItemSpawnPool {
       current.y = f32(options.y);
       current.z = f32(options.z ?? 0);
       current.vx = 0;
-      current.vy = f32(-2.2);
+      // Item spawner FUN_004400a0 writes +0x2b4 = 0xc00ccccd = -2.1875f for
+      // the plain fall state.
+      current.vy = f32(-2.1875);
       current.vz = 0;
       current.type = type;
       current.state = state;
@@ -103,7 +105,9 @@ export class Th08ItemSpawnPool {
         current.vy = current.y;
         current.vz = current.z;
       } else if (state === 3 || state === 5) {
-        current.vy = f32(f32(-2) - f32(options.rng.range(0.2)));
+        // FUN_004400a0 param_4==3: vy = -2.0 - rng01*0.1 (0x3e4ccccd), vx a
+        // signed rng01*0.6.
+        current.vy = f32(f32(-2) - f32(options.rng.range(0.1)));
         current.vx = randomSigned(0.6, options.rng);
         if (options.playerDead) {
           current.state = 0;
