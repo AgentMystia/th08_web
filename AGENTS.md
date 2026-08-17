@@ -11,7 +11,10 @@ the legacy TH07 text below as parent-engine history, not as format authority:
 - TH08 facts override TH07 facts: ECL has a leading `0x800` magic and v2
   timelines; ANM entries are version 3; MSG text payloads are XOR `0x77`;
   SHT uses 56-byte headers and records; replays are T8RP with a `0x68`
-  header and stage blocks containing `0x40` bytes of metadata.
+  header and stage blocks containing a `0x24`-byte metadata header followed
+  by `N x u16` input records (v6 has NO per-frame aux word; the playback
+  feed FUN_00452550 strides 2, the recorder FUN_00452310 writes one u16 per
+  frame; the stride-6 feed FUN_004526c0 is for pre-v6 images only).
 - The first deliverable is Stage 1 + Reimu/Yukari Border Team + the original
   menus/UI, aligned to `replay/th8_udLy01.rpy`. Do not spend time on TH07
   Extra/Phantasm/Cherry behavior except where shared engine code still needs
@@ -40,9 +43,51 @@ blocking waits; player shots use sht.sprite+10 with the exe's init/tick
 callback split (aim-at-spawn vs the 40-frame-gated seek) and TH08's
 20-frame fire cycle; the bullet command queue runs 0x20000/0x4000/
 0x80000/0x40000 with up to 16 ins_111 slots; all ANM v3 opcodes in the
-embedded data are implemented. Remaining convergence gap: replay
-th8_udLy01.rpy still dies to wave-bullet micro-geometry the decompile
-cannot further pin without a native per-frame trace.
+embedded data are implemented.
+
+2026-08-17 second convergence pass (commits 634704d/f106ff8/7dc4333) —
+five more exe-proven root fixes, each against all.c:
+
+1. **T8RP record format**: stage blocks are `{0x24 metadata, N×u16 inputs}`
+   (stage 1 = 10504 frames, cross-validated by the 352-byte slowdown
+   trailer = 1 + ceil(10504/30)). The earlier `0x40 + 4-byte {input,aux}`
+   parse halved the stage and misaligned every input — every pre-fix
+   "player path verified" claim was circular.
+2. **Auto-fire capture replay** read the FIRE flags dword one slot past
+   the 11-dword image (`gi(8)` → undefined → 0): every auto-fired volley
+   lost its spawn-state slowdown/backup + sfx + fire gates. Fixed to
+   `gi(7)`.
+3. **Arith ops 10-19** are two-operand compound assigns (`dst op= src`;
+   exe cases 9-0x12), not TH07's three-operand forms; the remap zeroed
+   Sub0's chase-curve targets (`0.6*(player-enemy)+enemy`), so fairies
+   never entered the shot column.
+4. **Timeline holds advance the clock** (op 7/10/13 `goto LAB_0042ad52`),
+   they do not freeze it — parking the clock put the boss intro at
+   midboss-death + 1236 frames instead of right after it. TH07's freeze
+   is retained for TH07 only.
+5. **TH08 death mode** lives in flags bits 20-22 (ins_129; the switch at
+   all.c:21639), not the TH07 deathMode field — reading the wrong field
+   skipped every death callback, so the midboss never ran her phase-exit
+   sub (end spell → unregister → boss-intro chain).
+
+Plus: the TH08 rank table (DAT_004c7880: E/N 10/8/16, H/L 8/8/12,
+Ex 16/15/16 — not TH07's 16-start/[10,32]); MSG op13 skippable + Ctrl
+fast-forward + op6 resume ticket releasing the op-7 dialogue hold
+mid-conversation (gui-run-msg.c:33/116/228); item launch vy −2.1875 and
+the y≥3.0 → vy=3.0 fall snap (all.c:31109-31121) replacing TH07's
+gradual cap; and the run-global float bank vars 10061-10068
+(DAT_004ece20..3c) backing the boss's shared pattern parameters.
+
+Verifier state (replay:verify:th08): the full 10504-frame stage plays;
+midboss engages/dies, boss spawns, intro+pre-battle chat chain runs, and
+a dialogue-tapping playthrough CLEARS the stage. Residual divergence:
+7 phantom deaths (f685/1012/1405/1793/2198/3300/3790), all sub-2px
+borderline aimed-bullet interceptions. Every link (player path, volley
+phase, fan/ring shape, speeds with the rank bump, spawn-state lifecycle,
+kill box, scheduler order, slowdown cadence) is decompile-verified; the
+residual is sub-frame and needs a native per-frame trace to pin — wine
+still cannot boot Th08.exe in this environment, so the trace procedure
+in scripts/native-trace.mjs stays for a working host.
 
 Verification oracle for text-mode reviewers, measured on the TH08 build
 (dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture).

@@ -304,3 +304,89 @@ The 61-vs-3 point-item gap is predominantly downstream of the death
 cascade (fewer kills + no phase-transition cancels while the midboss
 stalls), not an independent item-chain defect: per-kill drops, spawn
 positions, and fall physics all match the exe.
+
+## Update (2026-08-17, tenth pass — the T8RP parse was wrong; five root fixes)
+
+**The largest finding: the T8RP stage-block layout was mis-parsed all
+along.** The exe evidence (recorder FUN_00452310 writes one u16/frame;
+v6 playback feed FUN_00452550 strides 2; the stage-entry hook starts the
+record cursor at block+0x24, all.c:40991) plus two independent size
+cross-checks (the slowdown trailer is exactly 1 + ceil(10504/30) = 352
+bytes; the stage-2 block pointer) prove the v6 layout is `{0x24-byte
+metadata, N x u16 input words}` — stage 1 has **10504** frame records,
+not 5245. The old `0x40 + 4-byte {input, aux}` parse read every other
+true input word starting at true-frame 14: the whole stage ran at half
+length with a scrambled route, and every earlier "player path verified
+bit-exact" claim was circular (model vs sim sharing the same bad parse).
+There is NO per-frame aux word in v6 — the "inputHigh" column was an
+artifact of the mis-parse.
+
+Exe-proven fixes landed this pass (commits 634704d, f106ff8, 7dc4333):
+
+- **Auto-fire flags**: the captured-FIRE replay read the flags dword one
+  slot past the 11-dword image (`gi(8)` → undefined → 0). Every
+  auto-fired volley lost its spawn-state (the ÷2 intro + 4-vector
+  backup), sfx, and the 0x8000/0x10000 gates. `gi(7)` restores them.
+- **Arith ops 10-19** are two-operand compound assigns (dst op= arg1;
+  exe cases 9-0x12, all.c:10884-11000), not TH07's three-operand forms.
+  The remap read a phantom third operand from the next instruction's
+  header; op17 (`*=`) against a zero time-field zeroed Sub0's chase
+  target (`0.6*(player-enemy)+enemy`), so wave fairies never entered
+  the shot column — the kill/collect cascade died with it.
+- **Timeline holds advance the clock**: op 7 (dialogue), op 10 (boss
+  alive), op 13 (latch) all `goto LAB_0042ad52` in FUN_0042a8a0 — the
+  clock advances while the cursor parks. Freezing it put the boss intro
+  at midboss-death + 1236 frames. (TH07's freeze retained for TH07.)
+- **Death mode is flags bits 20-22** (ins_129; the switch at
+  all.c:21639), not the TH07 deathMode field. The misread forced every
+  TH08 death to mode 0, skipping the death callback — the midboss never
+  ran her phase-exit sub, so the spell never ended and the boss never
+  spawned. With it, the full chain (midboss death → end-spell →
+  unregister → intro chat → boss spawn → boss phases → stage clear)
+  runs end-to-end.
+- **Rank table**: DAT_004c7880 = E/N 10/8/16, H/L 8/8/12, Ex 16/15/16
+  (init/min/max per difficulty, read from the binary) — not TH07's
+  16-start with Lunatic [10,32].
+- **Dialogue**: op13 arms the skippable flag; skippable + Ctrl
+  fast-forwards (the msg clock SetCurrent-jumps to the pending
+  instruction's time and op4/op21 waits bypass, gui-run-msg.c:33/116/
+  228); op6 is the ECL resume ticket releasing the timeline's op-7 hold
+  mid-conversation (msg+0x22d78); the op5 portrait/script bridge packed
+  an i16 pair as one i32 and crashed the intro chat's tail.
+- **Items**: launch vy = −2.1875 (0xc00ccccd, not −2.2); orb toss vy =
+  −2 − rng·0.1; the state-0 fall snaps vy to 3.0 once y ≥ 3.0 with the
+  0.03·rate gravity only above that, and state-1 homing skips the
+  gravity tail entirely (all.c:31064-31121).
+- **Vars 10061-10068** are the eight run-global floats DAT_004ece20..3c
+  (boss pattern parameter bus; subs 26/38/44/48 write 10065); 10099 is
+  the replay-playback flag (0 in live play = the recording's context);
+  10098 is intentionally unmapped-in-exe (literal default).
+
+**Current verifier state** (`replay:verify:th08`): the full 10504-frame
+stage plays; a dialogue-tapping invulnerable playthrough reaches the
+boss, fights her phases （隠蟲「永夜蟄居」 etc.), and CLEARS the stage.
+The recorded run itself still DIVERGES: 7 phantom deaths at
+f685/1012/1405/1793/2198/3300/3790.
+
+**The death residual, precisely**: every death is a sub-2px borderline
+interception (the f685 ring bullet hits with 1.16px/0.64px slack on the
+two axes; ±1 tick of volley phase or ±2px of trajectory flips every one
+to a clean miss). Verified exe-exact, each against all.c: the player
+path (movement/chord/speeds/clamps, independent-model diff ≤ 0.0002px),
+the volley phases (deadline rank-lerp 33, post-clock unwind evaluation,
+spawn-day double-tick), the fan/ring shapes and the rank-bumped speeds
+(−0.25/−0.125 at rank 8, matching the exe's init −0.5/+0.5 configs), the
+spawn-state lifecycle (backup 4 + 10 half-moves + end-tick full), the
+kill box (proto half 4.0 /2 + player 0.825 = 2.825), the scheduler order
+(player 9 → enemies 11 → bullets 14), and the slowdown cadence
+(all.c:27443-27452 = the harness's buckets exactly). The residual is
+sub-frame and, per the AGENTS.md fidelity workflow, belongs to a native
+PRE trace; wine still cannot boot Th08.exe here, so
+scripts/native-trace.mjs waits for a working host.
+
+Also ruled out with evidence this pass: fan-angle mirroring (the exe has
+no mirror-bit consumer in the fire path), the "+0xbb834 attack-slot
+shoot-down of spawn-state bullets" (bomb-slot table; the recording never
+bombs), the eased-move fraction phase (FUN_00422c40 ticks-then-reads,
+matching our pre-decrement), and the 58-fps slowdown buckets (an engine
+rhythm, not density).
