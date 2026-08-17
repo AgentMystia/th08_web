@@ -2443,12 +2443,23 @@ export class StageRuntime {
     };
     void instrLike;
     // Read the fields straight from the captured image: header dwords 0-2,
-    // then args at dwords 3..10. FUN_00422720 reads args with its paramMask
-    // still attached; the image carries the mask, so var-refs re-resolve.
-    const v = this.ecl.view;
-    void v;
-    const gi = (d: number) => raw[3 + d] | 0;
-    const gf = (d: number) => f32FromBits(raw[3 + d]);
+    // then args at dwords 3..10. FUN_00422720 reads args with the paramMask
+    // still attached, so VAR-RANGE operands re-resolve against the LIVE vars
+    // at each fire (the midboss's captured fans carry [10016.0f] bases).
+    // Same value-range rule as the main dispatch's getInt/getFloat.
+    const gi = (d: number) => {
+      const rawVal = raw[3 + d] | 0;
+      return rawVal >= VAR_BASE && rawVal < VAR_BASE + 100
+        ? Math.trunc(this.varRead(game, e, rawVal, false))
+        : rawVal;
+    };
+    const gf = (d: number) => {
+      const val = f32FromBits(raw[3 + d]);
+      const asInt = Math.trunc(val);
+      return Math.abs(val - asInt) < 0.00001 && asInt >= VAR_BASE && asInt < VAR_BASE + 100
+        ? this.varRead(game, e, asInt, true)
+        : val;
+    };
     const sprite = raw[3] & 0xffff;
     const offset = (raw[3] >>> 16) & 0xffff;
     const count1raw = gi(1);
