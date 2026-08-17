@@ -254,3 +254,33 @@ the deaths are fixed.
 steps +1..+3 per event in the native (FUN_00406d10/40 tier reads on four
 manager threshold words) — our +1/event undercounts the field (270 vs 536)
 without a geometry gap; the tier table is undecoded (flagged).
+
+## Update (2026-08-17, eighth pass — verifier-directed order-of-operations audit)
+
+Two specific order-of-operations rules verified exe-exact, no change needed:
+
+1. **New bullets integrate on their birth frame.** TH08's bullet manager
+   (priority 12) runs after the enemy manager (priority 10), so a bullet
+   created this frame receives its case-1 tick (motion, then cull, then the
+   player-collision block) in the same OnUpdate — our updateBullets after
+   updateEnemies matches, including the spawn-state halved first move
+   (state 2/3/4 divide velocity by 2/2.5/3, all.c:23585-23656).
+2. **Enemy fire uses the pre-integration position.** The ECL interpreter
+   (fires) runs at all.c:21340, the position integration at 21356 — fire
+   reads the position as of frame start. Our tickEnemyCore dispatches
+   (fires) before integrateEnemyPosition — same.
+
+First-death (f612) full closure: the player position at f611 is
+bit-identical to a standalone integration of the recorded inputs (diff
+0.00 through f611) — movement, chords, and stage-start (in-residence +
+240f invuln; the fly-in modernization is not present in the current tree)
+are all exact. The killer is the outermost (-0.1795) fan bullet of Sub1's
+first auto-fire volley, spawned f534 with the exe's own phase math; it
+clips the player by ~1.7px per axis at f611. The remaining miss margin is
+below what the snapshot-chain evidence can resolve.
+
+**Where the residual actually lives**: the recording's deathless run is
+separated from ours by differences of 1-3 frames of volley phase or ~1-3px
+of bullet path — exactly the class the AGENTS.md fidelity workflow assigns
+to a native PRE trace. scripts/native-trace.mjs is ready for a host where
+Th08.exe boots (real GPU wine or Windows).
