@@ -390,3 +390,47 @@ shoot-down of spawn-state bullets" (bomb-slot table; the recording never
 bombs), the eased-move fraction phase (FUN_00422c40 ticks-then-reads,
 matching our pre-decrement), and the 58-fps slowdown buckets (an engine
 rhythm, not density).
+
+## 2026-08-18 mechanics alignment pass (cb42c0f + this commit)
+
+User-facing fidelity fixes, all static-RE derived (no wine/images):
+
+1. **使魔突进**: Ran now lunges onto enemies (anchor (enemy.x, max(32,
+   enemy.y+32)) once the pointer cache arms after 10 firing-cycle frames,
+   0x44e3a0 sub-3 / 0x44e8d0), her needles (ply00as funcs[0]=1 records)
+   spawn from the lunging position aimed at the pointer-cache enemy at
+   speed ×1.5 (0x450240), and the unfocused amulets seek the primary
+   max-y cache (0x450320). Node probe: option at (255,178) against an
+   enemy at (267,122) with lunge=true.
+2. **人妖量表**: full exe model (fire ±20/frame ramping counter/15 past
+   300 focus-stable frames, idle drift 2/3/5 by depth, kills ∓200, grazes
+   +100, dialogue −g/12, bomb ±26000/duration bypass; limits ±10000,
+   effects ±8000, tint ±2000 from 0x44d9ee). HUD: notches + cursor +
+   extreme blink.
+3. **Bomb**: exe-faithful rewrite. The dispatched table is player+0x1000
+   (rdata 0x4c7ad0 team-0 block: 0x40c010 unfocused / 0x410c40 focused /
+   0x40c910+0x410fe0 deathbombs); the 0x40c820 youkai block is never
+   dispatched. Durations 260/200/260/300. Deathbomb inverts the side and
+   costs 2 bombs. Focused bomb = r100 field + waves at 10/20/30, NOT 16
+   orbs. Probes: type-0 runs exactly 260f, gauge −100/frame clamped
+   −10000, ends cleanly.
+4. **決死結界**: 18-frame SHT window; white screen flash while open.
+
+**Death residual after this pass** (re-measured): f684/1011/1338/1779/
+2197/2664/3117, ALL Y-axis-bound with 0.48-1.86px slack — the uniform
+needed correction is "bullet 0.5-1.9px higher", uncorrelated with age or
+speed. This pass additionally verified native-equal: the TH08 bullet
+state machine 0x431240 (case 2/3/4 half-move → VM-end → same-tick case-1
+fallthrough; +0xd50 velocity add; +0xdac behavior dispatch order), the
+killbox 0x44a230 (AABB, player box from sht[0xc]/2 at +0x3d4→+0x38c..,
+bullet size +0xd34), the graze-then-killbox order with the
+attack-slot-contact early-out (0x449ff0 → bullets inside bomb-aura slots
+enter state 5 and cannot kill), and the player killbox init (0x44d7d1).
+Still needs a native trace.
+
+**Gates this pass**: 393/393 tests, TH07 replay:verify 6/6 PASS, clean
+headless boot (0 page errors), TH08 stage runs all 10504 frames. Play
+band f800/f2500 shifted (needle ×1.5 changed kill cadence — exe-correct);
+side/lower bands byte-consistent with the AGENTS baseline (18/19/24 and
+97/7/99). Playtest server: `python3 -m http.server 8000 --directory
+/workspace` (dist rebuilt).

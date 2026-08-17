@@ -81,13 +81,45 @@ gradual cap; and the run-global float bank vars 10061-10068
 Verifier state (replay:verify:th08): the full 10504-frame stage plays;
 midboss engages/dies, boss spawns, intro+pre-battle chat chain runs, and
 a dialogue-tapping playthrough CLEARS the stage. Residual divergence:
-7 phantom deaths (f685/1012/1405/1793/2198/3300/3790), all sub-2px
-borderline aimed-bullet interceptions. Every link (player path, volley
-phase, fan/ring shape, speeds with the rank bump, spawn-state lifecycle,
-kill box, scheduler order, slowdown cadence) is decompile-verified; the
-residual is sub-frame and needs a native per-frame trace to pin — wine
-still cannot boot Th08.exe in this environment, so the trace procedure
-in scripts/native-trace.mjs stays for a working host.
+7 phantom deaths (f684/1011/1338/1779/2197/2664/3117 after the gauge/bomb
+alignment), measured as AABB Y-axis contacts with 0.48-1.86px of slack —
+the needed correction is uniformly "bullet ~0.5-1.9px higher in Y" with no
+age/flight-length correlation. Every link (player path, volley phase,
+fan/ring shape, speeds with the rank bump, spawn-state lifecycle incl. the
+TH08 state machine 0x431240 case-2/3/4 half-move -> same-tick case-1
+fallthrough, kill box 0x44a230 AABB with player sht.hitbox/2 and bullet
+size +0xd34, graze order, scheduler order, slowdown cadence) is
+decompile-verified; the residual is sub-frame and needs a native
+per-frame trace to pin — wine still cannot boot Th08.exe in this
+environment, so the trace procedure in scripts/native-trace.mjs stays for
+a working host.
+
+2026-08-18 mechanics pass (commit cb42c0f) — four systems aligned from the
+v1.00d decompilation, replacing inherited-TH07 or speculative behavior:
+- Familiar lunge (0x44e3a0 sub-3 via 0x44e770's tail): the enemy manager's
+  pointer cache (0x18b89b4, written at 0x42d4a6 through the ABSOLUTE
+  address — greppable only as a raw address, not [reg+disp]) arms after 10
+  firing-cycle frames; Ran's anchor becomes (enemy.x, max(32, enemy.y+32)).
+  The primary cache (0x18b899c, max-y enemy) feeds the amulet seeker
+  (0x450320) and the human bomb. ply00as needles (funcs[0]=1) spawn from
+  the lunging option aimed at the pointer-cache enemy at speed x1.5
+  (0x450240 + 0x4b4438).
+- Youkai gauge (0x44bdf0 block + call sites): fire drift ±20/frame
+  (focusTimer/15 past 300 frames since the last focus toggle) while the
+  cycle is armed and focus stable >=30f; idle drift 2/3/5 by depth (tint
+  ±2000, effects ±8000, limits ±10000 — 0x44d9ee config); kills ∓200,
+  grazes +100, dialogue start −gauge/12, bombs ±26000/duration (bypass).
+- Bombs: the real dispatch is ONE per-frame callback per bomb from the
+  table at player+0x1000 = rdata 0x4c7ad0 team block {0x40c010 unfocused,
+  0x410c40 focused, 0x40c910/0x410fe0 deathbombs, 0x40d100 last spell} —
+  NOT the 0x40c820 youkai block (that table at +0x1014 is never
+  dispatched). Durations 260/200/260/300 (0x40be30). Deathbomb inverts the
+  side and costs 2 bombs when stocked. The old Th08BorderBombSim (null
+  damage, invented geometry) is deleted.
+- 決死結界: SHT 18-frame window; FUN_0044d2c0's white 768x896 flash draws
+  while it runs.
+player00.anm entry 1 (spriteBase 44, on-disk scripts 19-22) holds the bomb
+art; PlayerEffects now resolves entry-scoped sprite tables for it.
 
 Verification oracle for text-mode reviewers, measured on the TH08 build
 (dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture).
