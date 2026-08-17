@@ -1223,7 +1223,6 @@ export class StageRuntime {
     // again when the manager reaches it later in the same pass.
     this.updateMovementController(e, tailRate);
     this.updateAutoShoot(game, e);
-    if (s.th08) this.updateTh08AutoFire(game, e);
     this.updateAnmPose(e);
     // Armed op122 and op27 slots are HP-gated and run after dispatch, so an
     // instruction armed at t0 takes effect during this same allocation core.
@@ -1232,6 +1231,12 @@ export class StageRuntime {
       this.tickInterpSlots(game, e);
     }
     if (advanceClock) this.advanceEclClock(s, tailRate);
+    // TH08's auto-fire (FUN_00423150) runs in the interpreter's unwind path
+    // AFTER the frame clock's tick (all.c:10775-10786): when the clock
+    // reaches the deadline during this tick's advance, the exe fires on this
+    // same tick. Evaluating before the advance fired every volley one tick
+    // late.
+    if (s.th08) this.updateTh08AutoFire(game, e);
     this.updateHighSpellBombCollisionGate(game, e);
   }
 
