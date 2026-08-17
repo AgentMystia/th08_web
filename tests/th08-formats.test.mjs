@@ -155,14 +155,17 @@ test('TH08 T8RP decrypts, decompresses, and exposes wide stage records', { skip:
   assert.equal(stage.stage, 1);
   assert.equal(stage.offset, 0x134);
   assert.equal(stage.rngSeed, 0x8fbe);
-  assert.equal(stage.inputs.length, 5245);
-  assert.equal(stage.inputHigh.length, 5245);
+  // v6 stage blocks are {0x24-byte metadata, N x u16 input words} — 10504
+  // frame records for stage 1 (cross-validated by the 352-byte slowdown
+  // trailer: 1 lead byte + ceil(10504/30) = 351 bucket bytes).
+  assert.equal(stage.inputs.length, 10504);
+  assert.equal(stage.inputHigh.length, 0);
   assert.equal(stage.clockTime, 0);
   assert.deepEqual(
     ['score', 'pointItems', 'graze', 'pointItemExtends', 'nextPointItemExtendThreshold', 'pointItemValue', 'youkaiGauge', 'power', 'lives', 'bombs', 'rank', 'character']
       .map((key) => stage[key]),
     [0x708c8f, 0, 0, 0, 100, 300000, 0, 0, 6, 3, 8, 0]
   );
-  assert.equal(stage.slowdown.length, Math.ceil(5245 / 30));
+  assert.equal(stage.slowdown.length, Math.ceil(10504 / 30));
   assert.equal(stage.slowdown[0], 0x3c);
 });

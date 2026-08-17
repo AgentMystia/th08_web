@@ -16,7 +16,10 @@ const TH08_RAW_HEADER_SIZE = 0x68;
 const STAGE_SLOTS = 7; // 1-6 + Extra; Phantasm replays use th7_udXXXX slots too
 const TH08_STAGE_SLOTS = 9;
 const SUBHEADER_SIZE = 0x2c;
-const TH08_SUBHEADER_SIZE = 0x40;
+// T8RP stage metadata is 0x24 bytes (score..clock at +0x00..+0x22); frame
+// records follow immediately. The old 0x40 value came from a block-size
+// coincidence (0x40 + 5245*4 exactly fit stage 1) and misread every input.
+const TH08_SUBHEADER_SIZE = 0x24;
 export const MAX_RPY_BYTES = 16 * 1024 * 1024;
 
 // Bits of the per-frame input word (a verbatim copy of DAT_004afe2c made by
@@ -391,13 +394,21 @@ export class Rpy {
     if (offset + TH08_SUBHEADER_SIZE > end || end > v.length) {
       throw new Error(`T8RP stage ${stage} block out of bounds (${offset}..${end})`);
     }
-    const frames = Math.floor((end - offset - TH08_SUBHEADER_SIZE) / 4);
+    // Th08.exe v1.00d replay stage blocks are {0x24-byte metadata, then N x
+    // u16 input words} — v6 replays have NO per-frame aux word. Evidence:
+    // the recorder (FUN_00452310) writes one u16 per frame and the playback
+    // feed (FUN_00452550) strides 2; the stage-entry hook starts the record
+    // cursor at block+0x24 (all.c:40991). The stride-6 feed FUN_004526c0 is
+    // selected only for pre-v6 replay images (all.c:40683-40685). Frame
+    // counts cross-validate against the slowdown trailer: one bucket byte
+    // per 30 frames + a 1-byte lead (stage 1: 10510 records -> 351 buckets,
+    // 352-byte trailer region).
+    const frames = Math.floor((end - offset - TH08_SUBHEADER_SIZE) / 2);
     const inputs = new Uint16Array(frames);
-    const inputHigh = new Uint16Array(frames);
     for (let f = 0; f < frames; f++) {
-      inputs[f] = v.u16(offset + TH08_SUBHEADER_SIZE + f * 4);
-      inputHigh[f] = v.u16(offset + TH08_SUBHEADER_SIZE + f * 4 + 2);
+      inputs[f] = v.u16(offset + TH08_SUBHEADER_SIZE + f * 2);
     }
+    const inputHigh = new Uint16Array(0);
     const score = v.u32(offset);
     const pointItems = v.u32(offset + 0x04);
     const graze = v.u32(offset + 0x08);

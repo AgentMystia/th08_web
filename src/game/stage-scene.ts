@@ -787,6 +787,10 @@ export class StageScene implements GameHost {
       this.runState = new Th08RunState(difficulty);
       this.cancelItemType = 'time';
       this.effectPoolCap = EFFECT_POOL_CAP_TH08;
+      // Th08.exe rank table @ DAT_004c7880 ({init, min, max} per difficulty,
+      // read from the binary): E/N 10/8/16, H/L 8/8/12, Extra 16/15/16.
+      // TH07's 16-start + Lunatic [10,32] bounds do not apply.
+      this.rank = difficulty <= 1 ? 10 : difficulty <= 3 ? 8 : 16;
     } else {
     this.cherry = new CherrySystem(
       {
@@ -1230,9 +1234,16 @@ export class StageScene implements GameHost {
     // Th07.exe FUN_0042db77/FUN_0042dbf3 @ 0x42db77/0x42dbf3.
     // Difficulty rows {start,min,max}: E 16/12/20; N/H/L 16/10/32;
     // Extra/Phantasm 16/15/16 (table @ 0x4955a8).
-    const bounds = this.difficulty === 0 ? { min: 12, max: 20 }
-      : this.difficulty <= 3 ? { min: 10, max: 32 }
-        : { min: 15, max: 16 };
+    // TH08 (FUN_0043bfc3/FUN_0043c03f, same /100 accumulator) clamps to its
+    // own table @ DAT_004c7880: E/N min 8 max 16, H/L min 8 max 12,
+    // Extra 15/16.
+    const bounds = this.runState
+      ? this.difficulty <= 1 ? { min: 8, max: 16 }
+        : this.difficulty <= 3 ? { min: 8, max: 12 }
+          : { min: 15, max: 16 }
+      : this.difficulty === 0 ? { min: 12, max: 20 }
+        : this.difficulty <= 3 ? { min: 10, max: 32 }
+          : { min: 15, max: 16 };
     this.rankAccumulator += Math.trunc(delta);
     while (this.rankAccumulator >= 100) {
       this.rank++;
@@ -1903,7 +1914,11 @@ export class StageScene implements GameHost {
     const instructions = raw.map((ins) => ({
       time: ins.time,
       op: ins.op,
-      args: ins.op === 1 || ins.op === 2
+      // Ops 1/2/5 all carry the packed i16 pair (slot low, script/expression
+      // high) — the parser splits them into portrait/script. Passing the
+      // generic i32 args for op 5 handed the machine a packed 0x50000-style
+      // dword as the slot and crashed the intro conversation's tail.
+      args: ins.op === 1 || ins.op === 2 || ins.op === 5
         ? [ins.portrait ?? 0, ins.script ?? 0]
         : ins.op === 15
           ? [ins.slot ?? 0, ...(ins.interrupts ?? [-1, -1, -1, -1])]
@@ -1969,6 +1984,11 @@ export class StageScene implements GameHost {
           break;
         case 'game-mode':
           // op22 restarts the entry with the new ownership side.
+          break;
+        case 'resume-ticket':
+          // op6: releases the timeline's op-7 dialogue hold for one pass
+          // (RunMsg msg+0x22d78; the boss-entry ECL resumes mid-conversation).
+          this.dialogueResume = true;
           break;
         case 'done':
           this.th08Dialogue = null;

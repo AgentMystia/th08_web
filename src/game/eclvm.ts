@@ -229,8 +229,13 @@ const TH08_OP_REMAP: Record<number, number> = {
   4: 2, 5: 3,                       // jump, loop
   6: 4, 7: 5,                       // setInt/setFloat var
   8: 10, 9: 11,                     // random-sign assigns
-  10: 12, 11: 13, 12: 14, 13: 15, 14: 16, // int arith-assign
-  15: 19, 16: 20, 17: 21, 18: 22, 19: 23, // float arith-assign (19 = fmod)
+  // NOT 10-19: TH08's arith ops are TWO-OPERAND compound assigns
+  // (dst op= arg1; exe cases 9-0x12, all.c:10884-10990+) while TH07's 12-16/
+  // 19-23 are three-operand (dst = lhs op rhs). Remapping them read a phantom
+  // third operand from the NEXT instruction's header and overwrote the target
+  // (float *= with a zero time-field zeroed the var — Sub0's fairy curve
+  // targets collapsed to (0,0)); executeTh08 cases 10-19 implement the native
+  // in-place forms.
   30: 17, 31: 18,                   // inc/dec
   32: 24, 33: 25,                   // sin, cos
   34: 26,                           // atan2 (identical 5-arg order)
@@ -533,7 +538,14 @@ export class StageRuntime {
       // authored wait locally by cancelling this tail increment while the
       // message manager is active; op 8 starting a message must not freeze
       // the clock on its own.
-      if (!held) cursor.frame += rate;
+      // TH08 DIFFERS: its hold events (op 7 dialogue-hold, op 10 boss-hold,
+      // op 13 latch-park) all `goto LAB_0042ad52` in FUN_0042a8a0, which
+      // advances the timeline clock while the cursor stays parked
+      // (all.c:20320-20339, 20358-20369). Parking the clock instead made the
+      // stage-1 boss intro land midboss-death + 1236 frames instead of
+      // immediately after it (every event between the two holds had already
+      // gone due on the native clock).
+      if (!held || this.ecl.version === 8) cursor.frame += rate;
     }
   }
 
@@ -641,7 +653,10 @@ export class StageRuntime {
         game.startDialogue?.(evt.i0 ?? 0);
         return null;
       case 7:
-        // Hold while the message manager is active (FUN_0043587e).
+        // Hold while the message manager is active (FUN_0043587e) — but the
+        // predicate includes the op-6 resume ticket: msg+0x22d78 > 0 releases
+        // the hold for one pass while the conversation keeps playing.
+        if (game.consumeDialogueResume?.()) return null;
         return game.isDialogueActive?.() ? 'hold' : null;
       case 8: {
         // Boss interrupt write: bossSlots[i0].+0x2d30 = (u16)i1.
@@ -2484,7 +2499,10 @@ export class StageRuntime {
     const speed1 = gf(3);
     const angle2 = gf(6);
     const speed2 = gf(4);
-    const flags = gi(8);
+    // The captured image holds 11 dwords (3 header + 8 args); flags are arg 7
+    // = raw[10], the last dword. Reading raw[11] yielded undefined|0 = 0 and
+    // silently stripped every auto-fired volley's spawn-state/sfx/gate bits.
+    const flags = gi(7);
     if ((flags & 0x8000) !== 0 && (t.flags & 0x800) === 0) return;
     if ((flags & 0x10000) !== 0 && (t.flags & 0x800) !== 0) return;
     if (t.suppressRadiusSq > 0) {
@@ -4155,7 +4173,15 @@ export class StageRuntime {
     // (all.c:14309; the callback-entry tail repeats it at 14384).
     s.periodicSub = null;
 
-    const mode = s.deathMode & 7;
+    const mode = this.ecl.version === 8 && s.th08
+      // TH08's death mode lives in the exe's enemy+0x3324 bits 20-22, written
+      // by ins_129 (the death switch at all.c:21639 reads (flags>>0x14)&7).
+      // The TH07 deathMode field is never written on the TH08 path — reading
+      // it forced every TH08 death to mode 0, which skipped the death
+      // callback: the stage-1 midboss (ins_129(2)) never ran sub18, so her
+      // spell never ended and the boss sequence never started.
+      ? (s.th08.flags >> 20) & 7
+      : s.deathMode & 7;
     // all.c:14318-14323 clears presence for boss modes 0/1; case 3 clears it
     // unconditionally at all.c:14367. Mode 2 deliberately leaves it set.
     if (((mode === 0 || mode === 1) && s.isBoss) || mode === 3) {
@@ -4486,6 +4512,28 @@ export class StageRuntime {
         // value is retained for future evidence.
         this.th08ManagerTimer = gi(0);
         return null;
+      case 10: case 11: case 12: case 13: case 14: {
+        // int compound-assign (exe cases 9-0xd, all.c:10884-10944): the dest
+        // slot is arg0, the single source operand is arg1 — dst op= src.
+        const id = v.i32(a);
+        const cur = Math.trunc(this.varRead(game, e, id));
+        const rhs = gi(4);
+        const r = op === 10 ? cur + rhs : op === 11 ? cur - rhs : op === 12 ? cur * rhs
+          : op === 13 ? (rhs ? cur / rhs : 0) : (rhs ? cur % rhs : 0);
+        setIntVar(id, Math.trunc(r));
+        return null;
+      }
+      case 15: case 16: case 17: case 18: case 19: {
+        // float compound-assign (exe cases 0xe-0x12, all.c:10934-11000):
+        // dst op= src, one f32 store.
+        const id = Math.trunc(v.f32(a));
+        const cur = this.varRead(game, e, id, true);
+        const rhs = gf(4);
+        const r = op === 15 ? cur + rhs : op === 16 ? cur - rhs : op === 17 ? cur * rhs
+          : op === 18 ? (rhs ? cur / rhs : 0) : (rhs ? cur % rhs : 0);
+        setFloatVar(id, Math.fround(r));
+        return null;
+      }
       case 20: setIntVar(gi(0), gi(4) + gi(8)); return null;   // int a+b
       case 21: setIntVar(gi(0), gi(4) - gi(8)); return null;   // int a-b
       case 22: setIntVar(gi(0), gi(4) * gi(8)); return null;   // int a*b

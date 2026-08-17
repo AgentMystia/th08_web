@@ -83,6 +83,11 @@ export type Th08DialogueEvent =
   | { type: 'sound'; id: 12 }
   | { type: 'game-mode'; side: Th08DialogueSide }
   | { type: 'restart'; instructionIndex: 0 }
+  // op6: the ECL resume ticket. RunMsg increments msg+0x22d78, which releases
+  // the timeline's op-7 hold for exactly one update (the counter decrements
+  // at the head of every RunMsg tick) — the boss-entry ECL resumes while the
+  // conversation text keeps playing.
+  | { type: 'resume-ticket' }
   | { type: 'done' };
 
 interface PortraitState {
@@ -121,6 +126,12 @@ export class Th08DialogueMachine {
   private awaitingNewSpeakerBlock = true;
   private restartDelay = 0;
   private _done = false;
+  // op13 arms this (RunMsg case 0xd, gui-run-msg.c:228): while it is set and
+  // Ctrl (0x100) is held, RunMsg SetCurrents the message clock to the pending
+  // instruction's time at the top of every update (line 33-35) and bypasses
+  // the op4/op21 wait bodies outright — the recorded run's held-Ctrl burns
+  // through a full conversation in a handful of frames.
+  private skippable = false;
   private _ownershipSide: Th08DialogueSide = 0;
   private _gameMode: Th08DialogueSide = 0;
 
@@ -177,12 +188,17 @@ export class Th08DialogueMachine {
     // RunMsg evaluates every instruction at or before the split-clock value.
     // Op4/21 return from the middle of the loop while incomplete and do not
     // advance the clock for that scheduler frame.
+    const skipping = this.skippable
+      && (input & TH08_DIALOGUE_INPUT_BITS.fastForward) !== 0;
     for (let guard = 0; guard < 4096 && !this._done; guard++) {
       const instruction = this.instructions[this.instructionIndex];
       if (!instruction) {
         this.finish(events);
         return events;
       }
+      // The skip fast-forward: the clock jumps straight to the pending
+      // instruction's timestamp instead of creeping one frame per update.
+      if (skipping && instruction.time > this.clock) this.clock = instruction.time;
       if (instruction.time > this.clock) break;
 
       const args = instruction.args ?? [];
@@ -223,6 +239,12 @@ export class Th08DialogueMachine {
 
         case 4: {
           const duration = Math.max(0, args[0] ?? 0);
+          if (skipping) {
+            // Skippable + Ctrl: RunMsg's case-4 body is bypassed wholesale;
+            // the wait completes on the frame it is reached.
+            this.completeWait(events, duration, false);
+            break;
+          }
           const confirmed = (rising & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
             && this.waitCounter >= 30;
           if (this.waitCounter === 0 && duration > 0) {
@@ -328,6 +350,10 @@ export class Th08DialogueMachine {
           }
 
           const duration = Math.max(0, args[0] ?? 0);
+          if (skipping) {
+            this.completeWait(events, duration, false);
+            break;
+          }
           if (this.waitCounter === 0 && duration > 0) {
             events.push({ type: 'wait-start', duration });
           }
@@ -338,6 +364,16 @@ export class Th08DialogueMachine {
           this.completeWait(events, duration, false);
           break;
         }
+
+        case 13:
+          // RunMsg case 0xd: text-skippability flag (arg0 byte).
+          this.skippable = (args[0] ?? 0) !== 0;
+          break;
+
+        case 6:
+          // RunMsg case 6: msg+0x22d78 += 1 — the ECL resume ticket.
+          events.push({ type: 'resume-ticket' });
+          break;
 
         case 22: {
           // FUN_00439810 receives side+1, replaces the active MSG entry, and
