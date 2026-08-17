@@ -106,9 +106,21 @@ export class PlayerEffects {
       }
       if (!e.runner) {
         // The AnmRunner constructor executes the script's time-0
-        // instructions; the first update comes next frame.
-        if (this.anm.hasScript(e.scriptId)) e.runner = new AnmRunner(this.anm, e.scriptId);
-        else e.age = e.ttl = 0; // unknown script: cull quietly
+        // instructions; the first update comes next frame. Multi-entry player
+        // anm (TH08 player00: entry 1 holds the bomb art at spriteBase 44 —
+        // its on-disk script ids 19-22 and local sprite refs both need the
+        // entry's base) resolves to the owning entry so sprite refs land in
+        // the right table.
+        if (this.anm.hasScript(e.scriptId)) {
+          let opts: ConstructorParameters<typeof AnmRunner>[2];
+          for (let i = 0; i < this.anm.entries.length; i++) {
+            if (this.anm.hasScriptInEntry(i, e.scriptId)) {
+              opts = { entryIndex: i, spriteIndexOffset: this.anm.entries[i].spriteBase };
+              break;
+            }
+          }
+          e.runner = new AnmRunner(this.anm, e.scriptId, opts);
+        } else e.age = e.ttl = 0; // unknown script: cull quietly
         continue;
       }
       e.runner.update(rate);

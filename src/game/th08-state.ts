@@ -18,14 +18,14 @@ export class Th08RunState {
   totalTimeOrbs = 0;
   stageTimeOrbs = 0;
   gaugeLocked = false;
-  private readonly gaugeEffectThresholds: readonly [number, number];
+  // Border Team config (Player::AddedCallback @ 0x44d9ee-0x44da22, team 0):
+  // limits ±10000, effects thresholds ±8000, tint thresholds ±2000. The
+  // other teams/solos narrow these (0x44da30+); not reachable in this slice.
+  private readonly gaugeLimits: readonly [number, number] = [-10000, 10000];
+  private readonly gaugeEffectThresholds: readonly [number, number] = [-8000, 8000];
+  private readonly gaugeTintThresholds: readonly [number, number] = [-2000, 2000];
 
-  constructor(
-    readonly difficulty: number,
-    private readonly gaugeLimits: readonly [number, number] = [-10000, 10000],
-    gaugeEffectThresholds: readonly [number, number] = [-8000, 8000]
-  ) {
-    this.gaugeEffectThresholds = gaugeEffectThresholds;
+  constructor(readonly difficulty: number) {
     this.updatePointItemExtendThreshold();
   }
 
@@ -70,6 +70,57 @@ export class Th08RunState {
 
   gaugeIsExtremelyYoukai(): boolean {
     return this.youkaiGauge >= this.gaugeEffectThresholds[1];
+  }
+
+  // The player update's gauge block (0x44bdf0-0x44c012). While the shot
+  // cycle is ARMED (including release inertia), the focus state has been
+  // stable >= 30 frames, no dialogue, not frozen and no bomb: the gauge
+  // moves toward the firing side at 20/frame, or focusTimer/15 once the
+  // clock since the last focus toggle passes 300 frames (0x44be67:
+  // counter <= 300 ? 20.0 : counter/15, ftol'd, negated when unfocused).
+  gaugeFireDrift(focused: boolean, focusTimer: number): number {
+    const amount = focusTimer <= 300 ? 20 : Math.trunc(focusTimer / 15);
+    return focused ? amount : -amount;
+  }
+
+  // The idle branch (0x44bef9-0x44c007): cycle disarmed for >= 30 frames
+  // and the gauge off zero — it drifts back toward the center by depth.
+  // Youkai side (0x44bf6b): >= tint(+2000) -> -5, >= 1 -> -2 (the -3
+  // effects-tier branch is dead code at team-0 thresholds, shallower tint
+  // shadows it). Human side (0x44bfa5): <= effects(-8000) -> +5,
+  // <= tint(-2000) -> +3, else +2.
+  gaugeIdleDrift(): number {
+    const g = this.youkaiGauge;
+    if (g >= this.gaugeTintThresholds[1]) return -5;
+    if (g >= 1) return -2;
+    if (g <= this.gaugeEffectThresholds[0]) return 5;
+    if (g <= this.gaugeTintThresholds[0]) return 3;
+    return 2;
+  }
+
+  // Dialogue start (0x42b1e5-0x42b228, the boss-conversation path of the
+  // enemy death settlement): gauge += trunc(-gauge / 12).
+  gaugeDialoguePull(): number {
+    return Math.trunc(-this.youkaiGauge / 12);
+  }
+
+  // Enemy kill (0x42d65c-0x42d682, right before the death-mode switch):
+  // unfocused -200 (toward human), focused +200 (toward youkai).
+  gaugeKillDelta(focused: boolean): number {
+    return focused ? 200 : -200;
+  }
+
+  // Graze (0x44aa78): +100 per graze event.
+  gaugeGrazeDelta(): number {
+    return 100;
+  }
+
+  // Graze counter increment (0x44a930 head): +1, +2 past the human tint,
+  // +3 past the human effects threshold.
+  grazeCounterIncrement(): number {
+    if (this.youkaiGauge <= this.gaugeEffectThresholds[0]) return 3;
+    if (this.youkaiGauge <= this.gaugeTintThresholds[0]) return 2;
+    return 1;
   }
 
   addScore(award: number): number {

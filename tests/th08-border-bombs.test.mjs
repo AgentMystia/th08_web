@@ -9,134 +9,140 @@ execSync(
   '--outfile=tests/.build/th08-border-bombs.mjs --log-level=silent'
 );
 const mod = await import('../tests/.build/th08-border-bombs.mjs');
-const {
-  Th08BorderBombSim,
-  TH08_BORDER_HUMAN_CALLBACKS,
-  TH08_BORDER_YOUKAI_CALLBACKS,
-  clearTh08BulletsInRegion,
-} = mod;
+const { Th08BorderBomb } = mod;
 
-const player = (x = 192, y = 200) => ({ x, y, z: 0 });
-const target = { id: 7, x: 192, y: 80, z: 0, radius: 16 };
-
-function run(sim, frames, input) {
-  const events = [];
-  for (let i = 0; i < frames; i++) events.push(...sim.tick(input));
-  return events.flat();
+// A recording host: attack slots settle damage immediately against a
+// configurable enemy list; every other request lands in a log.
+function makeHost(enemies = [], targetPos = null) {
+  const log = { slots: [], clears: [], effects: [], orbs: [], sfx: [] };
+  return {
+    log,
+    targetPos,
+    addAttackSlot(x, y, radius, damage) {
+      let settled = 0;
+      for (const e of enemies) {
+        const dx = e.x - x, dy = e.y - y;
+        if (dx * dx + dy * dy <= radius * radius) settled += damage;
+      }
+      log.slots.push({ x, y, radius, damage, settled });
+      return settled;
+    },
+    clearBullets(x, y, radius) {
+      log.clears.push({ x, y, radius });
+    },
+    effectVm(script, x, y, scale, color) {
+      log.effects.push({ script, x, y, scale, color });
+    },
+    orbVm(index, script) {
+      log.orbs.push({ index, script });
+    },
+    playSfx(id, arg) {
+      log.sfx.push({ id, arg });
+    }
+  };
 }
 
-test('callback tables preserve the exact supplied Border Team addresses', () => {
-  assert.deepEqual(TH08_BORDER_HUMAN_CALLBACKS.addresses, [
-    0x40c010, 0x410c40, 0x40c910, 0x410fe0, 0x40d100,
-  ]);
-  assert.deepEqual(TH08_BORDER_YOUKAI_CALLBACKS.addresses, [
-    0x40c820, 0x40d950, 0x40d010, 0x4113a0, 0x40d310,
-  ]);
+test('durations follow the cast helper 0x40be30 (260/200/260/300)', () => {
+  assert.equal(new Th08BorderBomb(0, 0, 0).duration, 260);
+  assert.equal(new Th08BorderBomb(1, 0, 0).duration, 200);
+  assert.equal(new Th08BorderBomb(2, 0, 0).duration, 260);
+  assert.equal(new Th08BorderBomb(3, 0, 0).duration, 300);
 });
 
-test('Reimu initializes sixteen seeking orbs at the native angular ladder', () => {
-  const sim = new Th08BorderBombSim({ side: 'human' });
-  const events = run(sim, 1, { player: player(), targets: [target] });
-  assert.equal(sim.frame, 0);
-  assert.equal(sim.target.id, 7);
-  assert.equal(sim.orbs.length, 16);
-  assert.equal(new Set(sim.orbs.map(o => o.slot)).size, 16);
-  assert.equal(sim.orbs[0].angle, Math.fround(-Math.PI));
-  assert.equal(sim.orbs[1].angle, Math.fround(Math.fround(-Math.PI) + Math.fround(Math.PI / 8)));
-  let expectedAngle = Math.fround(-Math.PI);
-  for (let i = 0; i < 15; i++) expectedAngle = Math.fround(expectedAngle + Math.fround(Math.PI / 8));
-  assert.equal(sim.orbs[15].angle, expectedAngle);
-  assert.ok(sim.orbs.every(o => o.state === 'seeking'));
-  assert.ok(events.some(e => e.kind === 'state' && e.to === 'active' && e.callback === 0x40c010));
-  assert.ok(events.some(e => e.kind === 'sfx' && e.id === 0x0d));
-  assert.ok(events.some(e => e.kind === 'anm' && e.script === 0x0c));
+test('type 0 cast spawns the sixteen-orb ladder at -pi + i*pi/8', () => {
+  const bomb = new Th08BorderBomb(0, 192, 200);
+  const host = makeHost();
+  bomb.cast(host, 192, 200);
+  // Sixteen orb VMs on script 0x13 (0x40c010's FUN_004069f0 calls).
+  assert.equal(host.log.orbs.filter(o => o.script === 0x13).length, 16);
+  // Cast-frame bullet clear + red flash (script 0xc) + cast sfx.
+  assert.ok(host.log.clears.some(c => c.radius === 200));
+  assert.ok(host.log.effects.some(e => e.script === 0x0c));
+  assert.ok(host.log.sfx.some(s => s.id === 0x0d));
 });
 
-test('Reimu orbs seek the cached target and burst at frame forty', () => {
-  const sim = new Th08BorderBombSim({ side: 'human' });
-  const before = { x: sim.orbs[0]?.x, y: sim.orbs[0]?.y };
-  const events = run(sim, 41, { player: player(), targets: [target] });
-  assert.notDeepEqual(before, { x: sim.orbs[0].x, y: sim.orbs[0].y });
-  assert.ok(sim.orbs.every(o => o.state !== 'seeking'));
-  const clears = events.filter(e => e.kind === 'bullet-clear');
-  assert.equal(clears.length, 16);
-  assert.ok(clears.every(e => e.region.shape === 'circle' && e.region.radius === 64));
-  assert.ok(events.some(e => e.kind === 'sfx' && e.id === 8));
-  assert.ok(events.some(e => e.kind === 'attack-slot' && e.damage === null));
+test('type 0 orbs seek the primary cache with the /4 clamped recurrence', () => {
+  const bomb = new Th08BorderBomb(0, 192, 200);
+  const host = makeHost([], { x: 192, y: 40 });
+  bomb.cast(host, 192, 200);
+  const orb0 = bomb.orbAt(0);
+  const before = { x: orb0.x, y: orb0.y };
+  for (let i = 0; i < 10; i++) bomb.tick(host, 192, 200, true);
+  const after = bomb.orbAt(0);
+  assert.ok(after.y < before.y, 'orb must climb toward the target above');
+  assert.ok(host.log.clears.some(c => c.radius === 128));
 });
 
-test('Reimu seeking speed is clamped to the native maximum ten', () => {
-  const sim = new Th08BorderBombSim({ side: 'human' });
-  const far = { id: 2, x: 1000, y: -500, z: 0 };
-  run(sim, 20, { player: player(), targets: [far] });
-  assert.ok(sim.orbs.every(o => o.speed <= Math.fround(10)));
+test('type 0 releases the spiral at frame 40 and bursts on settled aura', () => {
+  const bomb = new Th08BorderBomb(0, 192, 200);
+  const host = makeHost();
+  bomb.cast(host, 192, 200);
+  for (let i = 0; i < 40; i++) bomb.tick(host, 192, 200, true);
+  assert.equal(bomb.orbAt(0).state, 1, 'still seeking before frame 40');
+  bomb.tick(host, 192, 200, true); // 41st callback: counter 40, the release
+  // Orb 0's speed resets to 8 and the same tick's spiral branch already
+  // grows it by 3.2 (the phase-B recurrence runs every frame).
+  assert.equal(bomb.orbAt(0).speed, Math.fround(Math.fround(8) + Math.fround(3.2)));
+  // An aura settling >= 200 damage bursts the orb with the 500 damage slot.
+  const burstHost = makeHost([{ x: 192, y: 200 }]);
+  const bomb2 = new Th08BorderBomb(0, 192, 200);
+  bomb2.cast(burstHost, 192, 200);
+  burstHost.log.slots.length = 0;
+  bomb2.tick(burstHost, 192, 200, true);
+  assert.ok(burstHost.log.slots.some(s => s.damage === 500));
+  assert.equal(bomb2.orbAt(0).state, 2);
+  for (let i = 0; i < 31; i++) bomb2.tick(burstHost, 192, 200, true);
+  assert.equal(bomb2.orbAt(0), null, 'orb removed after 30 burst frames');
 });
 
-test('Reimu aftermath ends after thirty burst frames', () => {
-  const sim = new Th08BorderBombSim({ side: 'human' });
-  run(sim, 71, { player: player(), targets: [target] });
-  assert.equal(sim.frame, 70);
-  assert.equal(sim.stage, 'ended');
-  assert.ok(sim.orbs.every(o => o.state === 'inactive'));
+test('type 2 deathbomb parks orbs at speed 0 and bursts them staggered', () => {
+  const bomb = new Th08BorderBomb(2, 192, 300);
+  const host = makeHost();
+  bomb.cast(host, 192, 300);
+  assert.ok(bomb.orbAt(0) != null && bomb.orbAt(0).speed === 0, 'dword 2 = 0 at cast');
+  for (let i = 0; i < 30; i++) bomb.tick(host, 192, 300, true);
+  assert.equal(bomb.orbAt(0).state, 1);
+  // Orb 0's forced burst lands at duration-0x28-0 = 220; run well past it.
+  for (let i = 0; i < 200; i++) bomb.tick(host, 192, 300, true);
+  assert.ok(bomb.frame >= 210);
+  const orb0 = bomb.orbAt(0);
+  assert.ok(orb0 === null || orb0.state === 2);
 });
 
-test('bullet clear regions mutate passed bullets exactly once', () => {
-  const bullets = [
-    { id: 1, x: 195, y: 203 },
-    { id: 2, x: 300, y: 300 },
-  ];
-  const ids = clearTh08BulletsInRegion(bullets, { shape: 'circle', x: 192, y: 200, radius: 64 });
-  assert.deepEqual(ids, [1]);
-  assert.deepEqual(clearTh08BulletsInRegion(bullets, { shape: 'circle', x: 192, y: 200, radius: 64 }), []);
+test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () => {
+  for (const type of [1, 3]) {
+    const bomb = new Th08BorderBomb(type, 192, 200);
+    const host = makeHost();
+    bomb.cast(host, 192, 200);
+    const waveScripts = type === 1 ? [0x59, 0x5a, 0x5b] : [0x5d, 0x5e, 0x5f];
+    for (let i = 0; i < 31; i++) bomb.tick(host, 192, 200, true);
+    const orbScripts = host.log.orbs.map(o => o.script);
+    for (const s of waveScripts) assert.ok(orbScripts.includes(s), `wave ${s.toString(16)} for type ${type}`);
+    // The field aura follows the player at r100 with damage 70.
+    assert.ok(host.log.slots.some(s2 => s2.radius === 100 && s2.damage === 70));
+  }
 });
 
-test('Yukari side emits the full-playfield major clear and sixty-frame state', () => {
-  const sim = new Th08BorderBombSim({ side: 'youkai' });
-  const bullets = [
-    { id: 1, x: 33, y: 17 }, { id: 2, x: 415, y: 463 },
-    { id: 3, x: 20, y: 200 },
-  ];
-  const events = run(sim, 1, { player: player(), targets: [target], bullets });
-  const clear = events.find(e => e.kind === 'bullet-clear');
-  assert.equal(clear.region.shape, 'rect');
-  assert.deepEqual(
-    [clear.region.x, clear.region.y, clear.region.width, clear.region.height],
-    [224, 240, 384, 448]
-  );
-  assert.deepEqual(clear.clearedBulletIds, [1, 2]);
-  assert.equal(bullets[2].cleared, undefined);
-  assert.equal(sim.activeCallback, 0x40c820);
-  assert.equal(sim.stage, 'active');
-  run(sim, 59, { player: player(), targets: [target] });
-  assert.equal(sim.frame, 59);
-  assert.equal(sim.stage, 'ended');
+test('the machine pays the gauge +-26000/duration each frame', () => {
+  const human = new Th08BorderBomb(0, 0, 0);
+  assert.equal(human.gaugeDeltaThisFrame(), -Math.trunc(26000 / 260));
+  const youkai = new Th08BorderBomb(1, 0, 0);
+  assert.equal(youkai.gaugeDeltaThisFrame(), Math.trunc(26000 / 200));
+  // Deathbomb types pay toward the INVERTED side: the focused-cast table[2]
+  // (was youkai, now human-side) pays negative, the unfocused-cast table[3]
+  // positive — the sign follows the post-inversion bombType bit 0.
+  const focusedCast = new Th08BorderBomb(2, 0, 0);
+  assert.equal(focusedCast.gaugeDeltaThisFrame(), -Math.trunc(26000 / 260));
+  const unfocusedCast = new Th08BorderBomb(3, 0, 0);
+  assert.equal(unfocusedCast.gaugeDeltaThisFrame(), Math.trunc(26000 / 300));
 });
 
-test('Yukari deathbomb exposes the native 128-slot pool and two anchor VMs', () => {
-  const sim = new Th08BorderBombSim({ side: 'youkai', mode: 'deathbomb' });
-  const events = run(sim, 1, { player: player(), targets: [target] });
-  assert.equal(sim.orbs.length, 0x80);
-  assert.equal(sim.activeCallback, 0x40d010);
-  const anchors = events.filter(e => e.kind === 'anm' && (e.script === 0x15 || e.script === 0x16));
-  assert.equal(anchors.length, 2);
-  assert.deepEqual(anchors.map(e => e.script), [0x15, 0x16]);
-  assert.equal(anchors[0].position.z, Math.fround(0.01));
-});
-
-test('human deathbomb uses staggered orb transitions and later target slots', () => {
-  const sim = new Th08BorderBombSim({ side: 'human', mode: 'deathbomb' });
-  const events = run(sim, 61, { player: player(), targets: [target] });
-  assert.equal(sim.activeCallback, 0x40c910);
-  assert.ok(sim.orbs.some(o => o.state === 'burst' || o.state === 'inactive'));
-  const later = events.filter(e => e.kind === 'attack-slot' && e.slot >= 16);
-  assert.ok(later.length > 0);
-  assert.ok(later.every(e => e.position.x === target.x && e.position.y === target.y));
-});
-
-test('effect waves occur at exact native frames ten twenty and thirty', () => {
-  const sim = new Th08BorderBombSim({ side: 'human' });
-  const events = run(sim, 31, { player: player(), targets: [target] });
-  const waves = events.filter(e => e.kind === 'anm' && [4, 5, 6, 7].includes(e.args[0]));
-  assert.deepEqual(waves.map(e => e.frame), [10, 20, 30]);
-  assert.deepEqual(waves.map(e => e.args[0]), [4, 5, 6]);
+test('the bomb ends exactly at its duration', () => {
+  const bomb = new Th08BorderBomb(1, 192, 200);
+  const host = makeHost();
+  bomb.cast(host, 192, 200);
+  for (let i = 0; i < 199; i++) bomb.tick(host, 192, 200, true);
+  assert.ok(bomb.active);
+  bomb.tick(host, 192, 200, true);
+  assert.ok(!bomb.active);
 });

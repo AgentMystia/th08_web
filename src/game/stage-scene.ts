@@ -20,7 +20,7 @@ import { PlayerEffects } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
-import { Th08BorderBombSim } from './th08-border-bombs';
+import { Th08BorderBomb, type Th08BombHost } from './th08-border-bombs';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import { TH08_HUD } from './th08-hud-layout';
@@ -659,7 +659,21 @@ export class StageScene implements GameHost {
   }));
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
   private bombRunner: BombRunner | null = null;
-  private th08Bomb: Th08BorderBombSim | null = null;
+  private th08Bomb: Th08BorderBomb | null = null;
+  // Enemy-manager target caches (Th08.exe writes them through the absolute
+  // globals 0x18b899c/0x18b89a8/0x18b89b4 in the per-enemy pass at
+  // 0x42d3d3-0x42d4df): the primary position cache prefers the LOWEST
+  // enemy (max y, first-slot tiebreak) and feeds the seeker tick
+  // (FUN_00450320) and the human bomb's orb seek; the pointer-cache pick
+  // (|x-224| <= 64, upper-most/first) feeds the familiar's lunge anchor and
+  // the needle shots' spawn aim (FUN_00450240 reads enemy+0x2d34/+0x2d38).
+  private th08TargetPos: { x: number; y: number } | null = null;
+  private th08LungeEnemy: { x: number; y: number } | null = null;
+  // Frames the shot cycle has stayed disarmed (the idle-drift 30-frame gate,
+  // 0x44bf22 Compare(timerB, 0x1e)).
+  private th08IdleFrames = 0;
+  // Bomb-orb visual follows for the PlayerEffects entries.
+  private th08BombOrbActors: { x: number; y: number; angle: number; state: number }[] = [];
   private bombContext!: BombContext;
   // Latched bomb duration (frames) for end-window checks (ReimuA focused's
   // final-30-frames detonation, etc.).
@@ -1931,6 +1945,51 @@ export class StageScene implements GameHost {
       machine: new Th08DialogueMachine(instructions, { ownershipSide: 0 }),
       runners: [null, null, null, null]
     };
+    // The enemy-death -> dialogue path (0x42b1e5) pulls the gauge one
+    // twelfth of the way back toward neutral when a conversation starts.
+    this.runState?.addYoukaiGauge(this.runState.gaugeDialoguePull());
+  }
+
+  // The enemy-manager target caches (0x42d3d3-0x42d4df): recomputed every
+  // frame after the enemy pass. Primary (player+0xe2aa4): the lowest enemy,
+  // max y with first-slot tiebreak. Pointer cache (player+0xe2abc): among
+  // enemies within +-64 of playfield center x (224), the upper-most/first —
+  // the familiar's lunge target and the needle shots' aim source.
+  private updateTh08TargetCaches(): void {
+    if (!this.runState) return;
+    let primary: { x: number; y: number } | null = null;
+    let lunge: { x: number; y: number } | null = null;
+    for (const e of this.enemies) {
+      if (e.dead || !e.ecl.interactable) continue;
+      if (!primary || e.y > primary.y) primary = { x: e.x, y: e.y };
+      if (Math.abs(e.x - 224) <= 64 && (!lunge || e.y < lunge.y)) lunge = { x: e.x, y: e.y };
+    }
+    this.th08TargetPos = primary;
+    this.th08LungeEnemy = lunge;
+    this.playerObj.th08LungeTarget = lunge;
+  }
+
+  // The player update's gauge block (0x44bdf0-0x44c012): fire drift while
+  // the shot cycle is armed and the focus state has been stable >= 30
+  // frames; idle drift back toward neutral once the cycle has been
+  // disarmed >= 30 frames. Gated off during dialogue and bombs.
+  private tickTh08Gauge(): void {
+    const run = this.runState;
+    if (!run) return;
+    const p = this.playerObj;
+    if (this.th08Bomb || this.isDialogueActive()) return;
+    const armed = p.fireFrame >= 0;
+    if (armed) {
+      this.th08IdleFrames = 0;
+      if (p.th08FocusFrames >= 30) {
+        run.addYoukaiGauge(run.gaugeFireDrift(p.focusHeld, p.th08FocusFrames));
+      }
+    } else {
+      this.th08IdleFrames++;
+      if (this.th08IdleFrames >= 30 && run.youkaiGauge !== 0) {
+        run.addYoukaiGauge(run.gaugeIdleDrift());
+      }
+    }
   }
 
   private updateTh08Dialogue(input: InputFrame): void {
@@ -2605,6 +2664,8 @@ export class StageScene implements GameHost {
     // enemies, movement/collision and ambient effects continue. The only
     // enemy-tail exception is the boss timer, gated in tickEnemyManagerTail.
     this.updateEnemies();
+    this.updateTh08TargetCaches();
+    this.tickTh08Gauge();
     if (this.focusEffectRunner && !this.focusEffectRunner.removed) {
       this.focusEffectRunner.update(this.slowRate);
     }
@@ -2690,15 +2751,20 @@ export class StageScene implements GameHost {
   private onBombUsed(): void {
     const p = this.playerObj;
     this.bombActiveThisFrame = true;
-    // TH08 Border Team: run the committed border-bomb simulation
-    // (Reimu/Human or Yukari/Youkai per the focus-latched side, the exe's
-    // five-callback address tables) instead of the TH07 bomb engine.
+    // TH08 Border Team: the bomb machine (0x44c650) dispatches ONE per-frame
+    // callback for the whole bomb from the table at player+0x1000 (rdata
+    // 0x4c7ad0 team block 0): 0x40c010 unfocused / 0x410c40 focused /
+    // 0x40c910+0x410fe0 the side-inverted deathbombs. Durations come from
+    // the shared cast helper 0x40be30 (260/200/260/300).
     if (this.runState) {
-      this.th08Bomb = new Th08BorderBombSim({
-        side: p.bombFocused ? 'youkai' : 'human',
-        mode: 'normal'
-      });
+      this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
+      this.th08BombOrbActors = [];
+      this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
+      p.bombTimer = this.th08Bomb.duration;
+      p.bombInvuln = this.th08Bomb.duration;
       this.playSfx(14);
+      // 0x44c773 FUN_0043c03f(200): every bomb cast lowers the rank by 200
+      // subrank points.
       this.adjustRank(-200);
       this.forceCollectAllItems();
       return;
@@ -2833,25 +2899,76 @@ export class StageScene implements GameHost {
     const sim = this.th08Bomb;
     if (!sim) return;
     const p = this.playerObj;
-    const targets = this.enemies
-      .filter((e) => !e.dead && e.ecl.interactable)
-      .map((e) => ({ x: e.x, y: e.y, z: e.z, id: e.id }));
-    const events = sim.tick({
-      player: { x: p.x, y: p.y, z: 0 },
-      targets,
-      bullets: this.enemyBullets.map((b, i) => ({ x: b.x, y: b.y, id: i, cleared: b.dead }))
-    });
-    for (const event of events) {
-      if (event.kind === 'bullet-clear') {
-        for (const id of event.clearedBulletIds) {
-          const bullet = this.enemyBullets[id];
-          if (bullet && !bullet.dead) {
-            bullet.dead = true;
-          }
-        }
+    sim.tick(this.th08BombHost(), p.x, p.y, p.shooting);
+    // Keep the orb visual actors on their simulation state.
+    for (let i = 0; i < 16; i++) {
+      const orb = sim.orbAt(i);
+      const actor = this.th08BombOrbActors[i];
+      if (orb && actor) {
+        actor.x = orb.x;
+        actor.y = orb.y;
+        actor.angle = orb.angle;
+        actor.state = orb.state;
       }
     }
-    if (sim.ended) this.th08Bomb = null;
+    // The machine pays ±26000/duration into the gauge every frame of the
+    // bomb, bypassing the lock (0x44c81b-0x44c850).
+    if (this.runState) this.runState.addYoukaiGauge(sim.gaugeDeltaThisFrame(), true);
+    if (!sim.active) {
+      this.th08Bomb = null;
+      this.th08BombOrbActors = [];
+    }
+  }
+
+  // The Th08BombHost adapter: attack slots settle damage/clears against the
+  // live pools; effect/orb requests ride the PlayerEffects layer.
+  private th08BombHost(): Th08BombHost {
+    const scene = this;
+    return {
+      get targetPos() {
+        return scene.th08TargetPos;
+      },
+      addAttackSlot(x, y, radius, damage) {
+        let settled = 0;
+        const r2 = radius * radius;
+        for (const e of scene.enemies) {
+          if (e.dead || !e.ecl.interactable) continue;
+          const dx = e.x - x;
+          const dy = e.y - y;
+          if (dx * dx + dy * dy <= r2) {
+            scene.damageEnemy(e, damage, 'bomb');
+            settled += damage;
+          }
+        }
+        // The slot consumer compares settled damage (slot +0x30) against the
+        // aura's threshold (+0x34) — return the settled total so the orb
+        // state machine can burst on time.
+        return settled;
+      },
+      clearBullets(x, y, radius) {
+        const r2 = radius * radius;
+        for (const b of scene.enemyBullets) {
+          if (b.dead) continue;
+          const dx = b.x - x;
+          const dy = b.y - y;
+          if (dx * dx + dy * dy <= r2) b.dead = true;
+        }
+      },
+      effectVm(script, x, y, scale, color) {
+        void scale; void color;
+        scene.playerEffects.spawn({ scriptId: script, x, y, ttl: 120 });
+      },
+      orbVm(index, script) {
+        const actor = scene.th08BombOrbActors[index] ?? (scene.th08BombOrbActors[index] = {
+          x: scene.playerObj.x, y: scene.playerObj.y, angle: 0, state: 1
+        });
+        scene.playerEffects.spawn({ scriptId: script, x: actor.x, y: actor.y, follow: actor, ttl: 300 });
+      },
+      playSfx(id, arg) {
+        void arg;
+        scene.playSfx(id === 0x0d ? 14 : id === 8 ? 8 : 30);
+      }
+    };
   }
 
   // Bomb visuals, per shot type, from the character's own playerXX.anm bomb
@@ -3383,11 +3500,12 @@ export class StageScene implements GameHost {
       if (b.state === 'fired') {
         if (b.tickFunc === 1 && this.runState) {
           // TH08 SHT tick callback 1 (FUN_00450320): the unfocused Border
-          // pair's per-frame seek. Gates on the shot's own age: past frame 39
-          // (0x27) the exe falls to the targetless branch (accelerate 1/3,
-          // clamp 10) even while a target is fresh.
+          // pair's per-frame seek against the PRIMARY position cache
+          // (player+0xe2aa4, the max-y enemy). Gates on the shot's own age:
+          // past frame 39 (0x27) the exe falls to the targetless branch
+          // (accelerate 1/3, clamp 10) even while a target is fresh.
           const seeker = this.th08SeekerFor(b);
-          seeker.update(b.age < 40 ? homingTarget : null);
+          seeker.update(b.age < 40 ? this.th08TargetPos : null);
           b.vx = Math.fround(seeker.vx);
           b.vy = Math.fround(seeker.vy);
           b.speed = seeker.speed;
@@ -3456,18 +3574,21 @@ export class StageScene implements GameHost {
     let playedShotSfx = false;
     for (const b of volley) {
       if (this.runState && b.behaviorFunc === 1) {
-        // TH08 SHT init callback 1 (FUN_00450240): with a cached target, the
-        // fresh shot's velocity rotates onto the target bearing plus the
-        // record's split offset — normalize(atan2 + rec.angle + pi/2), no RNG
-        // (FUN_0043edb0 is a pure [-pi,pi) wrap). ply00as uses -pi/2 (exact
-        // aim) at low power and ±0.03 rad splits higher up.
-        const target = this.homingAim;
+        // TH08 SHT init callback 1 (FUN_00450240): with the pointer-cache
+        // target, the fresh shot's velocity rotates onto the target bearing
+        // plus the record's split offset — normalize(atan2 + rec.angle +
+        // pi/2) — AND its speed scales x1.5 (FUN_004286e0's second arg reads
+        // record.speed * 0x4b4438). Without a target the record's plain
+        // velocity stands.
+        const target = this.th08LungeEnemy;
         if (target) {
           const spread = Math.fround(b.angle + Math.PI / 2);
           const aim = Math.fround(Math.atan2(target.y - b.y, target.x - b.x) + spread);
+          const speed = Math.fround(b.speed * 1.5);
           b.angle = aim;
-          b.vx = Math.fround(Math.cos(aim) * b.speed);
-          b.vy = Math.fround(Math.sin(aim) * b.speed);
+          b.speed = speed;
+          b.vx = Math.fround(Math.cos(aim) * speed);
+          b.vy = Math.fround(Math.sin(aim) * speed);
         }
       } else if (b.behaviorFunc === 4) this.aimBulletAtSpawn(b);
       else if (b.behaviorFunc === 5) {
@@ -4027,6 +4148,8 @@ export class StageScene implements GameHost {
       // income stream (all.c:36844-36862).
       const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
       if (!this.bombActiveThisFrame) this.graze++;
+      // 0x44aa78: every graze event pushes the gauge +100 (youkai-ward).
+      this.runState.addYoukaiGauge(this.runState.gaugeGrazeDelta());
       this.addScore(extreme ? 4000 : 2000);
       if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
         this.spawnItem('time2', sourceX, sourceY, {});
@@ -4237,6 +4360,11 @@ export class StageScene implements GameHost {
       if (!e.dead && e.hp <= 0) {
         const keep = this.runtime.killEnemy(this, e, bombContactThisFrame);
         if (!keep) e.dead = true;
+        // 0x42d65c: every enemy death settles the gauge toward the side the
+        // player is currently acting as (-200 unfocused / +200 focused).
+        if (this.runState) {
+          this.runState.addYoukaiGauge(this.runState.gaugeKillDelta(this.playerObj.focusHeld));
+        }
       }
       this.runtime.tickEnemyManagerTail(this, e);
       if (e.dead && this.enemySlots[slot] === e) {
@@ -5569,6 +5697,16 @@ export class StageScene implements GameHost {
       // Th07.exe layers the player sprite UNDER the enemy bullet/laser danmaku
       // (only the focus hitbox indicator, drawn later, sits on top).
       this.drawPlayerSprite(r, ox, oy);
+      // TH08 決死結界: while the deathbomb window runs, FUN_0044d2c0 calls
+      // FUN_0044de60(player, 768, 896, 0xffffffff, 0) every frame — a white
+      // full-playfield flash pulsing through the window (approximated as an
+      // every-other-frame overlay; the native draw is a screen-effect quad).
+      if (this.runState && this.playerObj.hitState && (this.frame & 1) === 0) {
+        r.ctx.globalAlpha = 0.5;
+        r.ctx.fillStyle = '#ffffff';
+        r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
+        r.ctx.globalAlpha = 1;
+      }
       this.drawLasers(r, ox, oy);
       // Player shots ride under the enemy-bullet danmaku so dense patterns
       // stay readable (Th07.exe layers player shot/laser below enemy bullets).
@@ -6644,18 +6782,23 @@ export class StageScene implements GameHost {
     // (native "825/3000"); the night clock itself advances at the tally.
     this.drawNumber(r, run.stageTimeOrbs, valueX, 184, 0, 1, TH08_ADV);
     r.text('/3000', valueX + 28, 184, { size: 12, color: '#ddd' });
-    // Human/youkai rate gauge at the playfield's bottom-left: percent readout,
-    // a split-center bar (human grey left / youkai periwinkle right) with the
-    // 人/妖 end markers, and the point-item value below.
+    // Human/youkai rate gauge at the playfield's bottom-left. Native layout
+    // (AsciiManager::InitializeVms): the bar spans 2x56px for +-10000 with
+    // the 人/妖 icons at the LIMIT positions and a cursor VM (script 8) at
+    // the live value; the fill reads grey (human) / periwinkle (youkai)
+    // and the extremes (|g| >= the 8000 effects threshold) drive the
+    // gauge VM's interrupt swap (bright state).
     {
       const gx = 66;
       const gy = 442;
-      const pct = (run.youkaiGauge / 100).toFixed(2) + '%';
-      r.text(pct, gx, gy - 8, { size: 11, color: run.youkaiGauge < 0 ? '#eee' : '#9cf' });
+      const g = run.youkaiGauge;
+      const extreme = Math.abs(g) >= 8000 && (this.frame & 3) < 2;
+      const pct = ((g < 0 ? '人' : g > 0 ? '妖' : '') + (Math.abs(g) / 100).toFixed(2) + '%');
+      r.text(pct, gx, gy - 8, { size: 11, color: extreme ? '#fff' : g < 0 ? '#eee' : '#9cf' });
       ctx.save();
       ctx.fillStyle = '#282028';
       ctx.fillRect(gx, gy, 112, 6);
-      const frac = Math.max(-1, Math.min(1, run.youkaiGauge / 10000));
+      const frac = Math.max(-1, Math.min(1, g / 10000));
       if (frac < 0) {
         ctx.fillStyle = 'rgba(232,232,232,0.9)';
         ctx.fillRect(gx + 56 + frac * 56, gy, -frac * 56, 6);
@@ -6663,6 +6806,14 @@ export class StageScene implements GameHost {
         ctx.fillStyle = 'rgba(140,160,255,0.85)';
         ctx.fillRect(gx + 56, gy, frac * 56, 6);
       }
+      // The +-8000 effects thresholds (0x164d304/0x164d306) mark where the
+      // extreme interrupts arm — draw them as faint notches.
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fillRect(gx + 56 - 44.8, gy, 1, 6);
+      ctx.fillRect(gx + 56 + 44.8, gy, 1, 6);
+      // The cursor caret at the live position.
+      ctx.fillStyle = extreme ? '#ffffff' : '#ffd070';
+      ctx.fillRect(gx + 56 + frac * 56 - 1, gy - 2, 2, 10);
       ctx.restore();
       r.text('人', gx - 14, gy - 2, { size: 11, color: '#eee' });
       r.text('妖', gx + 116, gy - 2, { size: 11, color: '#9cf' });

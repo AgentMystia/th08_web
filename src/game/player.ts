@@ -251,13 +251,28 @@ export class Player {
   // runs a per-frame 0.2-lerp toward (player.x, max(32, player.y - 96))
   // (FUN_0044e770) and snaps to that anchor on the focus-in intro state
   // (FUN_0044e3a0 state 1). Option-sourced SHT records spawn from this live
-  // position (player+0x6b0 read in the FUN_0044fb70 spawner). The option's
-  // enemy-lunge sub-states are flagged/unimplemented.
+  // position (player+0x6b0 read in the FUN_0044fb70 spawner).
   th08OptionX = 0;
   th08OptionY = 0;
   th08OptionLive = false;
   // The familiar's own ANM VM (player00 script 18), live only while focused.
   th08OptionRunner: AnmRunner | null = null;
+  // The enemy-lunge (FUN_0044e3a0 sub-state 3, entered from FUN_0044e770's
+  // tail when the shot cycle is armed, its counter >= 10, and the enemy
+  // manager's pointer cache 0x18b89b4 holds a target): the option's anchor
+  // switches to (enemy.x, max(32, enemy.y + 32)) via FUN_0044e8d0 — Ran
+  // herself flies onto the enemy while her needles pour out point-blank.
+  th08OptionLunge = false;
+  // Live anchor fed by the scene each frame from the enemy manager's pointer
+  // cache (the |x-224|<=64, upper-most enemy pick at 0x42d4a6).
+  th08LungeTarget: { x: number; y: number } | null = null;
+  // Frames since the last focus toggle (Timer player+0xe2ae8, Selected 0 at
+  // each transition, 0x44b1b1/0x44b404): drives the gauge fire-rate ramp
+  // (<=300 -> 20/frame, then counter/15, 0x44be67).
+  th08FocusFrames = 0;
+  // TH08 bomb type (player+0xfe0): 0 human / 1 youkai / 2|3 deathbomb (the
+  // side INVERTS before +2, 0x44c7f7). Latched by tryBomb.
+  th08BombType: 0 | 1 | 2 | 3 = 0;
   invulnFrames = 0;
   // Player state-3's timer is the native {integer current, f32 fraction}
   // pair at +0x16a08/+0x16a04, retreated through FUN_00436a06. Keeping one
@@ -375,11 +390,25 @@ export class Player {
     let bombEndedThisTick = false;
     this.updateFocusGlide(input.held.has('focus'), rate);
     if (this.character === 'reimuYukari') {
+      this.th08FocusFrames++;
       // The focused option follows its anchor with the exe's 0.2 lerp
-      // (FUN_0044e770); on focus-in it snaps to the anchor first.
-      const anchorX = this.x;
-      const anchorY = Math.max(32, Math.fround(this.y - 96));
+      // (FUN_0044e770); on focus-in it snaps to the anchor first. While the
+      // lunge trigger holds (FUN_0044e770 tail: cycle armed, counter >= 10,
+      // pointer-cache target alive) the anchor is the ENEMY (FUN_0044e8d0:
+      // enemy pos with y+32, clamped >= 32) instead of the player.
+      const lunging = this.focusHeld && this.th08OptionLive && this.th08LungeTarget != null &&
+        this.shooting && this.fireFrame >= 10;
       if (this.focusHeld) {
+        const anchorX = lunging ? this.th08LungeTarget!.x : this.x;
+        const anchorY = lunging
+          ? Math.max(32, Math.fround(this.th08LungeTarget!.y + 32))
+          : Math.max(32, Math.fround(this.y - 96));
+        if (lunging !== this.th08OptionLunge) {
+          this.th08OptionLunge = lunging;
+          // FUN_00407120(3) on entry, (1) on retreat — the familiar's spin
+          // interrupts (player00.anm script 18 labels).
+          this.th08OptionRunner?.interrupt(lunging ? 3 : 1);
+        }
         if (!this.th08OptionLive) {
           this.th08OptionX = anchorX;
           this.th08OptionY = anchorY;
@@ -396,6 +425,7 @@ export class Player {
       } else {
         this.th08OptionLive = false;
         this.th08OptionRunner = null;
+        this.th08OptionLunge = false;
       }
     }
     if (this.invulnFrames > 0) {
@@ -491,6 +521,9 @@ export class Player {
     let advancedOnReverse = false;
     if (focused !== this.focusHeld) {
       this.focusHeld = focused;
+      // Timer player+0xe2ae8 (the gauge fire-rate clock) re-arms to 0 at
+      // every focus transition (0x44b1b1/0x44b404).
+      this.th08FocusFrames = 0;
       // TH08 Border Team: the human/youkai sprite swap is immediate with
       // the focus flip (no 8-frame glide between different characters);
       // refresh the pose runner here since pose changes key off direction.
@@ -588,13 +621,14 @@ export class Player {
     const pose = movingLeft ? 'left' : movingRight ? 'right' : 'idle';
     if (pose === this.poseState) return;
     this.poseState = pose;
-    // TH08 Border Team (player00.anm, per reference/re-specs/th08-player.md):
-    // script 0 = the human (Reimu) pose, script 5 = the youkai (Yukari)
-    // pose; focus swaps them IMMEDIATELY (the SHT pair's unfocused/focused
-    // swap drives both sprite and speed in one branch). The four direction
-    // scripts TH07 uses are specific to that game's player art.
+    // TH08 Border Team (player00.anm): unfocused Reimu banks are the shared
+    // scripts 1/3 (mirrored); focused Yukari has her OWN bank family — the
+    // pose switch at 0x44b232+ selects scripts 6/8 for the left/right lean
+    // (transitions 7/9), with 0/5 the respective idles.
     if (this.character === 'reimuYukari') {
-      const script = this.focusHeld ? 5 : 0;
+      const script = this.focusHeld
+        ? (pose === 'left' ? 6 : pose === 'right' ? 8 : 5)
+        : (pose === 'left' ? 1 : pose === 'right' ? 3 : 0);
       if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
       return;
     }
@@ -833,6 +867,25 @@ export class Player {
     // the squish (meter 0), the materialize (zeroed each frame) and past the
     // end of the deathbomb window.
     if (this.bombs <= 0 || this.bombTimer > 0 || this.bombCooldown > 0 || this.deathbombMeter <= 0) return false;
+    if (this.character === 'reimuYukari') {
+      // TH08 bomb machine (0x44c650/0x44c71b-0x44c75f): bombType = focus
+      // byte; a deathbomb (cast from the hit state) INVERTS the side before
+      // adding 2 — focused-cast runs table[2] (0x40c910), unfocused-cast
+      // runs table[3] (0x410fe0). A deathbomb consumes TWO bombs when the
+      // stock has them (FUN_00439883(-2)), one when it does not.
+      const deathbomb = this.hitState;
+      const base = this.focusHeld ? 1 : 0;
+      this.th08BombType = (deathbomb ? 1 - base : base) as 0 | 1 | 2 | 3;
+      this.bombs -= deathbomb ? Math.min(this.bombs, 2) : 1;
+      this.hitState = false; // deathbomb rescue
+      this.deathbombMeter = Math.min(Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6);
+      // The frozen flag (player+0xfdc) owns invulnerability for exactly the
+      // bomb's duration; the duration comes from the cast helper (0x40be30:
+      // 260/200/260/300 by type) and is applied by the scene.
+      this.bombFocused = this.focusHeld;
+      this.bombSpeedMult = 1.0;
+      return true;
+    }
     this.bombs--;
     this.hitState = false; // deathbomb rescue
     // Every successful bomb bumps the meter min(N, meter+6) — a no-op at
