@@ -481,3 +481,41 @@ pin. Also verified this pass: our SHT parser's speed/diag/focused offsets
 (36/40/44/48 = exe 0x24/0x28/0x2c/0x30) and values (4/2/2.828/1.414) are
 exactly the fields FUN_0044aec0 reads — the player movement chain is
 byte-verified end to end. No behavior change landed (none was warranted).
+
+## 2026-08-18 native-trace attempt — empirically blocked by this host's wine build
+
+The completion review directed running scripts/native-trace.mjs. Executed
+in full; the game boots and renders under wine here, but every debugger
+route is structurally blocked by the wow64-only wine build (wine-10.0
+Ubuntu repack):
+
+1. PLAIN launch: `Xvfb + LIBGL_ALWAYS_SOFTWARE=1 + wine th08.exe` boots,
+   title renders (verified numerically: logo band bright 126 / texture
+   96%), but ONLY from the SECOND launch in a wineserver session (the
+   first is always a black-window 100%-CPU spin). The attract demo would
+   play from here — but a plain run yields no per-frame data.
+2. winedbg LAUNCH mode (`--gdb --port --no-start`): the stub and gdb
+   client work (breakpoints bind at 0x44d650/0x431240/0x44a230/0x422720),
+   but the debugger-spawned game always lands in the black busy-loop —
+   D3D8 init never completes under the debug spawn, so no breakpoint is
+   ever reached.
+3. winedbg ATTACH mode (fifo-driven internal gdb): breakpoints set and
+   memory reads work, but the first `cont` kills the game with
+   0xC0000005 inside the wow64 thunk (0xffd3961c) — suspending/resuming
+   wow64 threads corrupts their syscall emulation.
+4. The clean fix — a WINEARCH=win32 prefix (native 32-bit, no wow64) —
+   is refused by this build: "WINEARCH is set to 'win32' but this is not
+   supported in wow64 mode". ptrace_scope=1 is also read-only here, so
+   no direct gdb -p either.
+
+Recipe notes for a future capable host (kept in /tmp, not committed):
+warm the wineserver with one sacrificial launch before the real one;
+`winedbg --gdb <wpid>` needs a held-open fifo stdin or it exits on EOF;
+the stub port accepts exactly one gdb connection per session. The trace
+script /tmp/native-trace2.gdb holds the four breakpoints and the KILLBOX
+per-event dump format (frame, player pos, bullet pos/size/vel/state) —
+ready to run unchanged once a host can debug the game.
+
+The 7 phantom deaths therefore remain the documented residual; all
+static candidates were exhausted (three forensic passes, each with
+recorded disproofs), and the dynamic oracle is unavailable on this host.
