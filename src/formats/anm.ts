@@ -683,12 +683,19 @@ export class AnmRunner {
         // not a packed u32, and the exe's float-typed reads are a Ghidra
         // artifact (the data holds integer channel values). Reading a+8 as a
         // packed color collapsed white to 0x0000ff (solid-blue portraits).
+        // ANM v2 (TH07) keeps the packed-u32 layout.
+        const to = this.entryVersion === 3
+          ? [v.i32(a + 8) & 0xff, v.i32(a + 12) & 0xff, v.i32(a + 16) & 0xff]
+          : (() => {
+              const packed = v.u32(a + 8);
+              return [(packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff];
+            })();
         this.colorInterp = {
           start: this.frame,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [(this.colorRgb >> 16) & 0xff, (this.colorRgb >> 8) & 0xff, this.colorRgb & 0xff],
-          to: [v.i32(a + 8) & 0xff, v.i32(a + 12) & 0xff, v.i32(a + 16) & 0xff]
+          to
         };
         break;
       }
