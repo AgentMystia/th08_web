@@ -678,13 +678,17 @@ export class AnmRunner {
         };
         break;
       case 33: { // color transition with formula
-        const packed = v.u32(a + 8);
+        // ANM v3 op 33 (exe case 0x21, all.c:47505-47548): the target RGB is
+        // three SEPARATE 0-255 channel dwords at args 2/3/4 (a+8/a+12/a+16) —
+        // not a packed u32, and the exe's float-typed reads are a Ghidra
+        // artifact (the data holds integer channel values). Reading a+8 as a
+        // packed color collapsed white to 0x0000ff (solid-blue portraits).
         this.colorInterp = {
           start: this.frame,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [(this.colorRgb >> 16) & 0xff, (this.colorRgb >> 8) & 0xff, this.colorRgb & 0xff],
-          to: [(packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff]
+          to: [v.i32(a + 8) & 0xff, v.i32(a + 12) & 0xff, v.i32(a + 16) & 0xff]
         };
         break;
       }

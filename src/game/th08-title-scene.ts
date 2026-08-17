@@ -121,7 +121,10 @@ export class Th08MenuFlow {
         entryIndex: layout.entryIndex,
         spriteIndexOffset: anm.entries[layout.entryIndex].spriteBase
       });
-      runner.interrupt(1);
+      // The banner scripts park on ins_23 (hide+wait) between ins_21(-1) and
+      // ins_21(7). interrupt(1) matched no label and fell back to -1 (still
+      // parked); the entry cascade (fade+slide-in) lives at label 7.
+      runner.interrupt(7);
       this.difficultyBanners.push({ runner, entryIndex: layout.entryIndex });
     }
     const headerEntry = titleEntryForScript(TH08_MENU_HEADER_SCRIPTS.difficulty);
