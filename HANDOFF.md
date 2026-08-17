@@ -458,3 +458,26 @@ exactly our model. Every geometric link (fire origin, volley
 modes/angle-set equivalence, layer speeds, rank bump, spawn state,
 killbox AABB/sizes, graze order, clamp, hitbox) is exe-verified; the
 residual requires a native per-frame trace (wine prerequisite).
+
+## 2026-08-18 third forensic pass — first-move phase and SHT speeds
+
+The proposed bullet-first-move phase was verified natively equal: the
+constructor FUN_0042f5f0 writes spawn state 2/3/4 (+0xdb8) at construction
+(flags bits 1/2/3), runs one queue pass, and does NOT move the bullet; the
+first move comes from the same scheduler tick's bullet manager (priority 14
+runs after the enemy manager's 11 in the same frame) — identical to our
+updateEnemies→updateBullets same-frame order. The f684 killer's profile was
+re-derived exactly: constructed during the f529 scene update, 11 half-speed
+spawn ticks (the authored etama duration — data-derived, not tunable) + 146
+full ticks, with the transition tick's half+full double move per
+FUN_00431240 case 2's goto-case-1 fall-through; measured displacement
+(−233.04, +155.71) = 11×(−0.769, 0.514) + 146×(−1.538, 1.028) exactly.
+The uniform-flip test: the seven deaths need extra Y separations of
+0.65/1.18/0.65/1.13/1.70/1.86/0.48 px = 0.71–2.10 half-tick units — no
+integer phase shift flips all seven (+1 flips 2/7, +2 flips 6/7, −1 none).
+A single-tick phase root cause is mathematically excluded; per-volley or
+player-side per-frame differences remain, which only a native trace can
+pin. Also verified this pass: our SHT parser's speed/diag/focused offsets
+(36/40/44/48 = exe 0x24/0x28/0x2c/0x30) and values (4/2/2.828/1.414) are
+exactly the fields FUN_0044aec0 reads — the player movement chain is
+byte-verified end to end. No behavior change landed (none was warranted).
