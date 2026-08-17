@@ -474,6 +474,17 @@ export class StageRuntime {
   }
 
   initializeRandomCounters(rng: Rng): void {
+    if (this.ecl.version === 8) {
+      // TH08's drop counters (DAT_00f54ce0 the 1-in-3 phase, DAT_00f54ce2
+      // the 32-entry table cursor) are BSS zero-init globals that simply
+      // persist across stages — no per-stage RNG reseed exists in the exe
+      // (no writes anywhere but the use site at all.c:20977-20985). Drawing
+      // them from the stream here desynced every later random read by two
+      // u16s and started the drop cycle at a random phase.
+      this.randomSpawnIndex = 0;
+      this.randomItemIndex = 0;
+      return;
+    }
     // Th07.exe (v1.00b) FUN_00421410 @ 0x42148c / 0x4214c4 seeds the
     // process-global enemy-death phase and RANDOM_ITEMS cursor from the live
     // gameplay stream when the stage managers are initialized. Replay setup

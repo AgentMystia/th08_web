@@ -4980,6 +4980,15 @@ export class StageScene implements GameHost {
           tw.frac -= 1;
           tw.elapsed++;
         }
+      } else if (this.runState && (it.state === 3 || it.state === 5)) {
+        // TH08 ItemManager states 3/5 (all.c:31084-31108): the tossed item
+        // climbs against 0.05 gravity, then flips to homing state 1 once it
+        // crests (vy > 0) — the time-orb auto-collect arc. This branch jumps
+        // straight to the collect test in the exe (no state-0 gravity tail).
+        it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.05) * rate));
+        it.x = Math.fround(it.x + Math.fround(it.vx * rate));
+        it.y = Math.fround(it.y + Math.fround(it.vy * rate));
+        if (it.vy > 0) it.state = 1;
       } else {
         if (this.cherry?.borderActive) {
           // FUN_00430c10: while the Supernatural Border is live, every item
