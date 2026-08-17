@@ -284,3 +284,23 @@ separated from ours by differences of 1-3 frames of volley phase or ~1-3px
 of bullet path — exactly the class the AGENTS.md fidelity workflow assigns
 to a native PRE trace. scripts/native-trace.mjs is ready for a host where
 Th08.exe boots (real GPU wine or Windows).
+
+## Update (2026-08-17, ninth pass — item economy chain audit)
+
+Verifier-directed audit of the item economy against all.c's ItemManager.
+Fixed:
+- **Time-orb homing** (states 3/5): tossed orbs now crest and home to the
+  player (all.c:31084-31108) instead of falling offscreen — the gauge/orb
+  income streams live again (gauge -1443 -> -3996 toward native -7893).
+- **Drop counters zero-init**: DAT_00f54ce0/00f54ce2 are persistent BSS
+  globals in the exe; our TH07-style RNG reseed desynced the stream by 2
+  draws from frame 0 and randomized the 32-entry drop-table phase.
+
+Verified correct, no change: collect AABB (item ±12 vs grab ±12,
+FUN_0044a5a0), state-0 fall (0.03 accel / 3.0 cap), typed/-1/-2 drop
+mapping (FUN_0042bea0), drop spawn at the enemy's render position.
+
+The 61-vs-3 point-item gap is predominantly downstream of the death
+cascade (fewer kills + no phase-transition cancels while the midboss
+stalls), not an independent item-chain defect: per-kill drops, spawn
+positions, and fall physics all match the exe.
