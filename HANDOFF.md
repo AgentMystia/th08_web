@@ -921,3 +921,24 @@ age 235)。剩余偏差源:转前 70 tick 减速段的 f32 累积路径
 (native 公式 speed−(elapsed+frac)·speed/interval 的精确 f32 次序),
 对照 TH08_BULLET_PROTOTYPES 与 ins_111/112/113 的 fireRank 窗口,
 清除 f3301 → 重跑全量 verifier。
+
+## 2026-08-19(九)——f3301 全参数自洽验证完成;剩余两候选
+
+杀手全链路核对:第 6 组齐射(col 1,aim=1.5850[f3054 玩家静止,
+mirror=live,无歧义],a1=1.47488,a2=0.19635,偶数 c1=20 的
+colTerm=−0.5·a2 ✓),s1=1.8438(rank-lerp 后),EX f1=1.5/interval=70;
+减速段非复合(基底速度不动)✓;一次性转向消费 ✓;公式与端口自洽。
+接触 dx-limited:dx=1.839/dy=0.664 vs thr=2.825,需 +0.99px 横向分离
+≈ 发射角 δ≈0.0033 rad 或等价路径差。
+
+剩余两候选(下一会话按序):
+1. **s1 的 rank-lerp 窗口**:f3054 时 rank=9(生存阶梯 f2927→9);
+   端口 lerpF(−0.5,0.5)@9=+0.0625 ⇒ 基速=1.7813,而作者值疑为
+   1.8/2.0 族——**ins_111/112/113 写入的 lo/hi 需对 sub 数据核表**
+   (fireRankSpeedLow/High 的每个相位 sub 的设置指令)。
+2. 减速段 70 tick 的 f32 积分次序(native:(elapsed+frac)·speed/interval
+   的商/积阶梯;port 同式但 JS double 中间量)。
+
+方法:对第 6 组 col-1 弹做解析路径(63.6px 减速段 + 165 tick·1.5),
+在 ±0.03 速度/±0.004 rad 的参数网格上扫,找使 f3301-3304 全清的
+参数组合,再回溯到 lo/hi 或积分次序。
