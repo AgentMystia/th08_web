@@ -130,6 +130,9 @@ export interface PlayerBullet {
   impactScript: number;
   rect: { x: number; y: number; w: number; h: number; imageKey: string };
   dead?: boolean;
+  // TH08 dialogue drift (FUN_004413e0): shot flagged harmless with velocity
+  // (0, -0.5) while a conversation plays; never restored — expires offscreen.
+  driftHarmless?: boolean;
   // Which option fired this shot (0 = player) and the record's own x offset —
   // MarisaB's persistent lasers (types 4/5) re-anchor to these every frame.
   orb: number;

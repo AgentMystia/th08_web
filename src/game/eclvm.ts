@@ -4139,7 +4139,12 @@ export class StageRuntime {
   // Pass startTotal to run the item sweep and continue that accumulator;
   // omit it for an itemless clear (spell-timeout op91, phase transitions —
   // the exe has no engine-side helper sweep on those paths).
-  killNonBossEnemies(game: GameHost, owner: Enemy | null = this.executingEnemy, startTotal?: number): number {
+  killNonBossEnemies(
+    game: GameHost,
+    owner: Enemy | null = this.executingEnemy,
+    startTotal?: number,
+    valueCap = 8000
+  ): number {
     const sweepItems = startTotal !== undefined;
     let total = startTotal ?? 0;
     let value = 2000;
@@ -4155,9 +4160,9 @@ export class StageRuntime {
       for (const drop of drops) {
         // FUN_004217c0: escalating popup per swept drop — white while
         // ramping, yellow at the cap (spec-popups.md §4.2).
-        game.spawnScorePopup?.(value, drop.x, drop.y, value < 8000 ? 0xffffffff : 0xffffff00);
+        game.spawnScorePopup?.(value, drop.x, drop.y, value < valueCap ? 0xffffffff : 0xffffff00);
         total += value;
-        value = Math.min(8000, value + 30);
+        value = Math.min(valueCap, value + 30);
       }
     }
     return total;

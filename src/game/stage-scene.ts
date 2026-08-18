@@ -1977,12 +1977,19 @@ export class StageScene implements GameHost {
   private startDialogueTh08(index: number): void {
     const raw = this.runtime.msg.messages[index];
     if (!raw || raw.length === 0) return;
-    // Keep the TH07 family's pre-dialogue sweep: the native msg-start path
-    // zeroes the message state and the stage's boss-entry ins_95 performs
-    // the field clear; doing it here matches the observed native net effect
-    // (flagged: exact TH08 clear site not yet decompiled).
+    // Gui::StartMsg's tail (FUN_0043396d @ all.c:24655-24657) performs
+    // exactly three field clears before the conversation runs:
+    //   FUN_00415c60()  — cancel every enemy bullet to items (+ lasers);
+    //   FUN_0042efb0(0,0) — sweep ordinary enemies (HP=0 via the death
+    //                      path; value cap 0, return discarded);
+    //   FUN_004413e0()  — flag live player shots harmless, drifting up.
+    // Items already on the field keep falling — no force-collect. The
+    // player, background scroll, effects, and BGM keep running natively;
+    // only the field is emptied, which is why the input-locked player
+    // cannot be shot mid-conversation.
     this.cancelBulletsToItems();
-    this.forceCollectAllItems();
+    this.runtime.killNonBossEnemies(this, null, 0, 0);
+    this.driftPlayerShotsForDialogue();
     // Bridge the Msg parser's decoded instructions into the machine's
     // {time, op, args, text} shape. The parser has already split TH08's
     // packed op1/op15/op17 payloads (portrait = low i16, script = high).
@@ -2009,6 +2016,22 @@ export class StageScene implements GameHost {
     // The enemy-death -> dialogue path (0x42b1e5) pulls the gauge one
     // twelfth of the way back toward neutral when a conversation starts.
     this.runState?.addYoukaiGauge(this.runState.gaugeDialoguePull());
+  }
+
+  // FUN_004413e0 (all.c:31356, called at msg start and from every MSG
+  // runner frame @ all.c:24700): every live player shot gets the harmless
+  // byte (+0x2d7 = 1) and velocity (0, -0.5, 0) — in-flight shots drift up
+  // out of the field and cannot damage anything for the rest of the
+  // conversation. The reset (FUN_00441530, velocity (0, -0.9)) only runs on
+  // the player-death and last-spell paths; a conversation never restores
+  // shots — they simply expire offscreen.
+  private driftPlayerShotsForDialogue(): void {
+    for (const b of this.playerBullets) {
+      if (b.dead) continue;
+      b.driftHarmless = true;
+      b.vx = 0;
+      b.vy = -0.5;
+    }
   }
 
   // The enemy-manager target caches (0x42d3d3-0x42d4df): recomputed every
@@ -2056,6 +2079,10 @@ export class StageScene implements GameHost {
   private updateTh08Dialogue(input: InputFrame): void {
     const dlg = this.th08Dialogue;
     if (!dlg) return;
+    // Native order: Player (prio 9, moves shots) ... Gui (prio 0xf) re-runs
+    // FUN_004413e0 every MSG frame — our update() likewise ticks player
+    // shots before this tail, so re-asserting the drift here matches.
+    if (!dlg.machine.state.done) this.driftPlayerShotsForDialogue();
     let bits = 0;
     if (input.held.has('shoot') || input.held.has('confirm')) bits |= TH08_DIALOGUE_INPUT_BITS.confirm;
     if (input.held.has('up')) bits |= TH08_DIALOGUE_INPUT_BITS.humanDirection;
@@ -3898,6 +3925,7 @@ export class StageScene implements GameHost {
       const b = this.playerBulletSlots[slot];
       if (!b) continue;
       if (b.dead) continue;
+      if (b.driftHarmless) continue;
       if (b.state !== 'fired' && b.shotType !== 3) continue;
       const bulletMinX = Math.fround(b.x) - Math.fround(b.hitboxW) * 0.5;
       const bulletMinY = Math.fround(b.y) - Math.fround(b.hitboxH) * 0.5;
