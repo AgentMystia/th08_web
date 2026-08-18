@@ -3523,6 +3523,18 @@ export class StageRuntime {
       }
       if (t) t.deathDropB = 0;
     }
+    // +0x3308 (deathDropA, ins_144): each drop is a POINT item (type 1) at
+    // a frand*128-64 jittered position — two frand draws per item, no type
+    // draw (all.c:21030-21043). The point-item economy's second tap.
+    const extraA = t?.deathDropA ?? 0;
+    if (extraA > 0) {
+      for (let i = 0; i < extraA; i++) {
+        const x = Math.fround(e.x + game.rng.f() * 128 - 64);
+        const y = Math.fround(e.y + game.rng.f() * 128 - 64);
+        game.spawnItem(TH08_ITEM_TYPES[1] ?? 'point', x, y, { state: spawnMode });
+      }
+      if (t) t.deathDropA = 0;
+    }
   }
 
   // =========================================================================
