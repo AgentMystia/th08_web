@@ -15,19 +15,19 @@ const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
 const errors = attachPageDiagnostics(page);
 await page.goto(`${server.baseUrl}/index.html?test=1&menu=1&paused=1`);
-await page.waitForFunction(() => window.__TH07_TEST__?.ready, null, { timeout: 20000 });
+await page.waitForFunction(() => window.__TH08_TEST__?.ready, null, { timeout: 20000 });
 
 // Edge-triggered press: inject as `pressed` for one sim frame, then clear.
 async function press(key) {
   await page.evaluate((k) => {
-    window.__TH07_TEST__.inject([], [k]);
-    window.__TH07_TEST__.advance(1);
-    window.__TH07_TEST__.inject([], []);
-    window.__TH07_TEST__.advance(1);
+    window.__TH08_TEST__.inject([], [k]);
+    window.__TH08_TEST__.advance(1);
+    window.__TH08_TEST__.inject([], []);
+    window.__TH08_TEST__.advance(1);
   }, key);
 }
 async function settle(n = 40) {
-  await page.evaluate((f) => window.__TH07_TEST__.advance(f), n);
+  await page.evaluate((f) => window.__TH08_TEST__.advance(f), n);
 }
 
 await settle(130); // intro animations
@@ -40,7 +40,7 @@ for (const raw of script.split(';')) {
     for (let i = 0; i < times; i++) { await press(key); await settle(10); }
   }
   await settle(40);
-  const snap = await page.evaluate(() => window.__TH07_TEST__.snapshot());
+  const snap = await page.evaluate(() => window.__TH08_TEST__.snapshot());
   if (name) {
     await page.screenshot({ path: join(outdir, `${name}.png`) });
     console.log(`${name}:`, JSON.stringify(snap));

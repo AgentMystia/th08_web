@@ -18,9 +18,9 @@ const MIME = {
 export const repoRoot = new URL('../..', import.meta.url).pathname;
 
 export function resolveChromiumExecutable() {
-  const explicit = process.env.TH07_CHROMIUM;
+  const explicit = process.env.TH08_CHROMIUM;
   if (explicit) {
-    if (!existsSync(explicit)) throw new Error(`TH07_CHROMIUM does not exist: ${explicit}`);
+    if (!existsSync(explicit)) throw new Error(`TH08_CHROMIUM does not exist: ${explicit}`);
     return explicit;
   }
 
@@ -39,7 +39,7 @@ export function resolveChromiumExecutable() {
     candidates.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     if (candidates[0]) return candidates[0];
   }
-  throw new Error('No Chromium executable found; set TH07_CHROMIUM or run `npx playwright install chromium`.');
+  throw new Error('No Chromium executable found; set TH08_CHROMIUM or run `npx playwright install chromium`.');
 }
 
 export async function startStaticServer(rootDir = repoRoot) {

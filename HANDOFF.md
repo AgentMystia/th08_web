@@ -721,3 +721,57 @@ re-specs/th08-replay.md 里"5245×u32/0x40 头"是旧读法，勿信）。
 验证：check/build 干净；409/410 测试过；TH07 replay:verify 6/6（全程未动
 TH07 路径）；dev-shot 无 PAGE ERRORS。replay:verify:th08 仍 DIVERGED
 （如实：收敛未完成，残差见上）。
+
+## 2026-08-19（二）——f829 根因落定 + 全面去 TH07 化 + 收敛推进
+
+### 收敛（静态逆向,无 wine 动态调试）
+
+**f829 机炮幻影接触的根因:TH08_OP_REMAP 的 `66: 54`。** TH08 原始 op 66
+（dispatcher label 0x41,all.c:11530-11562）不是 TH07 op54 定时移动:
+arg0<1 = label-0x40 速度写入;arg0≥1 = FUN_00420d10 武装态（总位移向量
+dir·speed·anmId 入 +0x2dc4、原点快照入 var 10058-60 bank、停止计时器
++0x2de8=anmId、flags 0x2000|spriteOffset<<14）。旧 remap 把 Sub1 的
+ins_66(60,4,π/2,3.2) 当作 (duration=60, mode=4) 移动执行,机炮妖精被
+幻影位移 61px,f796 齐射因此打中玩家。删除 remap 后 f829 接触消失。
+
+**creep 因子修正**:0x431240 四处 FUN_0040c7d0 调用的 k 为
+2.0/2.5/3.0/2.0（0x43177e/0x431890/0x4319a1/0x431aa2;FUN_0040c7d0 =
+vel×(1.0/k),fld 1.0 fdiv k）——TH07 的 ½, 1/2.5, ⅓ 原样沿用;此前的
+¼,⅛ 是浮点位型误读。修正后 parity 重钉:0/1 会复现 f684/685 接触,2 仍最优。
+
+**ins_66 武装消费者未恢复**（本会话明确尝试并排除:线性 dir·speed·anmId
+帧移动 → 更早的 f634 接触;瞬移总向量 → 复现 f829。当前武装分支为有记录的
+no-op,妖精停留在时间轴出生位 (320,−32) 后 t=180 起 π/8·0.7 镜像漂移——
+实证最优变体）。恢复消费者是 f873（现首分歧,f796 齐射弹被玩家上移撞上）
+及后续 611 族接触的钥匙。
+
+**其余静态确认**（全部与端口一致,免再查）:自动机枪原点 = render pos
+(+0x2d88 = 活动位 +0x2d34 + 基准位 +0x2d40,普通敌基准为 0) + 枪口偏移
+(+0x2db8,ins_110);瞄准 = atan2(玩家镜像 0x17d61ac/0x17d61b0 − 模板原点),
+每齐射一次;TH08 spawn-state 弹**确实**回退 4×速度向量（0x42fc4c-0x42fc6d:
+pos −= vel×4.0,此前怀疑不成立——上一节的"枪口低 5px/瞄准左偏 4px"就是
+这个回退的分量,并非错误）;行速插值 speed1−(speed1−speed2)·row/count2;
+op105/106 相位抽取 FUN_00406ef0=u32%deadline,u32 合成 hi<<16|lo 与端口一致;
+全局速度乘子 DAT_017ce8e0=1.0;firefly（etama 脚本 73）每粒 10 抽
+（5 个随机 op×2,Global.hpp GetRandomU32=2×u16 确认）;RNG 早期流干净
+（同种子同抽数→同值）,超支 ~15.5k 抽全部在首死级联之后（对话期生成器
+仍在跑是级联产物）。
+
+**去 TH07 化**（本分支正式决策,见 AGENTS §0 新检查点）:TH07 路径/模块/
+数据/资产/测试/脚本/CI 全部移除;`npm test` 仅 th08-*+engine-*;
+`__TH07_TEST__`→`__TH08_TEST__`;fixture th8_udLy01.rpy 入库 tests/replays/。
+TH07 引擎行为回归网由 replay:verify:th08 + th08 测试承担。
+
+**原生工具现状**:wine 纯启动可行（标题 demo 会自动播 demorpy0,截图验证
+到 f700+）,但 winedbg --gdb 下游戏早死、gdb 无法解析 wine ELF、
+ptrace_scope=1 且无 CAP_SYS_PTRACE → 逐帧原生 trace 在本环境仍不可行;
+scripts/native-trace.mjs 已重写（去 RNG 断点 + 异常穿通 + P/V/B/S 事件）,
+留待有权限的宿主。reference/native-shots 的 userdemo 系列只覆盖到 ~f780。
+
+### 当前验证状态（如实）
+
+- check/build/test（105 过）绿;dev-shot 干净启动。
+- replay:verify:th08 仍 DIVERGED:首意外死 f873（was f829）;
+  score 690229/7376015、pointItems 14/61、graze 123/536、lives −1/6、
+  RNG 113890 vs ≡32816。收敛未完成;下一钥匙 = ins_66 武装消费者
+  （影响 611 族全部齐射几何）。

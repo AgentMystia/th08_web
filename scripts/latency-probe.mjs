@@ -77,12 +77,12 @@ const dispatch = (type, def) => client.send('Input.dispatchKeyEvent', {
 
 const waitForSample = async (code, minimumSequence) => {
   await page.waitForFunction(
-    ({ wantedCode, min }) => window.__TH07_TEST__.latencySamples()
+    ({ wantedCode, min }) => window.__TH08_TEST__.latencySamples()
       .some((sample) => sample.edge === 'down' && sample.code === wantedCode && sample.sequence >= min && sample.drawEndAt != null),
     { wantedCode: code, min: minimumSequence },
     { timeout: 5000 }
   );
-  return page.evaluate(({ wantedCode, min }) => window.__TH07_TEST__.latencySamples()
+  return page.evaluate(({ wantedCode, min }) => window.__TH08_TEST__.latencySamples()
     .find((sample) => sample.edge === 'down' && sample.code === wantedCode && sample.sequence >= min && sample.drawEndAt != null),
   { wantedCode: code, min: minimumSequence });
 };
@@ -136,13 +136,13 @@ try {
   await page.goto(
     `${server.baseUrl}/index.html?test=1&latency=1&difficulty=${difficulty}&power=128${desyncQuery}`
   );
-  await page.waitForFunction(() => window.__TH07_TEST__?.ready, null, { timeout: 30000 });
+  await page.waitForFunction(() => window.__TH08_TEST__?.ready, null, { timeout: 30000 });
   const userAgent = await page.evaluate(() => navigator.userAgent);
   const major = Number(/(?:Chrome|HeadlessChrome)\/(\d+)/.exec(userAgent)?.[1] ?? 0);
   if (major !== expectedChromeMajor) throw new Error(`Chrome major ${major} does not match required ${expectedChromeMajor}`);
 
-  await page.waitForFunction((frame) => window.__TH07_TEST__.snapshot().frame >= frame, targetFrame, { timeout: 30000 });
-  if (scenario === 'dense-items') await page.evaluate(() => window.__TH07_TEST__.fillItems(1100));
+  await page.waitForFunction((frame) => window.__TH08_TEST__.snapshot().frame >= frame, targetFrame, { timeout: 30000 });
+  if (scenario === 'dense-items') await page.evaluate(() => window.__TH08_TEST__.fillItems(1100));
   const refreshIntervals = await measureRefresh();
   const refreshMedian = median(refreshIntervals);
   const refreshValid = refreshMedian >= 6.5 && refreshMedian <= 7.4;
@@ -161,13 +161,13 @@ try {
   const samples = [];
   for (let run = 0; run < runs; run++) {
     for (let index = 0; index < samplesPerRun; index++) {
-      if (inputKind === 'bomb') await page.evaluate(() => window.__TH07_TEST__.resetBombForLatencyProbe());
-      await page.evaluate(() => window.__TH07_TEST__.clearLatencySamples());
+      if (inputKind === 'bomb') await page.evaluate(() => window.__TH08_TEST__.resetBombForLatencyProbe());
+      await page.evaluate(() => window.__TH08_TEST__.clearLatencySamples());
       const def = keyDef(inputKind, run * samplesPerRun + index);
       const phaseWait = Math.random() * (1000 / 60);
       await page.waitForTimeout(phaseWait);
       const minimumSequence = await page.evaluate(() => {
-        const samples = window.__TH07_TEST__.latencySamples();
+        const samples = window.__TH08_TEST__.latencySamples();
         return (samples.at(-1)?.sequence ?? 0) + 1;
       });
       await dispatch('rawKeyDown', def);
@@ -210,7 +210,7 @@ try {
   }
 
   const metric = (name, filter = () => true) => rows.filter(filter).map((row) => row[name]).filter(Number.isFinite);
-  const canvasAttributes = await page.evaluate(() => window.__TH07_TEST__.canvasContextAttributes());
+  const canvasAttributes = await page.evaluate(() => window.__TH08_TEST__.canvasContextAttributes());
   const report = {
     metric: 'event-to-present proxy',
     claim: 'software proxy only; excludes keyboard scan/USB/display scanout/panel response',

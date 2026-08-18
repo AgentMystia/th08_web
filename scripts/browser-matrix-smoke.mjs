@@ -36,9 +36,9 @@ const runPass = async (label, extraQuery, expectations) => {
   const pageErrors = attachPageDiagnostics(page);
   try {
     await page.goto(`${server.baseUrl}/index.html?test=1${extraQuery}`);
-    await page.waitForFunction(() => window.__TH07_TEST__?.ready, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__TH08_TEST__?.ready, null, { timeout: 30000 });
     const result = await page.evaluate((framePoints) => {
-      const t = window.__TH07_TEST__;
+      const t = window.__TH08_TEST__;
       t.advance(300);
       return {
         canvas: t.canvasContextAttributes(),

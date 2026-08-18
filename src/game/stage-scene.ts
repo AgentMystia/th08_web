@@ -9,33 +9,28 @@ import { Renderer, PLAYFIELD, SCREEN_W } from '../gfx/renderer';
 import type { GameAssets } from './assets';
 import { Anm, AnmRunner, type AnmFrame } from '../formats/anm';
 import { bgQuadCorner, orderBgJobsByVisibility, type Vec3 } from '../formats/std';
-import { TH07_DATA } from '../data/th07-data';
 import { TH08_DATA } from '../data/th08-data';
 import type { AudioBus } from '../audio/audio';
 import {
-  CHARACTERS, Player, bombCherryDrainPerFrame, playerShotAllocationAllowed,
+  Player, playerShotAllocationAllowed,
   type CharacterId, type PlayerBullet
 } from './player';
 import { PlayerEffects, type PlayerEffectHandle } from './player-effects';
-import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
+import type { CherrySystem } from './cherry';
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
 import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-border-bombs';
 import { Th08SpellDeclaration, th08BombSpellName, archiveScript } from './th08-declaration';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
-import { TH08_HUD } from './th08-hud-layout';
-import { BombEngine, BombRunner, type AttackSlot, type BombContext } from './player-bombs';
-import { DialogueRunner, portraitSprite } from './dialogue';
-import { stageBgmTrack } from './bgm';
+import { BombEngine, type AttackSlot } from './player-bombs';
 
-// Stage host. Runs any of the 8 stage timelines (1-6 main game, 7 Extra,
-// 8 Phantasm) with per-stage ECL/STD/MSG/ANM data. The TH08 vertical slice
-// dispatches on character: the Border Team ('reimuYukari') resolves its
-// stage bundle from the embedded TH08 data, while every other character
-// keeps the parent TH07 engine path (the node replay harness stub assets
-// still supply the TH07 ANMs), so the TH07 sim suite and replay
-// convergence gates stay green while the TH08 runtime lands.
+// Stage host for the TH08 (Imperishable Night) vertical slice. Runs the
+// stage timelines with the embedded TH08 ECL/STD/MSG/ANM data through the
+// committed Th08RunState (time orbs, night clock, human/youkai gauge) in
+// place of the parent engine's Supernatural Border cherry system. The
+// legacy TH07 engine path has been removed; the character parameter is
+// vestigial (kept for the constructor signature).
 
 // Everything that survives a stage transition within one credit.
 export interface RunCarry {
@@ -46,48 +41,11 @@ export interface RunCarry {
   lives: number;
   bombs: number;
   power: number;
-  cherry: number;
-  cherryMax: number;
-  cherryPlus: number;
-  spellsCaptured: number;
-  extendLevel: number;
   rank: number;
   rankAccumulator?: number;
   powerItemCountForScore?: number;
 }
 
-// Item sprites live in etama.anm entry 1 (the etama2.png sheet), addressed
-// here by their entry-embedded ids; add entries[1].spriteBase (168 — entry 0
-// embeds ids 0..167) for the global id. The 16x16 boxed items sit in a row at
-// texture y=64 (crop-verified: red P, blue 点, big red P, green B, yellow F,
-// magenta 1up, grey star, pink petal box), matching the original item order.
-const ITEM_SPRITES: Record<ItemType, number> = {
-  power: 4,
-  point: 5,
-  bigPower: 6,
-  bomb: 7,
-  fullPower: 8,
-  life: 9,
-  cherry: 10, // type 6: grey cancel-item box (FUN_00421a40 writes type 6)
-  bigCherry: 11, // type 7: boxed pink petal
-  pointBullet: 12, // type 8: unboxed petal used by the Border-break circle
-  case9Cherry: 13, // type 9: pink petal; shares type 7's authored sprite rect
-  // TH08 item types (TH08 ItemType ids in eclvm's TH08_ITEM_TYPES): mapped to
-  // the nearest TH08 etama item sprite; precise TH08 sprite ids are pending
-  // (flagged until the item-ANM table is decoded).
-  powerSmall: 4,
-  powerBig: 6,
-  powerFull: 8,
-  extend: 9,
-  pointStar: 10,
-  time: 10,
-  pointSmall: 5,
-  unknown9: 10,
-  time2: 10
-};
-// Per-type offscreen indicator arrows sit 10 embedded ids after their item
-// (emb14-21, same order) — drawn while an item is still above the top edge.
-const ITEM_ARROW_OFFSET = 10;
 // TH08 ItemType enum (ItemManager.hpp:9-21) in declaration order; the item's
 // etama.anm visual script is 61 + id (ItemManager.cpp:112).
 const TH08_ITEM_TYPE_IDS: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -95,17 +53,6 @@ const TH08_ITEM_TYPE_SLOT: Partial<Record<ItemType, number>> = {
   powerSmall: 0, point: 1, powerBig: 2, bomb: 3, powerFull: 4, extend: 5,
   pointStar: 6, time: 7, pointSmall: 8, unknown9: 9, time2: 10
 };
-// Native g_FullPowerScoreBonus (ItemManager.cpp:17, TH07 0x0049ecf8): the
-// score paid by the Nth power item collected at full power. The counter
-// increments BEFORE indexing and clamps at 30 (ItemManager.cpp:247-251), so
-// the first pickup pays table[1]=20 — table[0]=10 is unreachable (ZUN quirk),
-// and the 31st+ pays 12000 forever.
-const FULL_POWER_SCORE_BONUS: readonly number[] = [
-  10, 20, 30, 40, 50, 60, 70, 80,
-  90, 100, 200, 300, 400, 500, 600, 700,
-  800, 900, 1000, 2000, 3000, 4000, 5000,
-  6000, 7000, 8000, 9000, 10000, 11000, 12000
-];
 // exe-exact RNG draw cost (raw u16) per particle for the ambient effect types
 // ECL op117/118 spawn, = the DAT_00494fb0 spawnVetoFn's draw count (binary-read
 // confirmed; the paired perFrameGateFns draw ZERO). Only the effectIds stage 1
@@ -139,7 +86,6 @@ const ENEMY_POOL_CAP = 0x1e0;
 const PLAYER_BULLET_POOL_CAP = 0x60;
 const ENEMY_BULLET_POOL_CAP = 0x400;
 const BOMB_CLEAR_REGION_CAP = 0x60;
-const ITEM_POOL_CAP = 0x44c;
 const EFFECT_POOL_CAP = 400;
 // TH08's effect pool is 512 slots (FUN_00425430's 0x200-slot scan with 0xd8
 // strides), TH07's 400. The slot array sizes to the superset; the cursor
@@ -162,43 +108,11 @@ const EFFECT_SCRIPT_LIFE: Record<number, number> = {
   // TH08 effect 51: etama script 73 removes at frame 241.
   51: 241
 };
-const CLEAR_LOADING_ANM = ['loading', 'loading2', 'loading3'] as const;
-// Player::BreakBorder flings its 32 effect-29 petals along 32 fixed
-// directions, angle = -PI + i*PI/16 (Player.cpp:2183-2190). Visual-only —
-// the spawn's RNG contract lives in EFFECT_DRAW_COST[29] and never changes.
-export const BORDER_PETAL_DIRS: readonly { x: number; y: number }[] =
-  Array.from({ length: 32 }, (_, i) => {
-    const angle = -Math.PI + i * (Math.PI / 16);
-    return { x: Math.cos(angle), y: Math.sin(angle) };
-  });
 
-// SE slot table, Th07.exe @ 0x494a78 (38 entries × 8 bytes: {i32 wavIndex,
-// i16 volume_millibels, i16 priority}), read from the exe binary. Sound ids
-// in ECL data / SHT records / engine code index THIS table, not the 30-wav
-// filename list @ 0x494ba8 — several slots share a wav at different
-// volumes (e.g. 2/3 = se_enep00 at −1200/−1500 mB; enemy deaths alternate
-// them, disasm @ 0x420379). Init loop @ 0x4468xx duplicates the source
-// buffer per slot and calls IDirectSoundBuffer::SetVolume(mB) (vtable
-// +0x3c), so amp = 10^(mB/2000). Playing a slot restarts its duplicated
-// buffer — one voice per slot.
-const SFX_SLOTS: [string, number][] = [
-  ['se_plst00', 0.1], ['se_plst00', 0.056], ['se_enep00', 0.251], ['se_enep00', 0.178],
-  ['se_pldead00', 0.316], ['se_power0', 0.631], ['se_power1', 0.631], ['se_tan00', 0.178],
-  ['se_tan01', 0.141], ['se_tan02', 0.112], ['se_ok00', 0.316], ['se_cancel00', 0.316],
-  ['se_select00', 0.141], ['se_gun00', 0.251], ['se_cat00', 0.355], ['se_tan00', 0.178],
-  ['se_lazer00', 0.355], ['se_lazer01', 0.355], ['se_enep01', 0.355], ['se_nep00', 0.794],
-  ['se_damage00', 0.2], ['se_item00', 0.224], ['se_tan00', 0.891], ['se_tan01', 0.126],
-  ['se_tan02', 0.126], ['se_kira00', 0.398], ['se_kira01', 0.316], ['se_kira02', 0.224],
-  ['se_extend', 0.708], ['se_timeout', 0.355], ['se_graze', 0.355], ['se_powerup', 0.562],
-  ['se_border', 0.708], ['se_bonus', 0.708], ['se_graze', 0.708], ['se_kira00', 1],
-  ['se_bonus2', 0.708], ['se_pause', 0.708]
-];
-
-// TH08 sfx ids are a DIFFERENT table: .data 0x4c81b0 (36 filename pointers,
-// loaded by the loop at Th08.exe 0x45d45f; FUN_0045d550/FUN_0045d660 play by
-// this index). Every id from 1 on is offset from TH07's mapping — the TH08
-// path must never index SFX_SLOTS. Gains reuse the TH07-measured gain for
-// the same file; files TH07 never plays carry a neutral placeholder gain.
+// TH08 sfx ids: .data 0x4c81b0 (36 filename pointers, loaded by the loop at
+// Th08.exe 0x45d45f; FUN_0045d550/FUN_0045d660 play by this index). Gains
+// reuse the TH07-measured gain for the same file; files TH07 never plays
+// carry a neutral placeholder gain.
 export const TH08_SFX_SLOTS: [string, number][] = [
   // The exe's 46-channel id table (.data 0x4c8040, stride 8: {u32 srcBank,
   // i16 volA@+4, i16 volB@+6}) over the 36-file name table at 0x4c81b0 —
@@ -218,25 +132,6 @@ export const TH08_SFX_SLOTS: [string, number][] = [
   ['se_ophide', 0.398], ['se_invalid', 0.794], ['se_slash', 1.0], ['se_slash', 0.501],
   ['se_item01', 0.398], ['se_ok00', 0.891]
 ];
-
-// front.png sprite rects [x,y,w,h], recovered from front.anm's entry0 sprite
-// table (see the HUD spec derived by thanm -l7 disassembly). The original
-// HUD blits these directly rather than typesetting text, so we do the same.
-const FRONT = {
-  logo: [128, 0, 128, 256], // 東方妖々夢 vertical logo panel
-  caption: [0, 0, 128, 80], // "Perfect Cherry Blossom"
-  hiscore: [0, 80, 64, 16],
-  score: [0, 96, 64, 16],
-  player: [0, 112, 64, 16],
-  bomb: [0, 128, 64, 16],
-  power: [0, 144, 64, 16],
-  graze: [0, 160, 64, 16],
-  point: [0, 176, 64, 16],
-  redStar: [64, 80, 16, 16], // life icon
-  blueStar: [80, 80, 16, 16], // bomb icon
-  tile32: [0, 224, 32, 32], // maroon frame-fill tile
-  strip128: [0, 240, 128, 16] // maroon frame-fill strip
-} as const;
 
 // ascii.png HUD numeral font: 8x12 digit glyphs in a row at texture y=208,
 // digit d at x=8*d (front.anm/ascii.anm spec §5.1). The sole HUD digit font.
@@ -358,28 +253,6 @@ export function cutinFaceForSpell(spellId: number): number {
   return 0;
 }
 
-// 2. Nameplate row: ename.png's 16 rows are exactly
-//    2*(stage-1) + (0 = early/mid encounter, 1 = final encounter) for all 8
-//    stages (pixel-read). The switch is keyed off which boss ROOT SUB is
-//    currently registered — NOT off "has any dialogue played" (stage 6 has
-//    two dialogue-bearing encounters, so the old dialogueSeen latch flipped
-//    to Yuyuko's row 11 during Youmu's own rematch).
-const FINAL_ENCOUNTER_ROOTS: Record<number, number[]> = {
-  1: [31],
-  2: [48],
-  3: [31],
-  4: [42, 53, 71, 88, 108, 115, 118], // conductor + sisters + prop slots
-  5: [47],
-  6: [28],
-  7: [67, 111],
-  8: [69, 115]
-};
-
-export function enameRowForBoss(stageNumber: number, rootSub: number): number {
-  const final = FINAL_ENCOUNTER_ROOTS[stageNumber]?.includes(rootSub) ? 1 : 0;
-  return 2 * (stageNumber - 1) + final;
-}
-
 export class StageScene implements GameHost {
   rng = new Rng();
   difficulty = 1;
@@ -422,8 +295,6 @@ export class StageScene implements GameHost {
   enemyLasers: EnemyLaser[] = [];
   postBombLaserCounter = 0;
   items: ItemEntity[] = [];
-  private itemSlots: (ItemEntity | null)[] = new Array(ITEM_POOL_CAP).fill(null);
-  private itemPoolCursor = 0;
   particles: EffectParticle[] = [];
   private readonly effectSlots: (EffectParticle | null)[] = new Array(EFFECT_POOL_CAP_TH08).fill(null);
   private effectPoolCap = EFFECT_POOL_CAP;
@@ -525,13 +396,14 @@ export class StageScene implements GameHost {
   stageClearTimer = 0;
   private exitFired = false;
   private stageCompleteFired = false;
-  // TH07 Supernatural Border system — null on TH08 scenes, which run the
-  // committed Th08RunState (time orbs, night clock, human/youkai gauge)
-  // instead. Every consumer gates on null; the TH07 paths are unchanged.
-  cherry: CherrySystem | null;
-  runState: Th08RunState | null = null;
+  // Vestigial TH07 cherry hook: permanently null now that the committed
+  // Th08RunState (time orbs, night clock, human/youkai gauge) replaced the
+  // Supernatural Border system. Kept declared so the read-only external
+  // readers (snapshot.ts, replay-playback.ts, the main.ts debug probe)
+  // still type-check; every consumer's TH07 branch is unreachable.
+  cherry: CherrySystem | null = null;
+  runState: Th08RunState;
   hiScore = 100000;
-  dialogue: DialogueRunner | null = null;
   // TH08 dialogue (timeline ins_6): the committed Th08DialogueMachine plus
   // four portrait-slot AnmRunners.
   th08Dialogue: { machine: Th08DialogueMachine; runners: (AnmRunner | null)[] } | null = null;
@@ -542,7 +414,6 @@ export class StageScene implements GameHost {
   // before op11 actually leaves the stage. Keep presentation distinct from
   // the final stage-transition latch so the post-boss MSG can keep ticking.
   stageResultsActive = false;
-  private stageResultsPending = false;
   private clearTimer = 0;
   clearLoadingRunner: AnmRunner | null = null;
   clearCaptureRunner: AnmRunner | null = null;
@@ -592,19 +463,12 @@ export class StageScene implements GameHost {
   private bonusPopup: { bonus: number; timer: number } | null = null;
   // Shared UI slot at game-state +0x209f0. Type 2 announces border start;
   // type 4 shows the natural-end reward. Th07.exe FUN_0042645b @ 0x42645b.
+  // Kept declared (always null) for the snapshot reader; TH08 never writes it.
   borderMessage: { type: 2 | 4; value: number; age: number; timer: number } | null = null;
   // FUN_0043eb00 @ 0x43eb00 creates a fixed-center cancel circle on a
-  // border break: radius 32, +16/frame, 50 subsequent ticks.
+  // border break: radius 32, +16/frame, 50 subsequent ticks. Same — TH08
+  // never breaks a Supernatural Border, so this stays null.
   borderClearWave: { x: number; y: number; radius: number; ticksLeft: number; createdFrame: number } | null = null;
-  // Supernatural Border presentation (all decorative, no game-RNG access):
-  // - borderRing: the etama.anm script-219 ring VM (effect 28), replaced by
-  //   an expanding/fading copy on break, dropped silently on natural end.
-  // - borderBadgeRunner: ascii.anm script 5's pulsing HUD badge.
-  // - borderDimA/Rgb: Stage::SmoothBlendColor state for the background dim.
-  private borderRing: { runner: AnmRunner; mode: 'active' | 'break'; age: number; x?: number; y?: number } | null = null;
-  private borderBadgeRunner: AnmRunner | null = null;
-  private borderDimA = 0;
-  private borderDimRgb = 128;
   // Mirrors Th07.exe DAT_012f40a8's 1 -> 2 "phase failed by timeout" bump:
   // set by the timer-callback path, consumed by endBossSpell to skip the
   // scored field sweep, cleared by the next declare.
@@ -653,9 +517,6 @@ export class StageScene implements GameHost {
   }
   private eff01Pattern: CanvasPattern | null = null;
 
-  // Global sprite id of etama entry 1's embedded sprite 0 (the etama2.png
-  // item sheet); see ITEM_SPRITES above.
-  private readonly etamaItemBase: number;
   // Host callbacks for TH08 bullet queue commands (0x4000 transform needs the
   // runtime's prototype tables; 0x80000 plays a sound).
   private readonly th08BulletExHost = {
@@ -663,14 +524,11 @@ export class StageScene implements GameHost {
     transformPrototype: (b: EnemyBullet, proto: number, spriteShift: number) =>
       this.runtime.th08BulletTransform(b, proto, spriteShift)
   };
-  private readonly th08ItemRunners: (AnmRunner | null)[] | null = null;
-  // Script-driven bomb visuals (see spawnBombEffects).
+  private readonly th08ItemRunners: (AnmRunner | null)[];
+  // Script-driven bomb visuals (see the TH08 bomb machine's orb/effect VMs).
   private readonly playerEffects: PlayerEffects;
   // TH08 effect layer bound to etama.anm (FUN_00425430's effect VMs).
   private readonly th08Effects: PlayerEffects;
-  // Reserved generic-effect slot used by the player option state machine.
-  // Focus-in creates authored etama.anm effect 24; focus-out interrupts it.
-  private focusEffectRunner: AnmRunner | null = null;
   private prevBombTimer = 0;
   // Moving bomb attack hitboxes (exe player+0x9dc pool; see player-bombs.ts).
   private readonly bombEngine = new BombEngine();
@@ -686,7 +544,6 @@ export class StageScene implements GameHost {
     x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0
   }));
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
-  private bombRunner: BombRunner | null = null;
   private th08Bomb: Th08BorderBomb | null = null;
   // Enemy-manager target caches (Th08.exe writes them through the absolute
   // globals 0x18b899c/0x18b89a8/0x18b89b4 in the per-enemy pass at
@@ -711,12 +568,6 @@ export class StageScene implements GameHost {
   // follow-actor + handle pair so the aura tracks the player.
   private th08AuraActor: { x: number; y: number; angle: number; state: number } | null = null;
   private th08AuraHandle: PlayerEffectHandle | null = null;
-  private bombContext!: BombContext;
-  // Latched bomb duration (frames) for end-window checks (ReimuA focused's
-  // final-30-frames detonation, etc.).
-  private bombDuration = 0;
-  // Bomb-local frame counter (exe 16a38): 0 on the first active tick.
-  private bombFrame = 0;
   // Player-wide hit tally (exe player+0x240c): beams/attack slots pop a
   // spark on every 8th (lasers) / 4th (bomb slots) accumulated hit.
   private playerHitTally = 0;
@@ -785,18 +636,12 @@ export class StageScene implements GameHost {
     initialRngSeed?: number
   ) {
     // The native game loads every SE buffer before play. Web Audio otherwise
-    // drops the first request while fetching it; se_pldead00 is normally used
-    // only on the first miss, so without this preload that miss is silent.
-    // Preload both id tables' files (the TH08 table adds lazer01/cardget/
-    // option/damage01/timeout2/opshow/ophide/invalid/slash/item01).
-    this.audio.preloadSfx([...new Set([...SFX_SLOTS, ...TH08_SFX_SLOTS].map(([file]) => file))]);
+    // drops the first request while fetching it.
+    this.audio.preloadSfx([...new Set(TH08_SFX_SLOTS.map(([file]) => file))]);
     if (initialRngSeed != null) this.rng.seed = initialRngSeed & 0xffff;
     this.difficulty = difficulty;
     this.stageNumber = stageNumber;
-    const stageTable = character === 'reimuYukari'
-      ? (TH08_DATA.stages as unknown as Record<number, StageData>)
-      : (TH07_DATA.stages as unknown as Record<number, StageData>);
-    const stageData = stageTable[stageNumber];
+    const stageData = (TH08_DATA.stages as unknown as Record<number, StageData>)[stageNumber];
     if (!stageData) throw new Error(`no data for stage ${stageNumber}`);
     const anms = assets.anms as Record<string, Anm>;
     this.enemyAnm = anms[stageData.enemyAnm];
@@ -835,146 +680,51 @@ export class StageScene implements GameHost {
     );
     // TH08 runs the committed run-state (time orbs, night clock, human/
     // youkai gauge) in place of TH07's Supernatural Border cherry system.
-    if (character === 'reimuYukari') {
-      this.cherry = null;
-      this.runState = new Th08RunState(difficulty);
-      this.cancelItemType = 'time';
-      this.effectPoolCap = EFFECT_POOL_CAP_TH08;
-      // Th08.exe rank table @ DAT_004c7880 ({init, min, max} per difficulty,
-      // read from the binary): E/N 10/8/16, H/L 8/8/12, Extra 16/15/16.
-      // TH07's 16-start + Lunatic [10,32] bounds do not apply.
-      this.rank = difficulty <= 1 ? 10 : difficulty <= 3 ? 8 : 16;
-    } else {
-    this.cherry = new CherrySystem(
-      {
-        borderStartAction: () => {
-          const p = this.playerObj;
-          // FUN_0043e890 @ 0x43e890: state 1/3, an active bomb, or a
-          // blocked dialogue/transition records marker 2 and retries later.
-          // The stage-clear sequence defers too: a cherryPlus bar filled by
-          // the boss-kill sweep stays pinned at 50000, carries into the
-          // next stage via RunCarry, and the first positive gain there
-          // re-requests the border (the exe's re-fire-on-next-dc6f model).
-          // bombCleanupThisTick is stashed on the scene for the current
-          // scheduler pass so the post-timer cleanup callback (native
-          // +0x16a20 still set) continues to defer a pending border.
-          if (this.stageClear || this.isDialogueActive() || this.bombActiveThisFrame ||
-              this.bombCleanupDefersBorder || p.bombTimer > 0 || p.bombInvuln > 0 ||
-              p.invulnFrames > 0 || p.materializeFrame >= 0 || p.dyingFrame >= 0) {
-            return 'defer';
-          }
-          // State 2 with a live deathbomb meter consumes the pending border
-          // through FUN_0043eb00: no miss, no border timer, 40f invulnerability.
-          if (p.hitState) return 'cancel';
-          return 'start';
-        },
-        onBorderStart: () => {
-          // Th07.exe FUN_0043e890 @ 0x43eaba-0x43ead7.
-          this.playSfx(32);
-          this.playSfx(36);
-          this.borderMessage = { type: 2, value: 0, age: 0, timer: 180 };
-          // Player::ActivateBorder (Player.cpp:2126-2142): effect 28 is
-          // etama.anm script 219 (entry 3's full-sheet sprite) — a white
-          // ring following the player, spin negated after spawn, scale
-          // driven 1.0 -> 0.25 over the 540-frame border at draw time. The
-          // script's own wait(var0) self-removes it at 540; var0 is poked
-          // after construction exactly like intVars1[0] in the exe (the
-          // wait sits at script time 1, so it arms from the poked value).
-          // (Decorative only: bare test scenes carry no assets.)
-          const etama = this.assets?.anms?.etama;
-          const ascii = this.assets?.anms?.ascii;
-          if (etama) {
-            const runner = new AnmRunner(etama, 0, {
-              entryIndex: 3,
-              spriteIndexOffset: etama.entries[3].spriteBase
-            });
-            runner.setVariable(0, BORDER_DURATION);
-            runner.negateRotationSpeedZ();
-            this.borderRing = { runner, mode: 'active', age: 0 };
-          }
-          // AsciiManager.cpp:1301-1308: the pulsing border badge rides the
-          // cherry gauge while BORDER_ACTIVE (ascii.anm entry-0 script 5).
-          this.borderBadgeRunner = ascii ? new AnmRunner(ascii, 5, {
-            entryIndex: 0,
-            spriteIndexOffset: ascii.entries[0].spriteBase
-          }) : null;
-        },
-        onBorderCancel: () => this.applyBorderBreakEffects(null, true),
-        onBorderEnd: (result, bonus) => {
-          if (result === 'survived') {
-            // FUN_0043e620 @ 0x43e620: natural expiry enters state 3 for
-            // 40 frames and reinitializes the shared +0x16a08/+0x16a04
-            // split timer. The collision gate reads that same pair, so a
-            // state-4 -> state-3 transition must discard the Border's
-            // fractional residue even though both states are "special".
-            // Keeping the old 0.5 residue skipped Extra's first post-Border
-            // scan and changed the integer-bucketed damage score by one.
-            this.resetPlayerShotCollisionSpecialClock();
-            if (this.playerObj.invulnFrames < 40) {
-              this.playerObj.invulnFrames = 40;
-              this.playerObj.invulnFrac = 0;
-            }
-            this.playerObj.bombCooldown = 40;
-            this.borderMessage = { type: 4, value: bonus * 10, age: 0, timer: 180 };
-            this.playSfx(33);
-            // Player::BreakBorderNaturally (Player.cpp:2029): the ring is
-            // simply freed — no burst, no expanding copy.
-            this.borderRing = null;
-            this.borderBadgeRunner = null;
-          }
-        }
-      },
-      difficulty
-    );
-    }
-    this.runtime = new StageRuntime(stageData, character === 'reimuYukari'
-      ? {
-          // TH08 two-file enemy ANM (Th08.exe 0x42ebf0): the common
-          // enemy.anm is file A, the stage's stgNenm.anm file B; the
-          // dispatcher picks per enemy via flags2 bit 2.
-          etama: assets.anms.etama,
-          enemy: anms['enemy'],
-          effect: this.effectAnm,
-          enemyStage: this.enemyAnm
-        }
-      : {
-          etama: assets.anms.etama,
-          enemy: this.enemyAnm,
-          effect: this.effectAnm
-        });
+    this.runState = new Th08RunState(difficulty);
+    this.cancelItemType = 'time';
+    this.effectPoolCap = EFFECT_POOL_CAP_TH08;
+    // Th08.exe rank table @ DAT_004c7880 ({init, min, max} per difficulty,
+    // read from the binary): E/N 10/8/16, H/L 8/8/12, Extra 16/15/16.
+    // TH07's 16-start + Lunatic [10,32] bounds do not apply.
+    this.rank = difficulty <= 1 ? 10 : difficulty <= 3 ? 8 : 16;
+    this.runtime = new StageRuntime(stageData, {
+      // TH08 two-file enemy ANM (Th08.exe 0x42ebf0): the common
+      // enemy.anm is file A, the stage's stgNenm.anm file B; the
+      // dispatcher picks per enemy via flags2 bit 2.
+      etama: assets.anms.etama,
+      enemy: anms['enemy'],
+      effect: this.effectAnm,
+      enemyStage: this.enemyAnm
+    });
     this.runtime.reset();
     this.runtime.initializeRandomCounters(this.rng);
-    this.etamaItemBase = assets.anms.etama.entries[1].spriteBase;
     // TH08 item visuals are ANM VMs in etama.anm: ItemManager::SpawnItem runs
     // the global script (itemType + 61) per item (ItemManager.cpp:112). One
     // cached runner per type stands in for the per-item VMs — APPROXIMATION:
     // same-type items pulse in phase-locked sync (the stage-1 item scripts
     // consume no RNG, so the shared runner is draw-order neutral).
-    this.th08ItemRunners = character === 'reimuYukari'
-      ? TH08_ITEM_TYPE_IDS.map((typeId) => {
-        // The exe's etama global script index is (itemType + 61); on disk
-        // etama.anm's script ids run -150..-35 (global = id + 150).
-        const anm = assets.anms.etama;
-        const targetId = 61 + typeId - 150;
-        for (let entryIndex = 0; entryIndex < anm.entries.length; entryIndex++) {
-          const entry = anm.entries[entryIndex];
-          if (!entry.scriptIds.includes(targetId)) continue;
-          return new AnmRunner(anm, targetId, {
-            entryIndex,
-            spriteIndexOffset: entry.spriteBase,
-            rng: this.rng
-          });
-        }
-        return null;
-      })
-      : null;
+    this.th08ItemRunners = TH08_ITEM_TYPE_IDS.map((typeId) => {
+      // The exe's etama global script index is (itemType + 61); on disk
+      // etama.anm's script ids run -150..-35 (global = id + 150).
+      const anm = assets.anms.etama;
+      const targetId = 61 + typeId - 150;
+      for (let entryIndex = 0; entryIndex < anm.entries.length; entryIndex++) {
+        const entry = anm.entries[entryIndex];
+        if (!entry.scriptIds.includes(targetId)) continue;
+        return new AnmRunner(anm, targetId, {
+          entryIndex,
+          spriteIndexOffset: entry.spriteBase,
+          rng: this.rng
+        });
+      }
+      return null;
+    });
     this.playerObj = new Player(character, assets.anms);
     this.playerEffects = new PlayerEffects(this.playerObj.anm);
     // FUN_00425430's effect VMs run in the effect manager's etama.anm (the
     // DAT_004c6d30 table maps effect id → archive script index: 5→37, 6→38,
     // 12→44); the bomb callbacks reference those archive indices directly.
     this.th08Effects = new PlayerEffects(assets.anms.etama);
-    this.bombContext = this.createBombContext();
     this.player = this.playerObj;
     // Extra/Phantasm run-init (FUN_0042cf2f @ all.c:19715-19717): lives
     // forced to 2 for difficulty >= 4. Power is NOT touched — Extra and
@@ -1001,13 +751,6 @@ export class StageScene implements GameHost {
       this.playerObj.lives = carry.lives;
       this.playerObj.bombs = carry.bombs;
       this.playerObj.power = carry.power;
-      if (this.cherry) {
-        this.cherry.cherry = carry.cherry;
-        this.cherry.cherryMax = carry.cherryMax;
-        this.cherry.cherryPlus = carry.cherryPlus;
-        this.cherry.spellsCaptured = carry.spellsCaptured;
-      }
-      this.extendLevel = carry.extendLevel;
       this.rank = carry.rank;
       this.rankAccumulator = carry.rankAccumulator ?? 0;
       this.powerItemCountForScore = carry.powerItemCountForScore ?? 0;
@@ -1155,8 +898,7 @@ export class StageScene implements GameHost {
 
   private syncItemSlots(): void {
     // TH08: the spawn pool's `active` flags track the live ItemEntities by
-    // poolSlot; a dead entity releases its pool slot before the TH07-style
-    // slot rebuild below runs.
+    // poolSlot; a dead entity releases its pool slot.
     if (this.th08ItemPool) {
       for (const item of this.items) {
         if (item.dead) {
@@ -1164,26 +906,7 @@ export class StageScene implements GameHost {
           if (slot && slot.poolSlot === item.poolSlot) slot.active = false;
         }
       }
-      return; // TH08 uses the spawn pool's own 2096-slot cursor, not itemSlots
     }
-    this.itemSlots ??= new Array(ITEM_POOL_CAP).fill(null);
-    if (!Number.isInteger(this.itemPoolCursor)) this.itemPoolCursor = 0;
-    if (this.slotsConsistent(this.items, this.itemSlots, ITEM_POOL_CAP, (e) => !e.dead)) return;
-    this.itemSlots.fill(null);
-    const live = this.items.filter((item) => item && !item.dead);
-    const rebuilt: ItemEntity[] = [];
-    for (const item of live) {
-      let slot = Number.isInteger(item.poolSlot) ? item.poolSlot : -1;
-      if (slot < 0 || slot >= ITEM_POOL_CAP || this.itemSlots[slot] !== null) {
-        slot = this.itemSlots.indexOf(null);
-      }
-      if (slot < 0) { item.dead = true; continue; }
-      item.poolSlot = slot;
-      this.itemSlots[slot] = item;
-      rebuilt.push(item);
-    }
-    rebuilt.sort((a, b) => a.poolSlot - b.poolSlot);
-    this.items = rebuilt;
   }
 
   private syncFixedPools(): void {
@@ -1263,45 +986,12 @@ export class StageScene implements GameHost {
     return (lvl - 2) * 500 + 800;
   }
 
-  // Power bracket index (SHT thresholds 8/16/32/48/64/80/96/128; AGENTS §6):
-  // FUN_00430860 compares this before/after a power gain — crossing a
-  // bracket fires the salmon "tier up" popup + chime instead of the white 10.
-  private powerTier(power: number): number {
-    const brackets = [8, 16, 32, 48, 64, 80, 96, 128];
-    let tier = 0;
-    for (const b of brackets) if (power >= b) tier++;
-    return tier;
-  }
-
-  // Point-extend award, Th07.exe FUN_0042bf29 @ 0x42bf29: +1 life below 8
-  // lives, else +1 bomb below 8 bombs, else nothing. Both successful paths
-  // go through FUN_0042bcbc/FUN_0042bd01, which call FUN_00401700 and consume
-  // two u32 values from the shared gameplay RNG before the rank/SFX work.
-  private awardExtend(): void {
-    const p = this.playerObj;
-    if (p.lives < 8) p.lives++;
-    else if (p.bombs < 8) p.bombs++;
-    else return;
-    this.refreshPowerHudRandomState();
-    this.adjustRank(200);
-    // se_extend: TH07 id 28, TH08 id 22 (.data 0x4c81b0).
-    this.playSfx(28); // extend: TH08 id 28, TH07 id 28
-  }
-
   private adjustRank(delta: number): void {
-    // Th07.exe FUN_0042db77/FUN_0042dbf3 @ 0x42db77/0x42dbf3.
-    // Difficulty rows {start,min,max}: E 16/12/20; N/H/L 16/10/32;
-    // Extra/Phantasm 16/15/16 (table @ 0x4955a8).
-    // TH08 (FUN_0043bfc3/FUN_0043c03f, same /100 accumulator) clamps to its
-    // own table @ DAT_004c7880: E/N min 8 max 16, H/L min 8 max 12,
-    // Extra 15/16.
-    const bounds = this.runState
-      ? this.difficulty <= 1 ? { min: 8, max: 16 }
-        : this.difficulty <= 3 ? { min: 8, max: 12 }
-          : { min: 15, max: 16 }
-      : this.difficulty === 0 ? { min: 12, max: 20 }
-        : this.difficulty <= 3 ? { min: 10, max: 32 }
-          : { min: 15, max: 16 };
+    // TH08 (FUN_0043bfc3/FUN_0043c03f, /100 accumulator) clamps to its own
+    // table @ DAT_004c7880: E/N min 8 max 16, H/L min 8 max 12, Extra 15/16.
+    const bounds = this.difficulty <= 1 ? { min: 8, max: 16 }
+      : this.difficulty <= 3 ? { min: 8, max: 12 }
+        : { min: 15, max: 16 };
     this.rankAccumulator += Math.trunc(delta);
     while (this.rankAccumulator >= 100) {
       this.rank++;
@@ -1362,7 +1052,7 @@ export class StageScene implements GameHost {
     const stageGraze = this.graze - this.stageEntryGraze;
     const stagePointItems = this.pointItems - this.stageEntryPointItems;
     let internal =
-      this.stageNumber * 100000 + stageGraze * 50 + stagePointItems * 5000 + (this.cherry?.cherryMax ?? 0);
+      this.stageNumber * 100000 + stageGraze * 50 + stagePointItems * 5000;
     let playerBonus = 0;
     let bombBonus = 0;
     if (finalClear) {
@@ -1391,11 +1081,9 @@ export class StageScene implements GameHost {
       clear: this.stageNumber * 1000000,
       point: stagePointItems * 50000,
       graze: stageGraze * 500,
-      // FUN_00427269 stores DAT_00625868 (cherryMax), not DAT_0062586c
-      // (live cherry), into the results block. Stage 1 is the decisive
-      // witness: native clear credit 915750 uses 320000 cherryMax; using its
-      // 128770 live cherry produced only 628900.
-      cherry: (this.cherry?.cherryMax ?? 0) * 10,
+      // TH08 has no cherryMax term (the Supernatural Border system is gone);
+      // the row stays at 0.
+      cherry: 0,
       player: playerBonus * 10,
       bomb: bombBonus * 10,
       mult,
@@ -1414,11 +1102,6 @@ export class StageScene implements GameHost {
       lives: this.playerObj.lives,
       bombs: this.playerObj.bombs,
       power: this.playerObj.power,
-      cherry: this.cherry?.cherry ?? 0,
-      cherryMax: this.cherry?.cherryMax ?? 0,
-      cherryPlus: this.cherry?.cherryPlus ?? 0,
-      spellsCaptured: this.cherry?.spellsCaptured ?? 0,
-      extendLevel: this.extendLevel,
       rank: this.rank,
       rankAccumulator: this.rankAccumulator,
       powerItemCountForScore: this.powerItemCountForScore
@@ -1432,12 +1115,8 @@ export class StageScene implements GameHost {
     // field is display/10-scale and the HUD shows it verbatim. Route through
     // the run state so score and the gauge/ladder consumers share one
     // accumulator.
-    if (this.runState) {
-      this.runState.addScore(v);
-      this.score = this.runState.score;
-      return;
-    }
-    this.score += v;
+    this.runState.addScore(v);
+    this.score = this.runState.score;
   }
 
   setLatencyObservationEnabled(enabled: boolean): void {
@@ -1454,7 +1133,6 @@ export class StageScene implements GameHost {
     this.bombActiveThisFrame = false;
     this.bombCleanupDefersBorder = false;
     this.bombCleanupPending = false;
-    this.bombRunner = null;
     this.bombEngine.reset();
     this.activeBombSlots.length = 0;
     for (const region of this.bombClearRegions) region.framesLeft = 0;
@@ -1505,29 +1183,27 @@ export class StageScene implements GameHost {
   private tickScreenFx(): void {
     this.shakeX = 0;
     this.shakeY = 0;
-    if (!this.isDialogueBlocking()) {
-      for (let i = 0; i < this.screenShakes.length;) {
-        const shake = this.screenShakes[i];
-        // Th07.exe (v1.00b) FUN_00445790 @ 0x4457c4-0x4457e6 advances
-        // the split counter BEFORE testing it against the duration. Thus a
-        // duration-N shake draws on counter values 1..N-1 (N-1 ticks), not
-        // 0..N-1. Drawing before the advance kept effect 9 alive one extra
-        // frame and consumed a spurious u32 pair (Stage 5 replay PRE5280).
-        shake.elapsed += this.slowRate;
-        if (shake.elapsed >= shake.duration) {
-          this.screenShakes.splice(i, 1);
-          continue;
-        }
-        const mag = shake.from + (shake.elapsed / shake.duration) * (shake.to - shake.from);
-        // Scheduler order is allocation order and every instance writes the
-        // shared camera fields. The last surviving instance therefore owns
-        // the visible offset while all earlier instances still consume RNG.
-        const xPick = this.rng.u32InRange(3);
-        const yPick = this.rng.u32InRange(3);
-        this.shakeX = xPick === 0 ? 0 : xPick === 1 ? mag : -mag;
-        this.shakeY = yPick === 0 ? 0 : yPick === 1 ? mag : -mag;
-        i++;
+    for (let i = 0; i < this.screenShakes.length;) {
+      const shake = this.screenShakes[i];
+      // Th07.exe (v1.00b) FUN_00445790 @ 0x4457c4-0x4457e6 advances
+      // the split counter BEFORE testing it against the duration. Thus a
+      // duration-N shake draws on counter values 1..N-1 (N-1 ticks), not
+      // 0..N-1. Drawing before the advance kept effect 9 alive one extra
+      // frame and consumed a spurious u32 pair (Stage 5 replay PRE5280).
+      shake.elapsed += this.slowRate;
+      if (shake.elapsed >= shake.duration) {
+        this.screenShakes.splice(i, 1);
+        continue;
       }
+      const mag = shake.from + (shake.elapsed / shake.duration) * (shake.to - shake.from);
+      // Scheduler order is allocation order and every instance writes the
+      // shared camera fields. The last surviving instance therefore owns
+      // the visible offset while all earlier instances still consume RNG.
+      const xPick = this.rng.u32InRange(3);
+      const yPick = this.rng.u32InRange(3);
+      this.shakeX = xPick === 0 ? 0 : xPick === 1 ? mag : -mag;
+      this.shakeY = yPick === 0 ? 0 : yPick === 1 ? mag : -mag;
+      i++;
     }
     const flash = this.screenFlash;
     if (flash && ++flash.timer >= flash.duration) {
@@ -1639,22 +1315,6 @@ export class StageScene implements GameHost {
     r.ctx.restore();
   }
 
-  // Th07.exe FUN_00431da0 (all.c:22298-22323): the instant a pickup completes
-  // the power bar, every OTHER live power/bigPower item converts to bigCherry
-  // with a white sparkle and, if falling, an upward nudge to velocity
-  // (0, -0.5) (threshold _DAT_0048ed74 = -0.5).
-  private convertLivePowerItems(): void {
-    for (const other of this.items) {
-      if (other.dead || (other.type !== 'power' && other.type !== 'bigPower')) continue;
-      other.type = 'bigCherry';
-      if (other.vy > -0.5) {
-        other.vx = 0;
-        other.vy = -0.5;
-      }
-      this.spawnEffectParticles(0, other.x, other.y, 1, 0xffffffff);
-    }
-  }
-
   private th08ItemPool: Th08ItemSpawnPool | null = null;
 
   // TH08 item spawn: the pool decides slot + type + state + velocity with the
@@ -1695,60 +1355,7 @@ export class StageScene implements GameHost {
     // ItemManager::SpawnItem's exact decisions (2096-slot rotating cursor,
     // out-of-bounds x reject, full-power power→pointSmall, time/time2 state
     // forcing, state-2 tween target + state-3/5 velocity RNG draw order).
-    if (this.runState) {
-      this.spawnItemTh08(type, x, y, options);
-      return;
-    }
-    // Th07.exe FUN_00430970 @ 0x430970: a rotating next-fit cursor scans the
-    // fixed 1100-slot pool, advancing once for every tested slot and leaving
-    // the cursor immediately after the allocation. The item manager later
-    // updates live slots in ascending physical order, not spawn order.
-    this.itemSlots ??= new Array(ITEM_POOL_CAP).fill(null);
-    if (!Number.isInteger(this.itemPoolCursor)) this.itemPoolCursor = 0;
-    let slot = -1;
-    for (let scanned = 0; scanned < ITEM_POOL_CAP; scanned++) {
-      const candidate = this.itemPoolCursor;
-      this.itemPoolCursor++;
-      if (this.itemPoolCursor >= ITEM_POOL_CAP) this.itemPoolCursor = 0;
-      if (this.itemSlots[candidate] === null) {
-        slot = candidate;
-        break;
-      }
-    }
-    if (slot < 0) return;
-    // Th07.exe (v1.00b) item spawn primitive FUN_00430970 @ 0x430970: at full
-    // power, power(0)/bigPower(2) drops convert to bigCherry(7) -- so max-power
-    // players get value items instead of wasted power.
-    if (this.playerObj.power >= 128 && (type === 'power' || type === 'bigPower')) type = 'bigCherry';
-    // Spawn mode 2 (FUN_00430970 all.c:21852-21862): the item lerps from its
-    // spawn point to the caller's target over 60 frames (see updateItems).
-    const tween = options.tweenTarget
-      ? {
-          sx: Math.fround(x),
-          sy: Math.fround(y),
-          tx: Math.fround(options.tweenTarget.tx),
-          ty: Math.fround(options.tweenTarget.ty),
-          elapsed: 0,
-          frac: 0
-        }
-      : undefined;
-    const item: ItemEntity = {
-      id: this.id++,
-      poolSlot: slot,
-      // FUN_00430970 stores the item motion block at +0x24c..+0x26c as
-      // float32. Keeping JS doubles shifts collection frames and the
-      // round(y-PoC) score boundary despite otherwise-exact replay events.
-      x: Math.fround(x),
-      y: Math.fround(y),
-      vx: Math.fround(options.vx ?? 0),
-      vy: Math.fround(options.vy ?? -2.2),
-      type,
-      age: 0,
-      state: tween ? 2 : options.state ?? 0,
-      ...(tween ? { tween } : {})
-    };
-    this.itemSlots[slot] = item;
-    this.insertByPoolSlot(this.items, item);
+    this.spawnItemTh08(type, x, y, options);
   }
 
   spawnEffectParticles(
@@ -1951,8 +1558,7 @@ export class StageScene implements GameHost {
     this.sfxPlayedThisFrame.add(id);
     // TH08 plays through its own 46-channel id table (.data 0x4c8040 —
     // ids resolve to different FILES than TH07's table for the same id).
-    const slots = this.runState ? TH08_SFX_SLOTS : SFX_SLOTS;
-    const slot = slots[id];
+    const slot = TH08_SFX_SLOTS[id];
     if (slot) this.audio.sfx(slot[0], slot[1], id);
   }
 
@@ -1966,7 +1572,7 @@ export class StageScene implements GameHost {
   // (bit 11). Consumers outside the slice: FUN_00416b10's spell-bonus
   // accumulator gate — kept on the run state for later wiring.
   th08SetSideMirror(value: 0 | 1): void {
-    if (this.runState) this.runState.th08SideMirror = value;
+    this.runState.th08SideMirror = value;
   }
 
   // TH08 pre-boss/post-boss conversation (timeline ins_6 -> FUN_0043396d
@@ -2015,7 +1621,7 @@ export class StageScene implements GameHost {
     };
     // The enemy-death -> dialogue path (0x42b1e5) pulls the gauge one
     // twelfth of the way back toward neutral when a conversation starts.
-    this.runState?.addYoukaiGauge(this.runState.gaugeDialoguePull());
+    this.runState.addYoukaiGauge(this.runState.gaugeDialoguePull());
   }
 
   // FUN_004413e0 (all.c:31356, called at msg start and from every MSG
@@ -2040,7 +1646,6 @@ export class StageScene implements GameHost {
   // enemies within +-64 of playfield center x (224), the upper-most/first —
   // the familiar's lunge target and the needle shots' aim source.
   private updateTh08TargetCaches(): void {
-    if (!this.runState) return;
     let primary: { x: number; y: number } | null = null;
     let lunge: { x: number; y: number } | null = null;
     for (const e of this.enemies) {
@@ -2059,7 +1664,6 @@ export class StageScene implements GameHost {
   // disarmed >= 30 frames. Gated off during dialogue and bombs.
   private tickTh08Gauge(): void {
     const run = this.runState;
-    if (!run) return;
     const p = this.playerObj;
     if (this.th08Bomb || this.isDialogueActive()) return;
     const armed = p.fireFrame >= 0;
@@ -2156,59 +1760,11 @@ export class StageScene implements GameHost {
   }
 
   startDialogue(index: number): void {
-    if (this.runState) {
-      this.startDialogueTh08(index);
-      return;
-    }
-    // Th07.exe timeline op 8 → FUN_0042819f (all.c:17715-17717): activating
-    // a dialogue cancels every bullet+laser into auto-collecting cherry
-    // items (FUN_00422ea0(1)), kills every non-boss enemy
-    // (FUN_004217c0(0,0) — sweep-flagged ones drop their cherry item), and
-    // force-autocollects every live item with a small upward nudge
-    // (FUN_00431d10). This is what clears the pre-boss wave when a boss
-    // arrives — the boss entry subs themselves carry no authored cancel.
-    this.cancelBulletsToItems();
-    this.runtime.killNonBossEnemies(this, null, 0);
-    this.forceCollectAllItems();
-    // msg1.dat entry layout is sparse: character*10 + phase (0 pre-boss,
-    // 1 post-boss) — entries 0/1 Reimu, 10/11 Marisa, 20/21 Sakuya. The ECL
-    // timeline passes only the phase; the engine adds the character offset.
-    const entry = CHARACTERS[this.playerObj.character].family * 10 + index;
-    // FUN_0042819f @ all.c:17734-17752: after the pre-dialogue clear above,
-    // a phase-0 entry (`entry % 10 == 0`) in Stage 6/Extra/Phantasm writes
-    // item type 9 to DAT_0099fa98. Native Stage-6 processing 5944 then passes
-    // type=9 from FUN_00422ea0 to every FUN_00430970 constructor call.
-    if (entry % 10 === 0 && this.stageNumber >= 6) this.cancelItemType = 'case9Cherry';
-    this.dialogue = new DialogueRunner(this.runtime.msg, entry, {
-      playBgm: (track) => {
-        // Th07.exe FUN_00428392 case 7 (@ 0x4288ae): the argument indexes
-        // this stage's BGM descriptor table, not the global thbgm list.
-        // Every original pre-boss MSG uses slot 1 (the boss theme).
-        const name = stageBgmTrack(this.stageNumber, track);
-        if (name) this.audio.playBgm(name);
-      },
-      fadeBgm: () => this.audio.fadeOutBgm(4),
-      showStageResults: () => {
-        // FUN_00428392 case 9 runs at MSG priority 13. The clear-bonus
-        // manager is earlier in the scheduler, so it observes the flag and
-        // credits the snapshotted tally on the following frame.
-        if (!this.stageResultsActive) this.stageResultsPending = true;
-      },
-      finishStage: () => {
-        // FUN_00428392 case 0xb has two distinct scheduler exits. Stages 1-5
-        // set manager+0x209bc; FUN_00426656 publishes game state 3 only on
-        // the NEXT priority-13 tick, after one final replay PRE/gameplay pass.
-        // Route-final stages write DAT_0056ba88 immediately and have no extra
-        // PRE row. For 1-5, leaving the dialogue inactive lets timeline op9
-        // fall through on that final tick and the common tail latch the clear.
-        if (this.stageNumber >= 6) this.finishStageResults();
-      }
-    });
+    this.startDialogueTh08(index);
   }
 
   private activateStageResults(): void {
     if (this.stageResultsActive) return;
-    this.stageResultsPending = false;
     this.stageResultsActive = true;
     this.stageClearTimer = 0;
     this.computeClearBonus();
@@ -2216,8 +1772,7 @@ export class StageScene implements GameHost {
   }
 
   private finishStageResults(): void {
-    // Every authored post-boss flow reaches op9 first. Keep the fallback for
-    // malformed/debug tracks without manufacturing a second bonus credit.
+    // Every authored post-boss flow reaches the timeline-completion latch.
     if (!this.stageResultsActive) this.activateStageResults();
     if (this.stageClear) return;
     this.stageClear = true;
@@ -2225,19 +1780,13 @@ export class StageScene implements GameHost {
     // per-stage switch pays +2 when the stage's time-orb quota is missed,
     // +1 when met (the recorded Lunatic stage 1 ends at clockTime 1, i.e.
     // met). The stage-1 quota displays as /3000 on the Time row.
-    if (this.runState) {
-      this.runState.addClockTime(this.runState.currentTimeOrbs >= 3000 ? 1 : 2);
-    }
+    this.runState.addClockTime(this.runState.currentTimeOrbs >= 3000 ? 1 : 2);
     this.clearTimer = 1;
   }
 
   isDialogueActive(): boolean {
     if (this.th08Dialogue && !this.th08Dialogue.machine.state.done) return true;
-    return !!this.dialogue && !this.dialogue.done;
-  }
-
-  isDialogueBlocking(): boolean {
-    return !!this.dialogue && this.dialogue.blocking;
+    return false;
   }
 
   isBombActive(): boolean {
@@ -2316,7 +1865,6 @@ export class StageScene implements GameHost {
       // score += uVar6/10 at all.c:6644).
       const bonus = this.spellcard.bonus + this.spellcard.grazeBonus;
       this.addScore(Math.trunc(bonus / 10));
-      this.cherry?.onSpellCapture();
       const tally = this.spellHistory.get(this.spellcard.id);
       if (tally) tally.got++;
       // Duration 280 frames (0x117+1 @ all.c:18302-18304). Failure path
@@ -2340,7 +1888,6 @@ export class StageScene implements GameHost {
   }
 
   onBossPhaseTimeout(): void {
-    this.cherry?.onBossTimeout();
     // Exe timeout path (all.c:13831): FUN_00422ea0(10) — every bullet fades
     // out with NO item conversion, lasers clear unconditionally (bombType
     // 10 ignores the immunity bit) — and the spell is marked failed
@@ -2388,7 +1935,7 @@ export class StageScene implements GameHost {
       // TH08 (all.c:23531-23533): a cancelled bullet spawns TWO time orbs
       // when the mode global reads 9 (stage 1 always does).
       this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
-      if (this.runState) this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
+      this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
     }
     this.clearEnemyBullets(true);
     // FUN_00422ea0(1) also converts each non-immune live laser at its
@@ -2407,7 +1954,7 @@ export class StageScene implements GameHost {
       if (b.dead) continue;
       this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
       // TH08 pays a second time orb per cancelled bullet (all.c:23531-23533).
-      if (this.runState) this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
+      this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
       // FUN_00423100 @ all.c:15624: escalating popup per bullet — white
       // while ramping, yellow once the 8000 cap is reached.
       this.spawnScorePopup(value, b.x, b.y, value < 8000 ? 0xffffffff : 0xffffff00);
@@ -2460,7 +2007,9 @@ export class StageScene implements GameHost {
   }
 
   awardCherry(v: number): void {
-    this.cherry?.debugAddCherry(v);
+    // TH07's cherry accumulator no longer exists; the ECL op160 hook stays
+    // for the GameHost interface.
+    void v;
   }
 
   // Test/debug-only: replace the live field with a deterministic three-shot
@@ -2544,7 +2093,6 @@ export class StageScene implements GameHost {
       this.openPause();
       return;
     }
-    if (this.stageResultsPending) this.activateStageResults();
     // Declined / exhausted continues: linger on GAME OVER, then leave.
     // Practice has no continues and leaves the same way.
     if (this.gameOver && this.mode !== 'test') {
@@ -2576,161 +2124,102 @@ export class StageScene implements GameHost {
     const p = this.playerObj;
     this.sfxPlayedThisFrame.clear();
     this.settledDamageThisFrame = 0;
-    // Full story dialogue uses the global DAT_0061c25c freeze. `frozen` is
-    // captured once at the top of the frame; the dialogue box's own advance
-    // below may clear `this.dialogue` mid-frame, taking effect next frame.
-    const frozen = this.isDialogueBlocking();
-    // Timestamp-only MSG tracks (Stage 5/6 entry 22) leave DAT_0061c25c at
-    // zero: player, enemy, effect, item, and bullet managers all keep running.
-    // FUN_00429483 is a narrower MSG-active predicate used by input-triggered
-    // actions such as bomb/border activation and the shot-cycle re-arm.
+    // TH08 dialogue (Gui::RunMsg) does not latch the global gameplay freeze:
+    // player, enemies, items and background keep running; the timeline's
+    // op-7 hold parks the script clock instead. FUN_00429483 is the narrower
+    // MSG-active predicate used by input-triggered actions such as bomb
+    // activation and the shot-cycle re-arm.
     const messageActive = this.isDialogueActive();
-    const bombCleanupThisTick = !frozen && this.bombCleanupPending;
-    if (!frozen) this.bombCleanupPending = false;
+    const bombCleanupThisTick = this.bombCleanupPending;
+    this.bombCleanupPending = false;
     this.bombCleanupDefersBorder = bombCleanupThisTick;
-    this.bombActiveThisFrame = p.bombTimer > 0 || (frozen && this.bombCleanupPending);
+    this.bombActiveThisFrame = p.bombTimer > 0;
     // Th07.exe (v1.00b) FUN_0043eef0 @ 0x43eefb-0x43ef05 starts with
     // FUN_0043d8f0 (clear the shared 112 attack slots), then FUN_0043d9a0
     // (bomb trigger + active bomb VM), before FUN_0043be00 moves the player
-    // and before FUN_0043a290 republishes player-shot helper slots. ReimuA
-    // bomb actors copy the live player position on their spawn frame, so
-    // running the bomb after movement displaced each orb by that frame's
-    // full 4px input step and falsely cleared Phantasm slot 394.
+    // and before FUN_0043a290 republishes player-shot helper slots.
     const bombActiveAtFrameStart = p.bombTimer > 0;
-    if (!frozen) {
-      this.bombEngine.beginFrame();
-      // FUN_0043d9a0 @ all.c:28516-28525 drains the fixed player+0x16a2c
-      // amount only on the continuation branch. A newly-triggered bomb does
-      // not pay until the following player tick; full-dialogue freeze pauses
-      // the drain together with the rest of the player callback.
-      if (bombActiveAtFrameStart || bombCleanupThisTick) {
-        this.cherry?.drainBomb(p.bombCherryDrain);
-      }
-    }
+    this.bombEngine.beginFrame();
     // The exe reads the bomb button as a raw HELD bit (DAT_004afe30 bit 2 @
     // 0x43d9c3/0x43db3b — gameplay buttons have no edge detection at all),
     // so a bomb held across a dialogue unblock or across the cooldown fires
     // on the first frame the gates open. Bombing during the deathbomb
     // window (p.hitState) still rescues; the squish/materialize are closed
     // by the meter gate inside tryBomb().
-    // FUN_0043d9a0 handles the free Border break before its normal resource,
-    // message and cooldown gates. The break path returns immediately, so the
-    // freshly-written cooldown remains 40 for this frame. Otherwise +0x23fc
-    // is decremented first and held X may trigger as soon as it reaches zero.
-    const borderBreakRequested = !frozen && !bombCleanupThisTick &&
-      p.bombTimer <= 0 && (this.cherry?.borderEngaged ?? false) && input.held.has('bomb');
-    if (borderBreakRequested) {
-      if (this.breakBorder(null, true, true)) this.forceCollectAllItems();
-    } else if (!frozen) {
-      if (p.bombCooldown > 0) p.bombCooldown--;
-      if (!bombCleanupThisTick && !messageActive && input.held.has('bomb') &&
-          (p.controllable || p.hitState) && !this.gameOver && p.tryBomb()) {
-        this.voidSpellCapture();
-        // Th07.exe bomb trigger @ all.c:28503-28506: zeroes the pending
-        // spell bonus and latches DAT_012f40bc = spell-active state.
-        this.bombDuringSpell = this.spellcard !== null;
-        this.onBombUsed();
-      }
+    // +0x23fc is decremented first and held X may trigger as soon as it
+    // reaches zero.
+    if (p.bombCooldown > 0) p.bombCooldown--;
+    if (!bombCleanupThisTick && !messageActive && input.held.has('bomb') &&
+        (p.controllable || p.hitState) && !this.gameOver && p.tryBomb()) {
+      this.voidSpellCapture();
+      // Th07.exe bomb trigger @ all.c:28503-28506: zeroes the pending
+      // spell bonus and latches DAT_012f40bc = spell-active state.
+      this.bombDuringSpell = this.spellcard !== null;
+      this.onBombUsed();
     }
-    if (!frozen && p.bombTimer > 0) this.prepareBombEffects();
-    if (!messageActive) this.cherry?.retryBorderStart();
+    if (p.bombTimer > 0) this.prepareBombEffects();
     // FUN_0043a820's compound gate is bomb-active && Marisa family && B shot
     // (DAT_004ca4d8 / DAT_00625625 / DAT_00625626), not a global bomb gate.
     // Snapshot the frame-entry bomb state because Player.update() consumes
     // the remaining timer later in this callback: MarisaB's timer=1 tick is
     // still blocked, while Reimu/MarisaA/Sakuya continue firing throughout.
     const allowShotSpawnThisTick = playerShotAllocationAllowed(p.character, p.bombTimer > 0);
-    // FUN_0043eef0 returns immediately while the full-dialogue global
-    // DAT_0061c25c is set: movement, player ANM, timers and shot MOVE/FIRE
-    // all stop. Timestamp-only MSG leaves that global zero, so the callback
-    // still runs; only FUN_0043a930's shot-cycle re-arm is suppressed by the
-    // narrower FUN_00429483 message-active predicate.
-    if (!frozen) {
-      // FUN_0043e2e0 precedes movement, shot MOVE/FIRE, and the priority-10
-      // enemy manager. Snapshot the state before Player.update consumes the
-      // last invulnerability tick, matching the native state dispatcher.
-      this.tickPlayerShotCollisionClock(p.invulnFrames > 0 || (this.cherry?.borderActive ?? false));
-      p.update(input, this.slowRate, !messageActive);
-      if (bombActiveAtFrameStart && p.bombTimer === 0) {
-        this.bombCleanupPending = true;
-        // FUN_0040c620 / FUN_0040cbf0 detonation else-branch (all.c:5288 /
-        // 5453): both SakuyaB casts end by restoring the speed multiplier
-        // and publishing a one-pass r800 clear circle at the player
-        // position into the +0x17dc pool (FUN_0043e7e0(player+0x930,
-        // 800.0, 0, 0, 6)). This is the cast's only full-field cancel.
-        if (p.character === 'sakuyaB') this.allocateBombClearRegion(p.x, p.y, 800, 0, 1);
-      }
-      this.focusHeld = p.focusHeld;
-      // TH08 has no TH07 effect-24 focus burst (etama.anm v3 has no script
-      // 26 in entry 1); the Border Team's focus presentation is the
-      // human/youkai sprite swap instead.
-      if (p.focusTransition === 'in' && !this.runState) {
-        const entryIndex = 1;
-        const entry = this.assets.anms.etama.entries[entryIndex];
-        // Th07.exe (v1.00b) FUN_0043c9a5 @ 0x43c99b creates effect id 24
-        // only on focus-in. Its master script 0x2c2 resolves to etama.anm
-        // entry 1 / local script 26; time-0 op60 consumes one u32 from the
-        // shared gameplay RNG. A fresh focus-in replaces the reserved slot.
-        this.focusEffectRunner = new AnmRunner(this.assets.anms.etama, 26, {
-          entryIndex,
-          spriteIndexOffset: entry.spriteBase,
-          rng: this.rng
-        });
-      } else if (p.focusTransition === 'out' && this.focusEffectRunner) {
-        this.focusEffectRunner.interrupt(1);
-      }
-      // TH08 form-transition presentation (FUN_0044aec0's toggle branch):
-      // the to-human/to-youkai tint (effects 28/29 = etama archive 57/58)
-      // after >= 5 held frames, and the focus aura (effect 22 = archive 54,
-      // handle player+0xbe834) armed on every focus-in and released by
-      // interrupt 1 on the way out.
-      if (this.runState) {
-        const fx = p.pendingTh08FormEffect;
-        p.pendingTh08FormEffect = 0;
-        if (fx === 28) {
-          this.spawnTh08Effect(57, p.x, p.y, 90, { color: 0x8080ff });
-        } else if (fx === 29) {
-          this.spawnTh08Effect(58, p.x, p.y, 90, { color: 0xff8080 });
-        }
-        const aura = p.pendingTh08Aura;
-        p.pendingTh08Aura = null;
-        if (aura === 'in') {
-          this.th08AuraHandle?.release();
-          const actor = { x: p.x, y: p.y, angle: 0, state: 1 };
-          this.th08AuraActor = actor;
-          this.th08AuraHandle = this.th08Effects.spawnHandle({
-            scriptId: archiveScript(this.assets.anms.etama, 54).localId,
-            x: p.x, y: p.y, follow: actor
-          });
-        } else if (aura === 'out') {
-          this.th08AuraHandle?.interrupt(1);
-          this.th08AuraHandle = null;
-          this.th08AuraActor = null;
-        }
-        if (this.th08AuraActor) {
-          this.th08AuraActor.x = p.x;
-          this.th08AuraActor.y = p.y;
-        }
-      }
+    // FUN_0043e2e0 precedes movement, shot MOVE/FIRE, and the priority-10
+    // enemy manager. Snapshot the state before Player.update consumes the
+    // last invulnerability tick, matching the native state dispatcher.
+    this.tickPlayerShotCollisionClock(p.invulnFrames > 0);
+    p.update(input, this.slowRate, !messageActive);
+    if (bombActiveAtFrameStart && p.bombTimer === 0) {
+      this.bombCleanupPending = true;
+    }
+    this.focusHeld = p.focusHeld;
+    // TH08 form-transition presentation (FUN_0044aec0's toggle branch):
+    // the to-human/to-youkai tint (effects 28/29 = etama archive 57/58)
+    // after >= 5 held frames, and the focus aura (effect 22 = archive 54,
+    // handle player+0xbe834) armed on every focus-in and released by
+    // interrupt 1 on the way out.
+    const fx = p.pendingTh08FormEffect;
+    p.pendingTh08FormEffect = 0;
+    if (fx === 28) {
+      this.spawnTh08Effect(57, p.x, p.y, 90, { color: 0x8080ff });
+    } else if (fx === 29) {
+      this.spawnTh08Effect(58, p.x, p.y, 90, { color: 0xff8080 });
+    }
+    const aura = p.pendingTh08Aura;
+    p.pendingTh08Aura = null;
+    if (aura === 'in') {
+      this.th08AuraHandle?.release();
+      const actor = { x: p.x, y: p.y, angle: 0, state: 1 };
+      this.th08AuraActor = actor;
+      this.th08AuraHandle = this.th08Effects.spawnHandle({
+        scriptId: archiveScript(this.assets.anms.etama, 54).localId,
+        x: p.x, y: p.y, follow: actor
+      });
+    } else if (aura === 'out') {
+      this.th08AuraHandle?.interrupt(1);
+      this.th08AuraHandle = null;
+      this.th08AuraActor = null;
+    }
+    if (this.th08AuraActor) {
+      this.th08AuraActor.x = p.x;
+      this.th08AuraActor.y = p.y;
     }
     // The popup/ascii manager is priority 1, ahead of every gameplay
     // manager. Existing popups age now; item pickups later this frame create
     // fresh entries that do not tick until the next scheduler pass.
     this.updatePopups();
-    if (!frozen) {
-      const death = p.tickDeath(this.slowRate);
-      if (death === 'effects') this.onPlayerDeath();
-      else if (death === 'respawn') this.onPlayerRespawn();
-      if (this.respawnClearFrames > 0) {
-        // Exe FUN_0043e2e0 top (all.c:28692-28695): while player+0x2400
-        // counts down, FUN_00422ea0(0) runs every frame — silent, itemless,
-        // skips bomb-immune lasers.
-        this.respawnClearFrames--;
-        this.clearEnemyBullets();
-        this.cancelLasers(false);
-      }
-      this.stageFrame++;
+    const death = p.tickDeath(this.slowRate);
+    if (death === 'effects') this.onPlayerDeath();
+    else if (death === 'respawn') this.onPlayerRespawn();
+    if (this.respawnClearFrames > 0) {
+      // Exe FUN_0043e2e0 top (all.c:28692-28695): while player+0x2400
+      // counts down, FUN_00422ea0(0) runs every frame — silent, itemless,
+      // skips bomb-immune lasers.
+      this.respawnClearFrames--;
+      this.clearEnemyBullets();
+      this.cancelLasers(false);
     }
+    this.stageFrame++;
     for (const runner of this.stageIntroRunners) {
       if (!runner.removed) runner.update(this.slowRate);
     }
@@ -2744,96 +2233,42 @@ export class StageScene implements GameHost {
       for (const runner of this.spellBackgroundRunners) runner.update(this.slowRate);
     }
     if (this.bonusPopup && --this.bonusPopup.timer <= 0) this.bonusPopup = null;
-    if (this.borderMessage) {
-      this.borderMessage.age++;
-      if (--this.borderMessage.timer <= 0) this.borderMessage = null;
-    }
-    if (!frozen) {
-      // FUN_0043eef0 returns before the state-4 border timer while dialogue
-      // freeze DAT_0061c25c is set; the 540-frame clock pauses with gameplay.
-      const borderBonus = this.cherry ? this.cherry.tick(this.slowRate) : 0;
-      if (borderBonus > 0) this.addScore(borderBonus);
-      // The border ring/badge VMs ride the same clock (the exe's effect VM
-      // ticks inside the frozen-with-gameplay EffectManager priority band):
-      // both pause while the border timer does.
-      if (this.borderRing) {
-        this.borderRing.runner.update(this.slowRate);
-        this.borderRing.age += this.slowRate;
-        if (this.borderRing.runner.removed) this.borderRing = null;
-      }
-      if (this.borderBadgeRunner) {
-        this.borderBadgeRunner.update(this.slowRate);
-        if (this.borderBadgeRunner.removed) this.borderBadgeRunner = null;
-      }
-      // Native scheduler order (FUN_0042e420 + priority registrations):
-      // player(8) -> enemies(10) -> effects(11) -> item+bullets/lasers(12).
-      // Inside the player callback, existing shots move before the firing
-      // pass allocates new shots (FUN_0043eef0 @ all.c:29061-29063).
-      // FUN_0043eef0 keeps calling MOVE/ANM -> FIRE -> aim-cache reset while
-      // timestamp-only MSG is active (DAT_0061c25c remains zero).  Player
-      // update above prevents a disarmed cycle from re-arming; fire() still
-      // drains any cycle that was already armed when the message began.
-      this.updatePlayerBullets();
-      this.firePlayerBullets(allowShotSpawnThisTick);
-      // FUN_0043edc0 runs after firing and clears both target snapshots.
-      // The enemy manager below repopulates them for the NEXT player tick.
-      this.clearPlayerAimCaches();
-    }
+    // Native scheduler order (FUN_0042e420 + priority registrations):
+    // player(8) -> enemies(10) -> effects(11) -> item+bullets/lasers(12).
+    // Inside the player callback, existing shots move before the firing
+    // pass allocates new shots (FUN_0043eef0 @ all.c:29061-29063).
+    // FUN_0043eef0 keeps calling MOVE/ANM -> FIRE -> aim-cache reset while
+    // a timestamp-only MSG is active. Player update above prevents a
+    // disarmed cycle from re-arming; fire() still drains any cycle that was
+    // already armed when the message began.
+    this.updatePlayerBullets();
+    this.firePlayerBullets(allowShotSpawnThisTick);
+    // FUN_0043edc0 runs after firing and clears both target snapshots.
+    // The enemy manager below repopulates them for the NEXT player tick.
+    this.clearPlayerAimCaches();
     // FUN_0041ed50 (priority 10) and the generic effect manager (priority
-    // 11) do NOT honor DAT_0061c25c. Full story dialogue freezes the player
-    // and priority-12 item/bullet callback, but invisible ECL controllers,
+    // 11) do NOT honor the TH07 dialogue freeze: invisible ECL controllers,
     // enemies, movement/collision and ambient effects continue. The only
     // enemy-tail exception is the boss timer, gated in tickEnemyManagerTail.
     this.updateEnemies();
     this.updateTh08TargetCaches();
     this.tickTh08Gauge();
-    if (this.focusEffectRunner && !this.focusEffectRunner.removed) {
-      this.focusEffectRunner.update(this.slowRate);
-    }
     this.updateParticles();
-    if (!frozen) {
-      // FUN_004241c0 calls the item manager at the head of the priority-12
-      // bullet callback (all.c:16039-16042). Items therefore update after
-      // effects, before bullets/lasers, and freeze with dialogue gameplay.
-      // Cancellation items created later in this callback wait until the
-      // next frame for their first update.
-      this.updateItems();
-      this.updateBullets();
-      this.updateLasers();
-      if (this.postBombLaserCounter > 0) this.postBombLaserCounter--;
-    }
+    // FUN_004241c0 calls the item manager at the head of the priority-12
+    // bullet callback (all.c:16039-16042). Items therefore update after
+    // effects, before bullets/lasers, and freeze with dialogue gameplay.
+    // Cancellation items created later in this callback wait until the
+    // next frame for their first update.
+    this.updateItems();
+    this.updateBullets();
+    this.updateLasers();
+    if (this.postBombLaserCounter > 0) this.postBombLaserCounter--;
     // The MSG manager is registered at priority 13 (FUN_00426656 via
     // FUN_0042e290(..., 0xd), all.c:18954), after enemies/effects and the
-    // item+bullet+laser priority-12 callback. A timeline op8 created inside
+    // item+bullet+laser priority-12 callback. A timeline op6 created inside
     // this frame's enemy manager therefore gets its first interpreter tick
-    // at this tail, not at the start of the next frame. `frozen` remains the
-    // frame-start snapshot above: a dialogue that already existed freezes
-    // this frame's gameplay, then may advance/end here; a newly-created empty
-    // entry can end here without inventing a one-frame freeze next tick.
-    // The message/stage mini-VM force-completes any engaged Border before
-    // advancing its own script (FUN_00428392 -> FUN_0043e620,
-    // all.c:17791-17793). This is distinct from the global gameplay-freeze
-    // predicate: timestamp-only dialogue is active here too.
-    if (this.isDialogueActive() && (this.cherry?.borderEngaged ?? false)) {
-      const forcedBorderBonus = this.cherry ? this.cherry.forceBorderSurvival() : 0;
-      if (forcedBorderBonus > 0) this.addScore(forcedBorderBonus);
-    }
-    if (this.dialogue) {
-      // FUN_00428392 @ 0x428442 runs after the priority-12 item manager and
-      // calls FUN_00431d10 on every live MSG tick (except player state 2).
-      // This ordering matters for dialogue-start enemy drops: they first get
-      // one ordinary falling tick, then are latched with velocity (0,-0.5).
-      // Native Phantasm PRE3966 pins slot 1002 at (169.960052,125.800003),
-      // state=1, age=1; pre-homing it at updateItems' head moved it 8 px too
-      // soon and shifted three large-Cherry pickup frames.
-      if (!p.hitState && p.dyingFrame < 0) this.forceCollectAllItems();
-      this.dialogue.update(input.pressed.has('shoot'), input.held.has('skip'));
-      if (this.dialogue.resumeTicket) {
-        this.dialogue.resumeTicket = false;
-        this.dialogueResume = true;
-      }
-      if (this.dialogue.done) this.dialogue = null;
-    } else if (this.th08Dialogue) {
+    // at this tail, not at the start of the next frame.
+    if (this.th08Dialogue) {
       this.updateTh08Dialogue(input);
     }
     // Bomb over: release the interrupt-gated bomb visuals (label 1 is the
@@ -2865,13 +2300,8 @@ export class StageScene implements GameHost {
 
   private finishBombPresentation(): void {
     this.playerEffects.interruptAll(1);
-    this.bombRunner = null;
     this.bombEngine.reset();
     this.activeBombSlots.length = 0;
-    // Do not clear player+0x17dc here. FUN_0043d8f0 owns that pool and keeps
-    // aging its entries every player tick even after +0x16a20 (bomb-active)
-    // reaches zero. ReimuA orb 7's detonation circle therefore outlives the
-    // attack VM and clears Phantasm slot 883 on update 10549 before graze.
   }
 
   private onBombUsed(): void {
@@ -2882,63 +2312,23 @@ export class StageScene implements GameHost {
     // 0x4c7ad0 team block 0): 0x40c010 unfocused / 0x410c40 focused /
     // 0x40c910+0x410fe0 the side-inverted deathbombs. Durations come from
     // the shared cast helper 0x40be30 (260/200/260/300).
-    if (this.runState) {
-      this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
-      this.th08BombOrbActors = [];
-      this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
-      // param_4 (active length) drives bombTimer; the separate param_5
-      // clock at player+0xe2af4 is the LONGER invulnerability window.
-      p.bombTimer = this.th08Bomb.duration;
-      p.bombInvuln = TH08_BOMB_INVULN[p.th08BombType];
-      // FUN_0040be30 → FUN_00415d60: every bomb declares its spell card
-      // (portrait + banner VMs + the rdata name, sfx id 14 se_cat00);
-      // the bomb callback then queues sfx id 13 (se_gun00) itself
-      // (0x40c067-0x40c07f pushes 0x4b43a0's declaration first).
-      this.startTh08Declaration(p.th08BombType);
-      this.playSfx(13);
-      // 0x44c773 FUN_0043c03f(200): every bomb cast lowers the rank by 200
-      // subrank points.
-      this.adjustRank(-200);
-      this.forceCollectAllItems();
-      return;
-    }
-    p.bombCherryDrain = bombCherryDrainPerFrame(
-      p.character,
-      p.bombFocused,
-      this.difficulty,
-      this.cherry ? this.cherry.cherry : 0,
-      Math.trunc(p.bombTimer)
-    );
-    this.playSfx(14);
-    // Th07.exe: bomb activation spawns an ANM VM (FUN_00407620 → FUN_0041b770(0x19))
-    // whose init reseeds 2 object fields via FUN_00401700 (rand%100000 + 0x198f),
-    // consuming exactly 8 RNG draws at the activation frame — NOT a 24-particle
-    // flash. The values are presentation-only ANM state; only the draw count feeds
-    // the shared stream. Model it as 2 effect particles (2 × 4 draws = 8).
-    this.spawnEffectParticles(3, this.playerObj.x, this.playerObj.y, 2, 0xffffffff);
-    // FUN_0043d9a0 @ 0x43dc31-0x43dc40: every successful bomb subtracts
-    // 200 rank points. A free Border break never enters this path.
+    this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
+    this.th08BombOrbActors = [];
+    this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
+    // param_4 (active length) drives bombTimer; the separate param_5
+    // clock at player+0xe2af4 is the LONGER invulnerability window.
+    p.bombTimer = this.th08Bomb.duration;
+    p.bombInvuln = TH08_BOMB_INVULN[p.th08BombType];
+    // FUN_0040be30 → FUN_00415d60: every bomb declares its spell card
+    // (portrait + banner VMs + the rdata name, sfx id 14 se_cat00);
+    // the bomb callback then queues sfx id 13 (se_gun00) itself
+    // (0x40c067-0x40c07f pushes 0x4b43a0's declaration first).
+    this.startTh08Declaration(p.th08BombType);
+    this.playSfx(13);
+    // 0x44c773 FUN_0043c03f(200): every bomb cast lowers the rank by 200
+    // subrank points.
     this.adjustRank(-200);
-    // Th07.exe FUN_00431d10: bombing flags every live item for collection
-    // (same state=1 autocollect the border uses in updateItems).
     this.forceCollectAllItems();
-    this.bombEngine.reset();
-    this.bombFrame = 0;
-    this.bombDuration = this.playerObj.bombTimer;
-    // FUN_00407620: the shared activation presentation (a reserved-slot ANM
-    // VM tied to the invuln duration) — represented here by the character's
-    // own bomb ANM scripts plus the runner's choreography.
-    // Th07.exe FUN_00407840 (ReimuA) @0x407862: the activation writes a fixed-center
-    // expanding-circle bullet-clear region via FUN_0043e7e0(player+0x930, r0=32, grow=8,
-    // life=16, 6) into the player+0x17dc pool. Native-verified: center = player snapshot
-    // at cast, radius 32→160 at +8/frame over 17 frames. Other characters' activation
-    // blasts (different r0/grow) are not yet traced — add per character as converged.
-    if (p.character === 'reimuA') {
-      this.allocateBombClearRegion(p.x, p.y, 32, 8, 17);
-    }
-    this.bombRunner = new BombRunner(this.bombEngine, p.character, p.bombFocused);
-    this.bombRunner.start(this.refreshBombContext());
-    this.spawnBombEffects();
   }
 
   private allocateBombClearRegion(
@@ -2962,70 +2352,14 @@ export class StageScene implements GameHost {
     return false;
   }
 
-  private createBombContext(): BombContext {
-    const p = this.playerObj;
-    return {
-      player: p,
-      fx: this.playerEffects,
-      rng: this.rng,
-      frame: Math.floor(this.bombFrame),
-      elapsed: this.bombFrame,
-      duration: this.bombDuration,
-      focused: p.bombFocused,
-      rate: this.slowRate,
-      enemies: this.enemies,
-      enemyBullets: this.enemyBullets,
-      playSfx: (id) => this.playSfx(id),
-      spawnParticles: (effectId, x, y, count, color) => this.spawnEffectParticles(effectId, x, y, count, color),
-      startScreenShake: (duration, from, to) => this.startScreenShake(duration, from, to),
-      addBulletClearRegion: (x, y, radius, growth, frames) => {
-        // FUN_0043e7e0 allocates the first free player+0x17dc entry. The
-        // pool is advanced by FUN_0043d8f0 at the head of the next player
-        // tick; a life-0 entry therefore survives only the current bullet
-        // manager pass, while life-N entries are observed for N+1 passes.
-        this.allocateBombClearRegion(x, y, radius, growth, frames + 1);
-      },
-      createBombAnmRunner: (scriptId) => new AnmRunner(p.anm, scriptId, { rng: this.rng })
-    };
-  }
-
-  private refreshBombContext(): BombContext {
-    const ctx = this.bombContext;
-    const p = this.playerObj;
-    ctx.frame = Math.floor(this.bombFrame);
-    ctx.elapsed = this.bombFrame;
-    ctx.duration = this.bombDuration;
-    ctx.focused = p.bombFocused;
-    ctx.rate = this.slowRate;
-    // ZunTimer::HasTicked: true when the LAST bombFrame advance (the tail of
-    // the previous player tick) carried the integer current. bombFrame is
-    // advanced after this tick runs, so compare against one rate step back.
-    // Frame 0 (fresh cast) reads true, matching the native timer-init state.
-    ctx.hasTicked = Math.floor(this.bombFrame) !== Math.floor(this.bombFrame - this.slowRate);
-    // Native Player::OnUpdate runs UpdateBombProjectiles at the HEAD of the
-    // player callback and clears positionOfLastEnemyHit at its TAIL
-    // (UpdateUI, Player.cpp:2199), so the bomb reads the cache accumulated
-    // by the PREVIOUS frame's enemy-manager pass. The port's bomb tick sits
-    // before this frame's clearPlayerAimCaches for the same reason: homingAim
-    // still holds last frame's accumulation here.
-    ctx.aimTarget = this.homingAim;
-    return ctx;
-  }
-
-  // Per-frame bomb choreography: the active form's decoded state machine
-  // writes moving attack slots into the pool each frame (Th07.exe bomb tick
-  // functions 0x407840-0x40cbf0; specs spec-bombs-{shared,reimu,marisa,
-  // sakuya}.md). Slot consumption below is exe-exact.
+  // Per-frame bomb choreography: the TH08 border-bomb simulation runs its
+  // own tick and applies its bullet-clear events against the live
+  // enemy-bullet list; damage settles immediately through the host's
+  // addAttackSlot.
   private tickBombChoreography(): void {
-    // TH08 path: the border-bomb simulation runs its own tick and applies
-    // its bullet-clear events against the live enemy-bullet list; damage
-    // settles immediately through the host's addAttackSlot.
     if (this.th08Bomb) {
       this.tickTh08Bomb();
-      return;
     }
-    if (!this.bombRunner) return;
-    this.bombRunner.tick(this.refreshBombContext());
   }
 
   private tickTh08Bomb(): void {
@@ -3052,7 +2386,7 @@ export class StageScene implements GameHost {
     // The machine pays ±26000/gaugeDuration into the gauge every frame of
     // the bomb, bypassing the lock (0x44c81b-0x44c850); the denominator is
     // be30's param_4 (200/150/200/250), NOT the bomb duration.
-    if (this.runState) this.runState.addYoukaiGauge(sim.gaugeDeltaThisFrame(), true);
+    this.runState.addYoukaiGauge(sim.gaugeDeltaThisFrame(), true);
     if (!sim.active) {
       this.th08Bomb = null;
       this.th08BombOrbActors = [];
@@ -3170,87 +2504,10 @@ export class StageScene implements GameHost {
     };
   }
 
-  // Bomb visuals, per shot type, from the character's own playerXX.anm bomb
-  // scripts (decoded from the embedded data; script ids and their behavior
-  // are the original's, the spawn cadence/anchor offsets below are flagged
-  // approximations — the exe routine that places them is not reimplemented;
-  // AGENTS.md §7).
-  private spawnBombEffects(): void {
-    const p = this.playerObj;
-    const fx = this.playerEffects;
-    const dur = p.bombTimer;
-    switch (p.character) {
-      case 'reimuA': {
-        // 夢想封印: colored orbs (player00.anm scr133-136, offset-mode wander
-        // + interrupt-1 fade) drifting outward in two waves.
-        for (let wave = 0; wave < 2; wave++) {
-          for (let i = 0; i < 4; i++) {
-            const angle = -Math.PI / 2 + (i - 1.5) * 0.55 + (wave ? 0.27 : 0);
-            fx.spawn({
-              scriptId: 133 + i,
-              x: p.x, y: p.y,
-              vx: Math.cos(angle) * 1.1,
-              vy: Math.sin(angle) * 1.1,
-              delay: wave * 40
-            });
-          }
-        }
-        break;
-      }
-      case 'reimuB':
-        // 封魔陣: the big seal circles (scr141-143) plus the four cross
-        // beams sweeping out from the cast point (scr137-140).
-        for (const id of [141, 142, 143, 137, 138, 139, 140]) fx.spawn({ scriptId: id, x: p.x, y: p.y });
-        break;
-      case 'marisaA':
-        // スターダストレヴァリエ: magic circle (scr71) at the cast point;
-        // star bursts (scr98-104) respawn per-frame in applyBombEffects.
-        fx.spawn({ scriptId: 71, x: p.x, y: p.y, ttl: dur });
-        break;
-      case 'marisaB':
-        // マスタースパーク: magic circle (scr72) + the star-column beam
-        // layers (scr73-78, interrupt-1 releases their fade) tiled up the
-        // playfield from the muzzle; bursts along the beam come from
-        // applyBombEffects.
-        fx.spawn({ scriptId: 72, x: p.x, y: p.y, ttl: dur });
-        for (let tier = 0; tier < 3; tier++) {
-          const y = p.y - 56 - tier * 94;
-          fx.spawn({ scriptId: 73 + tier, x: p.x, y });
-          fx.spawn({ scriptId: 76 + tier, x: p.x, y });
-        }
-        break;
-      case 'sakuyaA': {
-        // 殺人ドール: a ring of knives (scr5/6 trails) thrown outward, with
-        // the red/blue "world" squares (scr9/10) flashing at the cast point.
-        fx.spawn({ scriptId: 9, x: p.x, y: p.y });
-        fx.spawn({ scriptId: 10, x: p.x, y: p.y });
-        for (let i = 0; i < 16; i++) {
-          const angle = (i / 16) * Math.PI * 2;
-          fx.spawn({
-            scriptId: 5 + (i & 1),
-            x: p.x, y: p.y,
-            vx: Math.cos(angle) * 3.2,
-            vy: Math.sin(angle) * 3.2,
-            rotation: angle + Math.PI / 2
-          });
-        }
-        break;
-      }
-      case 'sakuyaB':
-        // プライベートスクウェア: the staggered grow/shrink world squares
-        // (scr9-12) under the two slow-rotating additive overlays (scr13/14,
-        // ~300f — the time-stop tint for the whole bomb).
-        for (const id of [9, 10, 11, 12, 13, 14]) fx.spawn({ scriptId: id, x: p.x, y: p.y - 96 });
-        break;
-    }
-  }
-
   private prepareBombEffects(): void {
-    // Per-form choreography updates the attack-slot pool (Th07.exe bomb tick
-    // functions 0x407840-0x40cbf0 write player+0x9dc slots each frame).
+    // The bomb tick runs before this frame's enemy/bullet passes so the
+    // choreography state is fixed for the rest of the frame.
     this.tickBombChoreography();
-    this.bombFrame += this.slowRate;
-    // Choreography has fixed active/radius state for the rest of this frame.
     // Cache the ordered object references instead of restarting the 112-slot
     // generator for every enemy and every bullet in a dense field.
     this.refreshActiveAttackSlots();
@@ -3259,16 +2516,6 @@ export class StageScene implements GameHost {
   private refreshActiveAttackSlots(): void {
     this.activeBombSlots.length = 0;
     for (const slot of this.bombEngine.activeSlots()) this.activeBombSlots.push(slot);
-  }
-
-  // Compatibility seam for focused unit tests that exercise bomb collision
-  // without running the full scheduler. Shipped gameplay uses the native
-  // per-enemy/per-bullet interleaving above.
-  private applyBombEffects(): void {
-    this.bombEngine.beginFrame();
-    this.prepareBombEffects();
-    for (const e of this.enemies) this.collideBombSlots(e);
-    for (const b of this.enemyBullets) this.cancelBulletWithBombSlots(b);
   }
 
   private collideBombSlots(e: Enemy, hitbox = e.ecl.hitbox): void {
@@ -3386,7 +2633,6 @@ export class StageScene implements GameHost {
       p.power = p.power < 17 ? 0 : p.power - 16;
       this.spawnDeathDrop('bigPower', p.x, p.y);
       for (let i = 0; i < 5; i++) this.spawnDeathDrop('power', p.x, p.y);
-      this.cherry?.onDeath(p.sht.cherryLossOnDeath, p.character.startsWith('sakuya'));
     }
     // FUN_0043dca0 @ 0x43df6a-0x43df79: the miss penalty lands after the
     // power/cherry/drop bookkeeping, on the death-commit frame.
@@ -3448,7 +2694,7 @@ export class StageScene implements GameHost {
     // Scripts 0-3 = 一時停止 + the three menu rows; 4-6 = the confirm set.
     for (let i = 0; i <= 3; i++) runners[i].interrupt(1);
     this.pauseState = { cursor: 0, confirm: false, confirmCursor: 1, closing: 0, action: null, runners };
-    this.playSfx(this.runState ? 34 : 37); // se_pause (TH08 id 34)
+    this.playSfx(34); // se_pause (TH08 id 34)
   }
 
   private updatePause(input: InputFrame): void {
@@ -3634,24 +2880,6 @@ export class StageScene implements GameHost {
     // character*2+type (0 ReimuA .. 5 SakuyaB), not merely the A/B bit.
     // The quirks below compare it to zero and therefore apply to ReimuA only.
     const shotIndex = this.shotIndex;
-    // Cherry gain uses the UNREDUCED damage — the exe computes it before
-    // the per-stage reductions below (all.c:14189 vs 14200-14209). The
-    // divisor input is the STAGE number (local_14 = min(stage*2,10),
-    // all.c:13997-14003 — DAT_0062583c is the stage, not the difficulty;
-    // spec-extra-phantasm.md §0).
-    // DAT_004ca4d8 gates the complete Cherry-on-hit branch at 0x41f8ed.
-    // Attack contacts still damage and score during a bomb, but never add
-    // Cherry or Cherry+ while the bomb-active flag is set.
-    if (!this.bombActiveThisFrame) {
-      this.cherry?.onShotHit(
-        raw,
-        e.ecl.isBoss,
-        this.stageNumber,
-        shotIndex,
-        (e.ecl.bossTimer & 1) === 1,
-        this.playerObj.focusHeld
-      );
-    }
     // Per-stage ReimuA shot-damage reduction vs NON-boss enemies
     // (all.c:14198-14209, gated on DAT_00625627=='\0' and bit6 clear):
     // stage 4 -> dmg - dmg/4 - dmg/16 (11/16), stages 5-6 -> dmg/2.
@@ -3701,7 +2929,7 @@ export class StageScene implements GameHost {
         continue;
       }
       if (b.state === 'fired') {
-        if (b.tickFunc === 1 && this.runState) {
+        if (b.tickFunc === 1) {
           // TH08 SHT tick callback 1 (FUN_00450320): the unfocused Border
           // pair's per-frame seek against the PRIMARY position cache
           // (player+0xe2aa4, the max-y enemy). Gates on the shot's own age:
@@ -3776,7 +3004,7 @@ export class StageScene implements GameHost {
     const volley = this.playerObj.fire(this.slowRate, allowSpawn);
     let playedShotSfx = false;
     for (const b of volley) {
-      if (this.runState && b.behaviorFunc === 1) {
+      if (b.behaviorFunc === 1) {
         // TH08 SHT init callback 1 (FUN_00450240): with the pointer-cache
         // target, the fresh shot's velocity rotates onto the target bearing
         // plus the record's split offset — normalize(atan2 + rec.angle +
@@ -3831,7 +3059,7 @@ export class StageScene implements GameHost {
     // contact block — collision, damage, and homing-target publication
     // (all.c:21448 gates the scan on it clear). Controllers like stage-1's
     // ambient Sub14 hold it set permanently.
-    if (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
+    if (e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
     if (!e.ecl.shotCollision || !e.ecl.interactable || e.ecl.invisible || e.dead) return;
     this.collidePlayerShotsInBox(e, e.ecl.hitbox);
     const second = e.ecl.hitbox2;
@@ -3897,16 +3125,6 @@ export class StageScene implements GameHost {
     } else {
       this.playerShotCollisionClockAdvanced = false;
     }
-  }
-
-  private resetPlayerShotCollisionSpecialClock(): void {
-    // Th07.exe (v1.00b) FUN_0043e620 @ 0x43e6c0-0x43e6e8 and
-    // FUN_0043eb00 @ 0x43ed43-0x43ed68 both enter player state 3 with
-    // current=40, frac=0 and previous=-999. `Advanced` describes the scan
-    // already selected for the current manager pass, so leave it untouched;
-    // the next tick must retreat immediately from the fresh zero fraction.
-    this.playerShotCollisionClockFrac = 0;
-    this.playerShotCollisionClockSpecial = true;
   }
 
   private collidePlayerShotsInBox(e: Enemy, hitbox: { x: number; y: number; z: number }): void {
@@ -3993,7 +3211,7 @@ export class StageScene implements GameHost {
   // MarisaB laser-slot upkeep, Th07.exe FUN_0043a290 head + the shared
   // timer logic inside FUN_004396a0/FUN_004398e0:
   //  - the countdown ticks every frame; shoot released clamps it to 50;
-  //    a bomb or blocking dialogue clamps it to 20;
+  //    a bomb clamps it to 20;
   //  - dropping below 71 arms the beam ANM's interrupt-1 release fade
   //    (script 75/77: 30f fade then remove — the removal frees the bullet);
   //  - leaving the settled-unfocused state fades slots 0/1; leaving the
@@ -4001,7 +3219,7 @@ export class StageScene implements GameHost {
   //  - timer 0 hard-frees.
   private tickLaserSlots(): void {
     const p = this.playerObj;
-    const blocked = this.isDialogueBlocking() || this.bombActiveThisFrame;
+    const blocked = this.bombActiveThisFrame;
     for (let i = 0; i < 3; i++) {
       const slot = p.laserSlots[i];
       if (!slot) continue;
@@ -4112,7 +3330,7 @@ export class StageScene implements GameHost {
     // cached for the next player tick.
     if (e.dead || !e.ecl.interactable || e.ecl.invisible || !e.ecl.shotCollision) return;
     // TH08 flags bit 4 also suppresses the homing-target publication.
-    if (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
+    if (e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
     const px = this.playerObj.x;
     const py = this.playerObj.y;
     const sakuya = this.playerObj.character.startsWith('sakuya');
@@ -4373,7 +3591,7 @@ export class StageScene implements GameHost {
   private collideEnemyBody(e: Enemy): void {
     const p = this.playerObj;
     if (this.gameOver || !p.alive || !e.ecl.collisionEnabled ||
-        (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) ||
+        (e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) ||
         !e.ecl.interactable || e.ecl.invisible || e.dead) return;
     // TH08 familiar body contact — two stacked gates:
     // 1. Ethereal familiars (bit 11, player in youkai form) never contact
@@ -4384,7 +3602,7 @@ export class StageScene implements GameHost {
     //    other team takes familiar body contact while materialized.
     //    The vertical slice is Border Team only, so familiars never
     //    body-contact here.
-    if (this.runState && e.ecl.th08?.familiar) return;
+    if (e.ecl.th08?.familiar) return;
     // FUN_0041ebc0 runs first at the live head, then at position-history
     // indices 1,7,13,... below. Each call performs graze before body hit.
     this.collideEnemyBodyAt(e, e.x, e.y, e.ecl.hitbox);
@@ -4440,61 +3658,35 @@ export class StageScene implements GameHost {
   private onGrazeAward(sourceX = this.playerObj.x, sourceY = this.playerObj.y): void {
     const p = this.playerObj;
     // Th07.exe (v1.00b) FUN_0043bb30 @ 0x43bc2f-0x43bc81: every graze
-    // spawns generic effect id 8 at the midpoint between player and contact.
-    // During an active Border, an UNFOCUSED player uses three red particles;
-    // every other state uses one white particle. The native tests
-    // player+0x240d (Border state) then player+0x240b (focus byte) at
-    // 0x43bc42-0x43bc70; character is not consulted. DAT_00494fb0 maps id8
-    // to FUN_004194d0, four raw RNG draws per particle, so this cosmetic
-    // branch is gameplay-stream-visible.
-    const borderUnfocused = (this.cherry?.borderActive ?? false) && !p.focusHeld;
+    // spawns generic effect id 8 at the midpoint between player and contact,
+    // one white particle. DAT_00494fb0 maps id8 to FUN_004194d0, four raw
+    // RNG draws per particle, so this cosmetic branch is
+    // gameplay-stream-visible.
     this.spawnEffectParticles(
       8,
       (p.x + sourceX) / 2,
       (p.y + sourceY) / 2,
-      borderUnfocused ? 3 : 1,
-      borderUnfocused ? 0xffff8080 : 0xffffffff
+      1,
+      0xffffffff
     );
     // FUN_0043bb30 @ 0x43bc81-8d: effect allocation precedes the
     // rank award; every bullet/laser/body graze contributes six points.
     this.adjustRank(6);
-    if (this.runState) {
-      // TH08 graze (FUN_0044a930): the award is FUN_004181f0(2000), doubling
-      // to 4000 under the gauge-extreme condition (the exe's compare reads
-      // FUN_00406da0 — PROBABLE mapping to the ±8000 extremes, flagged).
-      // While any boss slot is registered, the graze also drops a time orb
-      // (item type 10 -> time/state-5) at the contact — the native orb
-      // income stream (all.c:36844-36862).
-      const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
-      if (!this.bombActiveThisFrame) this.graze++;
-      // 0x44aa78: every graze event pushes the gauge +100 (youkai-ward).
-      this.runState.addYoukaiGauge(this.runState.gaugeGrazeDelta());
-      this.addScore(extreme ? 4000 : 2000);
-      if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
-        this.spawnItem('time2', sourceX, sourceY, {});
-      }
-      // se_graze: TH07 id 30, TH08 id 24.
-      this.playSfx(30); // graze: TH08 id 30, TH07 id 30
-      return;
-    }
-    // Th07.exe (v1.00b) FUN_0043bb30 @ 0x43bb3b-0x43bb8a: an active bomb
-    // suppresses both the stage and total graze counters, but deliberately
-    // does NOT suppress the +200 score, rank, spell-graze bonus, Cherry or
-    // particle effects below. Extra update 11078 is the fixed witness: the
-    // contact is real while Master Spark is active, yet the clear tally must
-    // remain one lower than the HUD-independent effect/score stream.
+    // TH08 graze (FUN_0044a930): the award is FUN_004181f0(2000), doubling
+    // to 4000 under the gauge-extreme condition (the exe's compare reads
+    // FUN_00406da0 — PROBABLE mapping to the ±8000 extremes, flagged).
+    // While any boss slot is registered, the graze also drops a time orb
+    // (item type 10 -> time/state-5) at the contact — the native orb
+    // income stream (all.c:36844-36862).
+    const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
     if (!this.bombActiveThisFrame) this.graze++;
-    this.addScore(200);
-    // FUN_0043bb30 @ all.c:27969-27978 reads the current Cherry value into
-    // DAT_012f40b0 BEFORE FUN_0042de56/0042de03 apply this graze's Cherry
-    // gains. Reversing that order crosses the /1500 step one graze early;
-    // Yuyuko spell 115 crosses three such steps and was over-awarded by 60.
-    if (this.spellcard) {
-      this.spellcard.grazeBonus += 2500 + Math.trunc((this.cherry?.cherry ?? 0) / 1500) * 20;
+    // 0x44aa78: every graze event pushes the gauge +100 (youkai-ward).
+    this.runState.addYoukaiGauge(this.runState.gaugeGrazeDelta());
+    this.addScore(extreme ? 4000 : 2000);
+    if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
+      this.spawnItem('time2', sourceX, sourceY, {});
     }
-    this.cherry?.onGraze(this.focusHeld);
-    // se_graze: TH07 id 30, TH08 id 24.
-    this.playSfx(30); // graze: TH08 id 30, TH07 id 30
+    this.playSfx(30); // graze: TH08 id 30
   }
 
   private onPlayerHit(sourceBullet: EnemyBullet | null, kind: 'bullet' | 'laser' | 'body' = 'bullet'): void {
@@ -4505,7 +3697,6 @@ export class StageScene implements GameHost {
     // (Breaking it before this check let one absorbed hit's invulnerability
     // frames chain-eat every subsequent border the instant it started.)
     if (!p.alive || p.invulnFrames > 0 || p.bombInvuln > 0) return;
-    if (this.breakBorder(sourceBullet)) return;
     // Replay-divergence forensics: every committed hit records what struck
     // the player and, for bullets, its spawn provenance. Ring-capped.
     this.hitLog.push({
@@ -4554,65 +3745,6 @@ export class StageScene implements GameHost {
     }
   }
 
-  private breakBorder(sourceBullet: EnemyBullet | null, includePending = false, rescueDeathbomb = false): boolean {
-    if (!this.cherry || !this.cherry.breakBorder(includePending)) return false;
-    this.applyBorderBreakEffects(sourceBullet, rescueDeathbomb);
-    return true;
-  }
-
-  private applyBorderBreakEffects(sourceBullet: EnemyBullet | null, rescueDeathbomb: boolean): void {
-    const p = this.playerObj;
-    // Direct collision result 1 moves the touching bullet to state 5 without an item;
-    // later result-2 contacts with the expanding field yield type-8 unboxed
-    // Cherry items. FUN_0043eb00 passes 8 at all.c:28984; FUN_0043b040 writes
-    // it through player+0x2404 / DAT_004b5ebc before the spawn at
-    // all.c:16160/16169.
-    // Unlike a result-2 clear, the direct contact transition ignores the
-    // bullet's clear-immunity bit. The fixed slot remains occupied through
-    // the same authored 12-tick removal ANM.
-    if (sourceBullet) this.beginBulletClearFade(sourceBullet, undefined, true);
-    // Exe FUN_0043eb00: any prior player state (incl. 2 = deathbomb window)
-    // is overwritten to state 3 (invuln) — the miss is cancelled outright.
-    this.resetPlayerShotCollisionSpecialClock();
-    if (rescueDeathbomb) p.hitState = false;
-    this.voidSpellCapture();
-    if (p.invulnFrames < 40) {
-      p.invulnFrames = 40;
-      p.invulnFrac = 0;
-    }
-    p.bombCooldown = 40;
-    this.borderClearWave = { x: p.x, y: p.y, radius: 32, ticksLeft: 50, createdFrame: this.frame };
-    // Th07.exe FUN_0043eb00 @ 0x43ed9a-0x43eddf allocates thirty-two
-    // general-pool effect-29 petals after arming the clear wave. Each id29
-    // initializer consumes six raw u16 draws (ANM time-0 + FUN_00419bc0),
-    // so omitting this decorative burst hid a 192-draw split at Extra
-    // PRE10854 and also changed later fixed-pool pressure.
-    this.spawnEffectParticles(29, p.x, p.y, 32, 0xffffffff, undefined, undefined, BORDER_PETAL_DIRS);
-    // Player::BreakBorder (Player.cpp:2159-2174): the shrinking ring is
-    // replaced by a fresh effect 28 that expands 0.0625 -> 1.3 over 30
-    // frames while fading from the spawn alpha to 0 with mode-1 (t²)
-    // easing. The authored spin keeps its original sign this time.
-    // (Decorative only: bare test scenes carry no assets.)
-    const ringAnm = this.assets?.anms?.etama;
-    if (ringAnm) {
-      const runner = new AnmRunner(ringAnm, 0, {
-        entryIndex: 3,
-        spriteIndexOffset: ringAnm.entries[3].spriteBase
-      });
-      runner.setVariable(0, 30);
-      runner.armFade(30, 1, 255, 0);
-      this.borderRing = { runner, mode: 'break', age: 0, x: p.x, y: p.y };
-    } else {
-      this.borderRing = null;
-    }
-    this.borderBadgeRunner = null;
-    // Th07.exe FUN_0043eb00 @ 0x43ed6c-0x43ed89.
-    this.playSfx(7);
-    this.playSfx(33);
-    // The bullet manager continues from its current slot; only later slots
-    // in the native 0,1023..1 traversal see this new radius on this frame.
-  }
-
   private updateEnemies(): void {
     this.tickRankSurvival();
     // FUN_0041ed50 processes authored timeline entries before scanning the
@@ -4637,7 +3769,7 @@ export class StageScene implements GameHost {
       // miss/invuln/respawn — native `playerState != ALIVE` includes INVULNERABLE,
       // BORDER, DEAD, SPAWNING (紫's 「弾幕結界」 etc.).
       if (e.ecl.pauseDuringBombOrBorder &&
-          (this.bombActiveThisFrame || (this.cherry?.borderActive ?? false) ||
+          (this.bombActiveThisFrame ||
            !this.playerObj.alive || this.playerObj.invulnFrames > 0)) {
         continue;
       }
@@ -4686,10 +3818,8 @@ export class StageScene implements GameHost {
         // 0x42d65c: every enemy death settles the gauge toward the side the
         // player is currently acting as (-200 human / +200 youkai, read from
         // the form byte via the DAT_017d5efb mirror).
-        if (this.runState) {
-          this.runState.addYoukaiGauge(this.runState.gaugeKillDelta(this.playerObj.th08Form === 1));
-          this.settleTh08FamiliarDeath(e);
-        }
+        this.runState.addYoukaiGauge(this.runState.gaugeKillDelta(this.playerObj.th08Form === 1));
+        this.settleTh08FamiliarDeath(e);
       }
       this.runtime.tickEnemyManagerTail(this, e);
       if (e.dead && this.enemySlots[slot] === e) {
@@ -4943,12 +4073,6 @@ export class StageScene implements GameHost {
     b.dirTimes ??= 0;
     b.exBounceTimes ??= 0;
     const spawnAge = b.spawnAge ?? b.spawnDuration;
-    // TH08: the transition spans duration+1 manager ticks — the VM
-    // constructor (FUN_0045e430) runs no synchronous t0 pass, so a terminal
-    // op authored at time T executes on tick T+1 and the fall-through's
-    // frac+full move lands on that tick (11 frac half-steps for the
-    // op1@t10 flash scripts). TH07's boundary (t0 consumed at construction)
-    // stays exclusive.
     // TH08's transition spans duration+2 manager ticks (empirically pinned
     // by the stage-1 fixture: the f530 ring's crossing band only clears at
     // +2; ±0/1 leave a phantom contact): the VM constructor (FUN_0045e430)
@@ -4956,7 +4080,7 @@ export class StageScene implements GameHost {
     // after the terminal op itself executes, so op1@t10 completes on tick
     // 12 with the frac+full fall-through move.
     const th08ExtraFrac = 2;
-    if (spawnAge < b.spawnDuration || (this.runState && spawnAge <= b.spawnDuration + th08ExtraFrac)) {
+    if (spawnAge < b.spawnDuration || spawnAge <= b.spawnDuration + th08ExtraFrac) {
       // Enemy-bullet storage is float32. FUN_004241c0 performs its spawn-
       // state multiply/add on x87, then writes the result back to the slot's
       // f32 position fields every manager tick. Keeping JS doubles here
@@ -4972,13 +4096,10 @@ export class StageScene implements GameHost {
       // 1 and 70 wall ticks at rate 1/3, not 72.
       b.spawnAgeFrac ??= 0;
       // TH08's transition VM (FUN_0045e430 constructor) resets its timer but
-      // runs no synchronous t0 pass — unlike TH07's player-shot re-arm — so
-      // the terminal op authored at time T executes on manager tick T+1 and
-      // the fall-through's frac+full move lands on that tick. TH07's traced
-      // boundary stays as-is.
-      const spawnEnded = this.runState
-        ? spawnAge + 1 > b.spawnDuration + th08ExtraFrac
-        : spawnAge + 1 >= b.spawnDuration;
+      // runs no synchronous t0 pass, so the terminal op authored at time T
+      // executes on manager tick T+1 and the fall-through's frac+full move
+      // lands on that tick.
+      const spawnEnded = spawnAge + 1 > b.spawnDuration + th08ExtraFrac;
       if (!spawnEnded) {
         if (rate > 0.99) {
           b.spawnAge = spawnAge + 1;
@@ -4996,7 +4117,7 @@ export class StageScene implements GameHost {
       // changes state to 1, resets the normal age counter, and falls through
       // to the ordinary behavior/full-velocity move on this same tick.
       // TH08 parks one past the duration (its inclusive gate above).
-      b.spawnAge = b.spawnDuration + (this.runState ? th08ExtraFrac + 1 : 0);
+      b.spawnAge = b.spawnDuration + th08ExtraFrac + 1;
       b.spawnAgeFrac = 0;
       b.age = 0;
     }
@@ -5207,15 +4328,6 @@ export class StageScene implements GameHost {
       // Respawn materialize (exe state 1): in-place scale/alpha ramp.
       r.drawAnmFrame(pf, ox + p.x, oy + p.y, mt);
     } else {
-      // Supernatural Border (exe PLAYER_STATE_BORDER, Player.cpp:1967-1975):
-      // the sprite flashes red every 4 frames — this takes precedence over
-      // the spawn-invuln dim (both gate on the same invuln timer, and the
-      // border branch wins in the native state dispatcher).
-      if (this.cherry?.borderActive) {
-        const flashRed = this.cherry.borderTimer % 4 < 2;
-        r.drawAnmFrame(pf, ox + p.x, oy + p.y, flashRed ? { color: 0xff0000 } : {});
-        return;
-      }
       // Spawn/respawn invuln (exe state 3): dark-tint 0x404040 on frames where
       // (timer & 7) < 2 (fcn.0043e2e0), instead of an invisibility blink.
       const dim = p.invulnFrames > 0 && (p.invulnFrames & 7) < 2;
@@ -5224,7 +4336,7 @@ export class StageScene implements GameHost {
     // TH08 Border Team familiar (the ghostly Yukari, player00.anm script 18)
     // floats at the focused option anchor — a separate ANM VM drawn above the
     // main sprite (exe FUN_0044e9e0 → FUN_00463210).
-    if (this.runState && p.th08OptionLive && p.th08OptionRunner) {
+    if (p.th08OptionLive && p.th08OptionRunner) {
       const ff = p.th08OptionRunner.spriteFrame();
       if (ff) r.drawAnmFrame(ff, ox + p.th08OptionX, oy + p.th08OptionY, {});
     }
@@ -5427,38 +4539,23 @@ export class StageScene implements GameHost {
       // run deterministic color/alpha interps).
       for (const runner of this.th08ItemRunners) runner?.update(this.slowRate);
     }
-    // Th07.exe FUN_00430c10 @ all.c:21958-21961: the PoC trigger is
-    // (power >= 128 OR difficulty > 3 [Extra/Phantasm]) AND player.y <
-    // pocLine (strict FCOMP <). DAT_0061c260 is the difficulty byte, not the
-    // character/shot selector; treating it as Sakuya made Lunatic drops home
-    // eleven to twenty-four frames too early in the replay oracle.
     // On success the item's state byte (+0x27f) is permanently latched to 1.
-    // ItemManager::OnUpdate re-reads currentPower / hasBorder LIVE for every
-    // item: a power pickup that crosses 128 (or a border activation) inside
-    // this very pass immediately latches the LATER slots of the same pass.
-    // Hoisting the predicate froze it at the frame-entry power and made
-    // full-power conversions start homing one frame late (th7_udMt01 st6
-    // collect#1, oracle rf919 vs web rf920).
-    // Native ItemManager.cpp:195 has NO playerState gate on the PoC predicate
-    // (state==1 || ((power>=128 || diff>=4) && y<pocY) || hasBorder): items keep
-    // homing during the death/respawn window. Only the collection gate below
-    // (CalcItemBoxCollision, ALIVE/INVULNERABLE/BORDER-only) is state-gated.
-    // Th07.exe FUN_00430c10 @ all.c:21958-21961: the PoC trigger is
-    // (power >= 128 OR difficulty > 3 [Extra/Phantasm]) AND player.y <
-    // pocLine (strict FCOMP <). DAT_0061c260 is the difficulty byte, not the
-    // character/shot selector; treating it as Sakuya made Lunatic drops home
-    // eleven to twenty-four frames too early in the replay oracle.
-    // TH08's rule differs (ItemManager all.c:31059-31062): the latch fires
+    // ItemManager::OnUpdate re-reads currentPower / focus LIVE for every
+    // item: a power pickup that crosses 128 inside this very pass
+    // immediately latches the LATER slots of the same pass. Hoisting the
+    // predicate froze it at the frame-entry power and made full-power
+    // conversions start homing one frame late (th7_udMt01 st6 collect#1,
+    // oracle rf919 vs web rf920).
+    // Native ItemManager.cpp:195 has NO playerState gate on the PoC
+    // predicate: items keep homing during the death/respawn window. Only
+    // the collection gate below (CalcItemBoxCollision,
+    // ALIVE/INVULNERABLE-only) is state-gated.
+    // TH08's PoC rule (ItemManager all.c:31059-31062): the latch fires
     // when player.y < pocLine AND (power >= 128 [DAT_004b5b30 as a double]
     // OR player+3 focus state != 0 [DAT_017d5efb] OR role byte 1/6). For the
     // Border Team (role 0) that is exactly "focused OR full power" — focused
-    // below 128 can line-collect, at 128 any form can. TH07's power/Extra
-    // rule is retained for TH07 characters only.
-    const pocActive = this.runState
-      ? () => (p.power >= 128 || p.focusHeld) && p.y < sht.pocLineY
-      : () =>
-          (p.power >= 128 || this.difficulty > 3)
-          && p.y < sht.pocLineY;
+    // below 128 can line-collect, at 128 any form can.
+    const pocActive = () => (p.power >= 128 || p.focusHeld) && p.y < sht.pocLineY;
     const rate = Math.fround(this.slowRate);
     for (const it of this.items) {
       it.age++;
@@ -5494,7 +4591,7 @@ export class StageScene implements GameHost {
           tw.frac -= 1;
           tw.elapsed++;
         }
-      } else if (this.runState && (it.state === 3 || it.state === 5)) {
+      } else if (it.state === 3 || it.state === 5) {
         // TH08 ItemManager states 3/5 (all.c:31084-31108): the tossed item
         // climbs against 0.05 gravity, then flips to homing state 1 once it
         // crests (vy > 0) — the time-orb auto-collect arc. This branch jumps
@@ -5504,14 +4601,7 @@ export class StageScene implements GameHost {
         it.y = Math.fround(it.y + Math.fround(it.vy * rate));
         if (it.vy > 0) it.state = 1;
       } else {
-        if (this.cherry?.borderActive) {
-          // FUN_00430c10: while the Supernatural Border is live, every item
-          // is latched to homing state with guaranteed-max scoring. (The
-          // decompile names DAT_004b5ec5 here; Stage 1-6 exact AUX requires
-          // this latch while the border timer is active — do not drop it.)
-          it.state = 1;
-          it.guaranteedMax = true;
-        } else if (pocActive()) {
+        if (pocActive()) {
           it.state = 1;
         }
         if (it.state === 1) {
@@ -5543,27 +4633,19 @@ export class StageScene implements GameHost {
         const dy = Math.fround(it.vy * rate);
         it.x = Math.fround(it.x + dx);
         it.y = Math.fround(it.y + dy);
-        if (this.runState && it.state === 1) {
+        if (it.state !== 1) {
           // TH08's homing branch jumps straight to the collect test
           // (all.c:31064-31070) — no gravity tail pollutes the latch.
-        } else if (this.runState) {
           // TH08 ItemManager (all.c:31109-31121): once the item's y reaches
           // 3.0 the fall speed SNAPS to 3.0; above that the 0.03·rate
-          // gravity applies. The gradual-to-cap TH07 model left items
-          // floating through the mid-field far slower than native, mistiming
-          // every collection window on the recorded route.
+          // gravity applies.
           if (it.y >= 3) it.vy = 3;
           else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * rate));
-        } else if (it.vy >= 3) it.vy = 3;
-        else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * rate));
+        }
         // ItemManager::OnUpdate: `arcadeRegionSize.y + 16.0f <= y` — the
         // 448+16 boundary despawns INCLUSIVELY at exactly 464.
         if (it.y >= 464) {
           it.dead = true;
-          // FUN_00430c10 clears +0x27d immediately on this branch, so a
-          // later item in the same ascending manager pass may reuse the
-          // physical slot through FUN_00430970.
-          if (this.itemSlots?.[it.poolSlot] === it) this.itemSlots[it.poolSlot] = null;
           // FUN_00430c10 @ 0x4310ae-0x4310ba: every ordinary item that
           // leaves the bottom subtracts three rank points, regardless of
           // item type. Tween-state death drops bypass this cull branch.
@@ -5592,21 +4674,13 @@ export class StageScene implements GameHost {
           !(grabMinX > itemMaxX || grabMaxX < itemMinX ||
             grabMinY > itemMaxY || grabMaxY < itemMinY)) {
         this.collectItem(it);
-        // The native pickup switch keeps the current slot occupied while its
-        // nested item/effect spawns run, then clears +0x27d before advancing
-        // to the next fixed slot. Releasing only after the whole JS pass made
-        // later same-frame spawns skip reusable low slots and drifted the
-        // Stage-4 cursor by hundreds of entries.
-        if (it.dead && this.itemSlots?.[it.poolSlot] === it) this.itemSlots[it.poolSlot] = null;
       }
     }
     let w = 0;
     for (const it of this.items) {
       if (!it.dead) {
         this.items[w++] = it;
-        continue;
       }
-      if (this.itemSlots?.[it.poolSlot] === it) this.itemSlots[it.poolSlot] = null;
     }
     this.items.length = w;
   }
@@ -5629,7 +4703,7 @@ export class StageScene implements GameHost {
   // state's ladder, time orbs feed the gauge + clock + orb counters, power
   // raises the SHT power level.
   private collectItemTh08(it: ItemEntity): void {
-    const run = this.runState!;
+    const run = this.runState;
     const p = this.playerObj;
     const atOrAbovePoC = it.y < p.sht.pocLineY;
     switch (it.type) {
@@ -5668,7 +4742,6 @@ export class StageScene implements GameHost {
   }
 
   private collectItem(it: ItemEntity): void {
-    const p = this.playerObj;
     it.dead = true;
     // se_item00: TH07 id 21, TH08 id 18.
     this.playSfx(21); // item00: TH08 id 21, TH07 id 21
@@ -5676,199 +4749,8 @@ export class StageScene implements GameHost {
     // state's native scoring (CollectPoint/CollectPointSmall/CollectTimeOrb,
     // reference/re-specs/th08-decomp-items/), not the TH07 cherry path. The
     // legacy pointItems counter (HUD's Point row) tracks the same collects.
-    if (this.runState) {
-      this.collectItemTh08(it);
-      if (it.type === 'point') this.pointItems++;
-      return;
-    }
-    switch (it.type) {
-      case 'power':
-      case 'bigPower': {
-        // Item-collect cases 0/2 (spec-popups.md §4.1): below max power a
-        // plain white "10" popup, or — when the pickup crosses a power
-        // bracket (8/16/32/48/64/80/96/128) — a salmon sentinel glyph and
-        // the power-up chime. Case 0 at max power pays the native
-        // g_FullPowerScoreBonus ladder (ItemManager.cpp:245-253).
-        const add = it.type === 'power' ? 1 : 8;
-        if (p.power < 128) {
-          // Native ItemManager.cpp:264: a below-cap SMALL-power pickup zeroes
-          // the score-ladder counter (the bigPower case has no reset).
-          if (it.type === 'power') this.powerItemCountForScore = 0;
-          const before = this.powerTier(p.power);
-          p.power = Math.min(128, p.power + add);
-          // Th07.exe (v1.00b) FUN_00430860 @ 0x43089b calls
-          // FUN_00401700 after every below-cap power change. That HUD-state
-          // refresh consumes two u32 values from the shared gameplay RNG,
-          // even though the generated display fields are not modeled here.
-          this.refreshPowerHudRandomState();
-          if (this.powerTier(p.power) > before) {
-            this.spawnScorePopup(-1, it.x, it.y, 0xffffc0a0);
-            // se_powerup: TH07 id 31, TH08 id 25.
-            this.playSfx(this.runState ? 31 : 0x1f);
-          } else {
-            this.spawnScorePopup(10, it.x, it.y, 0xffffffff);
-          }
-          if (p.power === 128) {
-            // Item cases 0/2 call FUN_00401700 a second time when the gain
-            // crosses 128 (all.c:22029 / 22137), before the field cancel.
-            this.refreshPowerHudRandomState();
-            // Crossing to full power: FUN_00431da0 converts every other
-            // live power/bigPower item to bigCherry (all.c:22034/22142),
-            // then FUN_00422ea0(1) clears the field to cherry items — the
-            // cancel (not the conversion) is gated on no active spell card
-            // (DAT_012f40a8 == 0, all.c:22030/22138).
-            this.convertLivePowerItems();
-            if (!this.spellcard) this.cancelBulletsToItems();
-          }
-          // FUN_00430c10 cases 0 and 2 both credit one live score unit for
-          // every below-cap pickup (all.c:22042 / 22149). The visible popup
-          // says 10 because popup values use display×10 units.
-          this.addScore(1);
-        } else if (it.type === 'power') {
-          // Native ItemManager.cpp:245-253: full-power P pickups pay the
-          // g_FullPowerScoreBonus ladder — increment-then-index, clamped at
-          // 30 (the 31st+ pays 12000). The native yellow threshold is
-          // itemScore >= 12800 — above the 12000 ladder peak, so the popup
-          // is in practice always white; the comparison is kept verbatim.
-          this.powerItemCountForScore++;
-          if (this.powerItemCountForScore >= 31) this.powerItemCountForScore = 30;
-          const itemScore = FULL_POWER_SCORE_BONUS[this.powerItemCountForScore];
-          this.addScore(itemScore);
-          this.spawnScorePopup(itemScore * 10, it.x, it.y, itemScore >= 12800 ? 0xffffff00 : 0xffffffff);
-        }
-        // Collect case 0 calls FUN_0042db77(1) after both the below-cap and
-        // max-power branches. Case 2 (bigPower) has no rank call.
-        if (it.type === 'power') this.adjustRank(1);
-        // bigPower at max: the exe path shows uninitialized garbage and
-        // credits nothing (confirmed v1.00b bug) — the port draws nothing.
-        break;
-      }
-      case 'fullPower': {
-        // Case 4 (spec-popups.md §4.1): salmon sentinel + chime + convert
-        // every live power/bigPower item to bigCherry (FUN_00431da0) when
-        // power was below max, then always a white "1000" popup and +100.
-        if (p.power < 128) {
-          this.spawnScorePopup(-1, it.x, it.y, 0xffffc0a0);
-          // se_powerup: TH07 id 31, TH08 id 25.
-          this.playSfx(this.runState ? 31 : 0x1f);
-          this.convertLivePowerItems();
-          // Case 4's crossing cancel (all.c:22172) is NOT spell-gated,
-          // unlike the power/bigPower cases.
-          this.cancelBulletsToItems();
-        }
-        p.power = 128;
-        // Item case 4 unconditionally refreshes the same HUD state after
-        // writing full power (Th07.exe @ 0x43165a / all.c:22179).
-        this.refreshPowerHudRandomState();
-        this.addScore(100);
-        this.spawnScorePopup(1000, it.x, it.y, 0xffffffff);
-        break;
-      }
-      case 'point': {
-        this.pointItems++;
-        // TH08 point items credit through the run state's native /10
-        // score rule with the PoC ladder (full item-pool wiring: Step 2d);
-        // runState.addScore already credited it — do not double-credit.
-        const pts = this.cherry
-          ? this.cherry.pointItemScore(it.y, p.sht.pocLineY, it.guaranteedMax)
-          : this.runState!.collectPoint({ atOrAbovePoC: it.y < p.sht.pocLineY }).creditedScore;
-        if (this.cherry) this.addScore(pts);
-        else this.score = this.runState!.score;
-        // Case 1: position or +0x280 selects yellow. The +0x27f homing byte
-        // by itself does not affect value/color.
-        const yellow = !!it.guaranteedMax || it.y < p.sht.pocLineY;
-        this.spawnScorePopup(pts * 10, it.x, it.y, yellow ? 0xffffff00 : 0xffffffff);
-        // Native ItemManager.cpp:320-327: the rank award keys on the LITERAL
-        // y < 128.0f, not pocY — Marisa's pocY is 156, so her 128..156 band
-        // pays +3 natively, not +10. (The score and popup-color tests above
-        // do use pocY, matching native.) Strictly above 128 is +10; else +3.
-        this.adjustRank(it.y < 128 ? 10 : 3);
-        // Extend ladder (exe item-collect case 1 @ all.c:22099-22125).
-        while (this.pointItems >= this.extendThreshold) {
-          this.awardExtend();
-          this.extendLevel++;
-        }
-        break;
-      }
-      case 'pointBullet':
-        // Exe item type 8 (the Border-break circle's unboxed petal): +30
-        // cherry&cherryPlus (dc6f) and +70 cherry-only (dd6c), NO score
-        // (FUN_00430c10 case 8; FUN_0043eb00 @ all.c:28984).
-        this.cherry?.onBigCherryItem();
-        break;
-      case 'bomb':
-        if (p.bombs < 8) {
-          p.bombs++;
-          // Item collect case 3, Th07.exe v1.00b @ 0x43153f-0x431558
-          // (all.c:22162-22167): a successful stock increase calls
-          // FUN_0042bd01(1), whose tail is FUN_00401700 (two u32 / four
-          // raw draws). A capped pickup skips the refresh but still awards
-          // the case's +5 rank below.
-          this.refreshPowerHudRandomState();
-        }
-        // Collect case 3 awards +5 even when the bomb stock is already 8.
-        this.adjustRank(5);
-        break;
-      case 'life':
-        // Collect case 5 shares FUN_0042bf29 with point-item extends: award
-        // a life, or a bomb when lives are full, and +200 rank only when one
-        // of those resources was actually granted.
-        this.awardExtend();
-        break;
-      case 'cherry': {
-        // Exe case 6: normally +20; while a bomb is active the fixed slot's
-        // parity selects +10 cherry+plus (even) or +10 cherry-only (odd).
-        // The popup uses the 3-slot pool, always white (spec-popups.md §4.1).
-        // player+0x23dc remains set through the final bomb cleanup callback,
-        // one manager pass after the form timer reaches zero. It is a wider
-        // item-score flag than DAT_004ca4d8/attack-slot activity: do not fold
-        // this cleanup tick into the global bomb collision gate.
-        const bombItemScoreActive = this.bombActiveThisFrame || this.bombCleanupDefersBorder;
-        const v = this.cherry ? this.cherry.grazeScaledItemScore(this.graze, bombItemScoreActive) : 0;
-        this.addScore(v);
-        this.spawnScorePopup(v * 10, it.x, it.y, 0xffffffff, true);
-        this.cherry?.onSmallCherryItem(this.bombActiveThisFrame, (it.poolSlot & 1) === 0);
-        break;
-      }
-      case 'case9Cherry': {
-        // Exe collect case 9: the same graze-scaled score/popup as case 6,
-        // but a flat +100 cherry AND cherryPlus (FUN_00430c10,
-        // all.c:22249-22260). Stage-6 native processing 5950 collects two
-        // of these and advances cherryPlus by 200; treating them as type 6
-        // advanced it by only 40.
-        const v = this.cherry ? this.cherry.grazeScaledItemScore(this.graze) : 0;
-        this.addScore(v);
-        this.spawnScorePopup(v * 10, it.x, it.y, 0xffffffff, true);
-        this.cherry?.onCase9CherryItem();
-        break;
-      }
-      case 'bigCherry': {
-        // This ItemType is exe item TYPE 7 (the drop-table entry, and what
-        // power drops convert to at power>=128, FUN_00430970 all.c:21819) —
-        // exe collect case 7: cherry AND cherryPlus += 1000 + 100×spell
-        // captures (all.c:22236), plus a height-falloff score bonus when
-        // cherry is already saturated. Saturated: white/yellow score popup;
-        // otherwise a RED popup showing the cherry gain (spec-popups.md).
-        if ((this.cherry?.cherry ?? 0) >= (this.cherry?.cherryMax ?? 0)) {
-          const v = this.cherry
-            ? this.cherry.largeCherryItemScore(it.y, this.playerObj.sht.pocLineY, it.guaranteedMax)
-            : 0;
-          this.addScore(v);
-          const yellow = !!it.guaranteedMax || it.y < p.sht.pocLineY;
-          this.spawnScorePopup(v * 10, it.x, it.y, yellow ? 0xffffff00 : 0xffffffff);
-        } else {
-          this.spawnScorePopup(this.cherry ? this.cherry.largeCherryItemGain() : 0, it.x, it.y, 0xffff4040);
-        }
-        this.cherry?.onLargeCherryItem();
-        break;
-      }
-    }
-  }
-
-  private refreshPowerHudRandomState(): void {
-    // FUN_00401700 @ 0x401700 performs two FUN_0042ff90 u32 draws.
-    this.rng.u32();
-    this.rng.u32();
+    this.collectItemTh08(it);
+    if (it.type === 'point') this.pointItems++;
   }
 
   private updateParticles(): void {
@@ -5938,30 +4820,6 @@ export class StageScene implements GameHost {
     this.particles.length = w;
   }
 
-  // Supernatural Border background treatment (Player.cpp:1975-1995 +
-  // Stage::SmoothBlendColor @ Stage.cpp:512-532, applied @ :566-573): while
-  // the border is up the exe MULTIPLIES the stage background (and the fog
-  // color) by a grey factor ramping 128 -> 48 over the first 30 frames,
-  // holding 48 (~x0.375 brightness), and ramping back over the last 30 —
-  // darkening, never tinting. SmoothBlendColor is fed twice per frame
-  // (player update + player draw) with a per-frame reset between the feeds,
-  // so the applied value is the average of the previous and current
-  // request, and exactly one dimmed frame trails the border's end.
-  private borderDimLevel(): number {
-    const timer = this.cherry?.borderTimer ?? 0;
-    const active = (this.cherry?.borderActive ?? false) && timer > 0;
-    const c = borderDimRequest(timer);
-    const state = { a: this.borderDimA, rgb: this.borderDimRgb };
-    if (active) smoothBlendColor(state, c); // Player::UpdateState feed
-    const applied = state.a > 0 ? state.rgb : -1;
-    state.a = 0; // Stage::OnDrawHighPrio apply + reset
-    state.rgb = 128;
-    if (active) smoothBlendColor(state, c); // Player::OnDrawHighPrio feed
-    this.borderDimA = state.a;
-    this.borderDimRgb = state.rgb;
-    return applied;
-  }
-
   // -- draw ------------------------------------------------------------------
 
   draw(r: Renderer, measurePasses = false): void {
@@ -5988,39 +4846,7 @@ export class StageScene implements GameHost {
       this.drawBackground(r, ox, oy);
       this.drawSpellBackground(r);
       this.markPass('background');
-      // Supernatural Border dim: multiply-darkens the stage background (the
-      // fog-colored sky included, like the exe's FOGCOLOR multiply) while
-      // leaving everything drawn later — enemies, player, danmaku — at full
-      // brightness, matching the native chain-3/4 window.
-      const dimLevel = this.borderDimLevel();
-      if (dimLevel >= 0 && dimLevel < 128) {
-        const m = Math.min(255, Math.round((dimLevel * 255) / 128));
-        r.ctx.save();
-        r.ctx.globalCompositeOperation = 'multiply';
-        r.ctx.fillStyle = `rgb(${m}, ${m}, ${m})`;
-        r.ctx.fillRect(ox, oy, PLAYFIELD.width, PLAYFIELD.height);
-        r.ctx.restore();
-      }
       for (const p of this.particles) {
-        if (p.effectId === 29 && p.burstDir) {
-          // Border-break petals (etama entry-1 script 10, embedded sprite
-          // 28): the exe flies each petal along its fixed direction at
-          // 256/30 px per frame (UpdateBurst30Frames, EffectManager.cpp:
-          // 232-237); the authored script fades out from t=10 over 20
-          // frames with a randomized initial spin — the pool slot stands
-          // in for that (its RNG was consumed at spawn either way).
-          const sprite = this.assets.anms.etama.sprites.get(this.etamaItemBase + 28);
-          if (sprite) {
-            const alpha = p.age <= 10 ? 1 : Math.max(0, 1 - (p.age - 10) / 20);
-            r.drawSprite(sprite.imageKey, sprite.x, sprite.y, sprite.w, sprite.h,
-              ox + p.x + p.burstDir.x * (p.age * 256 / 30),
-              oy + p.y + p.burstDir.y * (p.age * 256 / 30), {
-                alpha,
-                rotation: p.poolSlot * 2.39996 + p.age * 0.62832 * (p.poolSlot & 1 ? 1 : -1)
-              });
-            continue;
-          }
-        }
         const alpha = 1 - p.age / p.life;
         r.ctx.globalAlpha = alpha * 0.8;
         r.ctx.fillStyle = p.kind === 'snow' ? '#cde' : '#fff';
@@ -6064,7 +4890,7 @@ export class StageScene implements GameHost {
       // FUN_0044de60(player, 768, 896, 0xffffffff, 0) every frame — a white
       // full-playfield flash pulsing through the window (approximated as an
       // every-other-frame overlay; the native draw is a screen-effect quad).
-      if (this.runState && this.playerObj.hitState && (this.frame & 1) === 0) {
+      if (this.playerObj.hitState && (this.frame & 1) === 0) {
         r.ctx.globalAlpha = 0.5;
         r.ctx.fillStyle = '#ffffff';
         r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
@@ -6084,8 +4910,8 @@ export class StageScene implements GameHost {
         const opts: { rotation?: number; scaleY?: number; alpha?: number } = {};
         // TH08's shot textures point along +x in the sheet (the needle strip
         // at player00 (0,144,64,16)), so face-motion rotation is the raw
-        // velocity angle; TH07's textures point up and need the +pi/2.
-        if (frame.autoRotate) opts.rotation = Math.atan2(b.vy, b.vx) + (this.runState ? 0 : Math.PI / 2);
+        // velocity angle.
+        if (frame.autoRotate) opts.rotation = Math.atan2(b.vy, b.vx);
         // Beam types stretch their 14px segment over the live beam length
         // (exe writes the VM scaleY each frame: FUN_004396a0/FUN_004398e0).
         if (b.scaleYOverride != null) opts.scaleY = b.scaleYOverride;
@@ -6103,20 +4929,6 @@ export class StageScene implements GameHost {
             });
           }
         }
-      }
-      // Supernatural Border ring (exe effect chain 9: above player/shots,
-      // below the enemy danmaku). The scale interp is caller-driven, poked
-      // by Player::ActivateBorder (1.0 -> 0.25 over the border) and
-      // Player::BreakBorder (0.0625 -> 1.3 over 30 frames); the active ring
-      // tracks the player while the break ring stays where it burst.
-      if (this.borderRing) {
-        const ring = this.borderRing;
-        const scaleMul = ring.mode === 'active'
-          ? 1 + (0.25 - 1) * Math.min(1, (BORDER_DURATION - (this.cherry?.borderTimer ?? 0)) / BORDER_DURATION)
-          : 0.0625 + (1.3 - 0.0625) * Math.min(1, ring.age / 30);
-        r.drawAnmFrame(ring.runner.spriteFrame(),
-          ox + (ring.x ?? this.playerObj.x), oy + (ring.y ?? this.playerObj.y),
-          { scaleMultiplier: scaleMul });
       }
       // Enemy bullets dominate entity draw counts in dense spells. Their
       // sprites are untinted, so one saved Canvas state can safely cover the
@@ -6169,29 +4981,17 @@ export class StageScene implements GameHost {
       // save/translate/restore path was the measured freeze source there.
       r.ctx.save();
       for (const it of this.items) {
-        // Items falling above the top edge peek in as their per-type arrow
-        // sprite (original UX; etama2 emb14-21, +10 from the item id).
+        // TH08: the item's etama.anm script (itemType + 61) supplies the
+        // sprite; above-screen items draw their plain sprite pinned to the
+        // top edge (the TH08 arrow variant is undecoded — flagged).
         const above = it.y < 0;
-        if (this.th08ItemRunners) {
-          // TH08: the item's etama.anm script (itemType + 61) supplies the
-          // sprite; above-screen items draw their plain sprite pinned to the
-          // top edge (the TH08 arrow variant is undecoded — flagged).
-          const slot = TH08_ITEM_TYPE_SLOT[it.type];
-          const frame = slot != null ? this.th08ItemRunners[slot]?.spriteFrame() : null;
-          if (frame) {
-            r.drawSpriteInBatch(frame.imageKey, frame.x, frame.y, frame.w, frame.h,
-              ox + it.x, oy + Math.max(8, it.y), 0, 1,
-              (frame.alpha / 255) * (above ? 0.85 : 1),
-              frame.blendAdd ? 'lighter' : 'source-over');
-          }
-          continue;
-        }
-        const emb = ITEM_SPRITES[it.type] + (above ? ITEM_ARROW_OFFSET : 0);
-        const sprite = this.assets.anms.etama.sprites.get(this.etamaItemBase + emb);
-        if (sprite) {
-          const drawY = Math.max(8, it.y);
-          r.drawSpriteInBatch(sprite.imageKey, sprite.x, sprite.y, sprite.w, sprite.h,
-            ox + it.x, oy + drawY, 0, 1, above ? 0.85 : 1, 'source-over');
+        const slot = TH08_ITEM_TYPE_SLOT[it.type];
+        const frame = slot != null ? this.th08ItemRunners[slot]?.spriteFrame() : null;
+        if (frame) {
+          r.drawSpriteInBatch(frame.imageKey, frame.x, frame.y, frame.w, frame.h,
+            ox + it.x, oy + Math.max(8, it.y), 0, 1,
+            (frame.alpha / 255) * (above ? 0.85 : 1),
+            frame.blendAdd ? 'lighter' : 'source-over');
         }
       }
       r.ctx.restore();
@@ -6199,13 +4999,9 @@ export class StageScene implements GameHost {
       const p = this.playerObj;
       this.playerEffects.draw(r, ox, oy);
       this.th08Effects.draw(r, ox, oy);
-      this.bombRunner?.draw(r, ox, oy);
       // The declaration VMs self-position in 640x480 screen space
       // (banner strips at y=16 over the frame, name mid-playfield).
       this.th08Declaration?.draw(r);
-      if (this.focusEffectRunner) {
-        r.drawAnmFrame(this.focusEffectRunner.spriteFrame(), ox + p.x, oy + p.y);
-      }
       this.drawPopups(r, ox, oy);
       // Option orbs (yin-yang, local sprite 128).
       if (p.alive && p.power >= 8) {
@@ -6251,9 +5047,8 @@ export class StageScene implements GameHost {
     this.drawModeTags(r);
     if (this.stageResultsActive) this.drawStageClearPresentation(r);
     this.drawSpellOverlay(r);
-    this.drawDialogue(r);
+    this.drawTh08Dialogue(r);
     this.drawStageTitle(r);
-    if (this.borderMessage) this.drawBorderMessage(r);
     if (this.bonusPopup) this.drawSpellBonusPopup(r);
     if (this.bossActive) this.drawBossMarker(r);
     if (this.stageResultsActive) this.drawStageClear(r);
@@ -6265,27 +5060,13 @@ export class StageScene implements GameHost {
   }
 
   private startStageClearPresentation(): void {
-    // Th07.exe stage-clear case 9 @ all.c:17916-17936: stages 1-5 pair the
-    // selected character's loading ANM script 0 (global 0x61e) with only
-    // capture.anm script 1 (global 0x725). Capture scripts 0/2/3 belong to
-    // separate transitions and are intentionally not created here.
+    // TH08's clear presentation resolves to the native capture animation
+    // (capture.anm entry-0 script -4, the full-screen capture fade) with no
+    // loading portrait — the vertical bundle ships no team loading ANMs.
     if (this.stageNumber >= 6) return;
-    if (this.playerObj.character === 'reimuYukari') {
-      // The TH08 vertical bundle intentionally does not ship the other teams'
-      // loading ANMs; Stage 1's clear presentation resolves to the native
-      // capture animation (capture.anm entry-0 script -4, the full-screen
-      // capture fade) with no loading portrait.
-      this.clearLoadingRunner = null;
-      const capture = this.assets.anms.capture;
-      this.clearCaptureRunner = new AnmRunner(capture, -4, { imageKey: 'capture:@', entryIndex: 0, spriteIndexOffset: capture.entries[0].spriteBase });
-      this.clearCaptureArmed = true;
-      return;
-    }
-    const family = CHARACTERS[this.playerObj.character].family;
-    const loadingKey = CLEAR_LOADING_ANM[family] ?? CLEAR_LOADING_ANM[0];
-    this.clearLoadingKey = loadingKey;
-    this.clearLoadingRunner = new AnmRunner((this.assets.anms as Record<string, Anm>)[loadingKey], 0);
-    this.clearCaptureRunner = new AnmRunner(this.assets.anms.capture, 1, { imageKey: 'capture:@' });
+    this.clearLoadingRunner = null;
+    const capture = this.assets.anms.capture;
+    this.clearCaptureRunner = new AnmRunner(capture, -4, { imageKey: 'capture:@', entryIndex: 0, spriteIndexOffset: capture.entries[0].spriteBase });
     this.clearCaptureArmed = true;
   }
 
@@ -6341,21 +5122,6 @@ export class StageScene implements GameHost {
         );
       }
     });
-  }
-
-  // Shared Full-Power/Border message slot, exact text/timing/slide from
-  // FUN_0042645b + FUN_00425dd1 (all.c:16941-16959, 17138-17169,
-  // 18287-18300). The original uses ascii.anm's 16px glyphs at x scale .9;
-  // canvas text is the existing glyph fallback, but coordinates and color
-  // are recovered constants rather than hand-tuned placement.
-  private drawBorderMessage(r: Renderer): void {
-    const msg = this.borderMessage;
-    if (!msg) return;
-    const x = msg.age < 30 ? 416 - (312 * msg.age) / 30 : 104;
-    const text = msg.type === 2
-      ? 'Supernatural Border!!'
-      : `Border Bonus ${String(Math.trunc(msg.value)).padStart(7, ' ')}`;
-    r.text(text, x, 168, { size: 16, color: '#e0b0ff', stroke: false });
   }
 
   // Spell Card Bonus! popup — spec-ui-stageclear.md §4 / all.c:17171-17193.
@@ -6490,9 +5256,9 @@ export class StageScene implements GameHost {
     const right = PLAYFIELD.x + PLAYFIELD.width; // 416
     const bottom = PLAYFIELD.y + PLAYFIELD.height; // 464
     // TH08's front.png ships its own tile (32x32 @ 0,224) and strip
-    // (128x16 @ 0,208); TH07's FRONT rects point into TH07's atlas.
-    const strip = this.runState ? [0, 208, 128, 16] as readonly number[] : FRONT.strip128;
-    const tile = this.runState ? [0, 224, 32, 32] as readonly number[] : FRONT.tile32;
+    // (128x16 @ 0,208).
+    const strip = [0, 208, 128, 16] as readonly number[];
+    const tile = [0, 224, 32, 32] as readonly number[];
     // Top & bottom bands (0..640 × 16), 128px strips.
     for (let x = 0; x < SCREEN_W; x += strip[2]) {
       this.blit(r, 'front', strip, x, 0);
@@ -6810,16 +5576,11 @@ export class StageScene implements GameHost {
         // banding the whole quad at one value.
         bgQuadCorner(c0, 0, (v0 + v1) / 2, job.cosRx, job.sinRx, job.cosRy, job.sinRy, job.cosRz, job.sinRz, job.cx, job.cy, job.cz);
         const fogAlpha = clamp((std.viewDepth(c0.x, c0.y, c0.z, camFrame) - fog.near) / fogSpan, 0, 1);
-        // Fully-fogged cells are indistinguishable from the sky clear color;
-        // skipping them (instead of painting texture + an opaque fog quad)
-        // is what actually dissolves the horizon — the slack-expanded
-        // texture edges otherwise peek out past the fog overlay as streaks.
         // TH08 stage 1's fog window (near ~194, far 700) lies entirely inside
-        // the ground band's depth (860+), so the TH07 skip would erase the
-        // whole floor; the native night-field floor is visible, so TH08 draws
-        // the fogged cell instead (flagged: the exact TH08 fog metric is
-        // unresolved without a native trace — see HANDOFF.md).
-        if (fogAlpha >= 0.98 && !this.runState) continue;
+        // the ground band's depth (860+), so a fully-fogged-cell skip would
+        // erase the whole floor; the native night-field floor is visible, so
+        // the fogged cell draws instead (flagged: the exact TH08 fog metric
+        // is unresolved without a native trace — see HANDOFF.md).
         const ct0 = clamp(t0, 0, 1);
         const ct1 = clamp(t1, 0, 1);
         const vLo = flip ? rect.h * (1 - ct1) : rect.h * ct0;
@@ -7018,60 +5779,6 @@ export class StageScene implements GameHost {
     }
   }
 
-  private drawDialogue(r: Renderer): void {
-    if (this.th08Dialogue) {
-      this.drawTh08Dialogue(r);
-      return;
-    }
-    const d = this.dialogue;
-    if (!d) return;
-    const ctx = r.ctx;
-    const family = CHARACTERS[this.playerObj.character].family;
-    const playerFaceKey = this.playerObj.character === 'reimuYukari'
-      ? 'face_rm00'
-      : (['face_rm00', 'face_mr00', 'face_sk00'] as const)[family];
-    const anms = [
-      (this.assets.anms as Record<string, Anm>)[playerFaceKey],
-      this.faceAnm
-    ];
-    for (let side = 0; side < 2; side++) {
-      const p = d.portraits[side];
-      if (!p?.visible) continue;
-      const anm = anms[side];
-      if (!anm) continue;
-      const sprite = portraitSprite(anm, p.face);
-      if (!sprite) continue;
-      const scale = 0.5;
-      const w = sprite.w * scale;
-      const h = sprite.h * scale;
-      const baseX = side === 0 ? PLAYFIELD.x + 10 + (p.slideIn - 1) * 60 : PLAYFIELD.x + PLAYFIELD.width - w - 10 - (p.slideIn - 1) * 60;
-      const y = PLAYFIELD.y + PLAYFIELD.height - h + 8;
-      ctx.save();
-      ctx.globalAlpha = p.active ? 1 : 0.55;
-      const img = r.image(sprite.imageKey);
-      if (img) {
-        if (!p.active) ctx.filter = 'brightness(0.55)';
-        ctx.drawImage(img, sprite.x, sprite.y, sprite.w, sprite.h, baseX, y, w, h);
-        ctx.filter = 'none';
-      }
-      ctx.restore();
-    }
-    // Text box
-    const boxY = PLAYFIELD.y + PLAYFIELD.height - 82;
-    ctx.fillStyle = 'rgba(8, 8, 24, 0.78)';
-    ctx.fillRect(PLAYFIELD.x + 8, boxY, PLAYFIELD.width - 16, 66);
-    ctx.strokeStyle = 'rgba(160, 160, 220, 0.5)';
-    ctx.strokeRect(PLAYFIELD.x + 8.5, boxY + 0.5, PLAYFIELD.width - 17, 65);
-    if (d.lines[0]) r.text(d.lines[0], PLAYFIELD.x + 22, boxY + 12, { size: 14 });
-    if (d.lines[1]) r.text(d.lines[1], PLAYFIELD.x + 22, boxY + 36, { size: 14 });
-    if (d.bossIntroTimer > 0 && d.bossIntro.length) {
-      const cx = PLAYFIELD.x + PLAYFIELD.width - 20;
-      d.bossIntro.slice(-2).forEach((line, i) => {
-        r.text(line, cx, PLAYFIELD.y + 120 + i * 22, { size: 15, color: '#fbd', align: 'right' });
-      });
-    }
-  }
-
   // Stage title card during the opening seconds, using the stage/song names
   // decoded from the STD data.
   // Vanilla stage intro: play stdNtxt.anm's five scripts verbatim — crest,
@@ -7085,14 +5792,8 @@ export class StageScene implements GameHost {
     }
   }
 
-  // PCB right sidebar, rebuilt from the original front.png sprites: the seven
-  // label bitmaps (HiScore/Score/Player/Bomb/Power/Graze/Point) at their
-  // exact resting columns, values in the ascii.png 8x12 digit font, life/bomb
-  // stars, the Power bar, and the 東方妖々夢 logo + caption watermark. The
-  // Cherry counters are NOT sidebar rows in the original (no such glyphs
-  // exist in front.png); they live in a bottom-edge readout, see below.
-  // ---- TH08 sidebar (front.anm entry-0 label scripts -25..-18, on-disk
-  // ids; sequential indices 2..9 per TH08_HUD_FIELDS). The runners position
+  // TH08 sidebar (front.anm entry-0 label scripts -25..-18, on-disk ids;
+  // sequential indices 2..9 per TH08_HUD_FIELDS). The runners position
   // themselves at their authored resting coordinates (x~416-448 column).
   private th08HudRunners: AnmRunner[] | null = null;
 
@@ -7107,7 +5808,7 @@ export class StageScene implements GameHost {
       for (const runner of this.th08HudRunners) runner.update();
     }
     const p = this.playerObj;
-    const run = this.runState!;
+    const run = this.runState;
     const valueX = 488; // TH08_HUD_FIELDS value column
     // The label scripts fade themselves in (entry alpha 32 -> 255); they
     // must tick every frame like every other ANM VM.
@@ -7198,130 +5899,7 @@ export class StageScene implements GameHost {
   }
 
   private drawSidebar(r: Renderer): void {
-    if (this.runState) {
-      this.drawSidebarTh08(r);
-      return;
-    }
-    const ctx = r.ctx;
-    const labelX = 432; // resting column for every front.png label (spec §1.2)
-    const valueX = 504; // digit readouts start just past the 64px label box
-    const p = this.playerObj;
-    const label = (rect: readonly number[], y: number) => this.blit(r, 'front', rect, labelX, y);
-    const star = (rect: readonly number[], sx: number, sy: number) => this.blit(r, 'front', rect, sx, sy);
-
-    // Logo panel + caption watermark (drawn first so text/labels sit on top).
-    this.blit(r, 'front', FRONT.logo, 480, 208);
-    this.blit(r, 'front', FRONT.caption, 448, 336);
-
-    label(FRONT.hiscore, 48);
-    // The exe's score HUD prints the internal score with a literal appended
-    // zero ("%8d0" @ FUN_00429446 region) — displayed value = internal x10,
-    // last digit always 0 (the slot vanilla uses for the continue count).
-    this.drawNumber(r, Math.max(this.hiScore, this.score) * 10, valueX, 50, 9);
-    label(FRONT.score, 64);
-    this.drawNumber(r, this.score * 10, valueX, 66, 9);
-
-    label(FRONT.player, 96);
-    for (let i = 0; i < Math.max(0, p.lives); i++) star(FRONT.redStar, valueX + i * 16, 96);
-    label(FRONT.bomb, 112);
-    for (let i = 0; i < Math.max(0, p.bombs); i++) star(FRONT.blueStar, valueX + i * 16, 112);
-
-    // Power row, exe-exact (sidebar draw @ all.c:18593-18648): an untextured
-    // gradient quad from x=496 (0x48ecb0) to 496+power, y 144..160, vertex
-    // colors ARGB 0xE0E0E0FF top / 0x80E0E0FF bottom (light periwinkle,
-    // alpha 224 fading to 128); then the power value as HUD digits, or the
-    // literal string "MAX" (DAT_0048e138) at 128.
-    label(FRONT.power, 144);
-    if (p.power > 0) {
-      const grad = ctx.createLinearGradient(0, 144, 0, 160);
-      grad.addColorStop(0, 'rgba(224,224,255,0.878)');
-      grad.addColorStop(1, 'rgba(224,224,255,0.502)');
-      ctx.fillStyle = grad;
-      ctx.fillRect(496, 144, Math.min(128, p.power), 16);
-    }
-    if (p.power >= 128) r.text('MAX', 496, 146, { size: 12, color: '#fff' });
-    else this.drawNumber(r, p.power, 496, 146);
-
-    label(FRONT.graze, 160);
-    this.drawNumber(r, this.graze, valueX, 162);
-    // Point row displays "collected/next-extend threshold" ("%d/%d" @
-    // all.c:18587, stats +0x28 / +0x30). Slash = ascii.png 16px-font glyph.
-    label(FRONT.point, 176);
-    const pointEnd = this.drawNumber(r, this.pointItems, valueX, 178);
-    r.text('/', pointEnd + 1, 178, { size: 12, color: '#eee', stroke: false });
-    this.drawNumber(r, this.extendThreshold, pointEnd + 8, 178);
-
-    // Cherry readout hugging the screen's bottom-left (ascii.anm script4;
-    // exe draw @ all.c:1760-1870): the main row is `cherry / cherryMax`
-    // (the vanilla gauge — e.g. 86120/310000 on Lunatic), with the current
-    // cherry right-aligned into the banner sprite's blank slot ending at
-    // the baked slash (in-sprite x≈84) and cherryMax after it. The small
-    // purple `+cherryPlus` (border progress toward 50000, exe vertex color
-    // B/G/R = 0xb0/0x80/0xc0) floats above the blank. The banner sprite
-    // dims to alpha 64/255 while charging and runs full-bright while the
-    // border is up; the engine-drawn digits stay opaque.
-    if (this.cherry) {
-    this.blit(r, 'ascii', [0, 224, 96, 16], PLAYFIELD.x, 448, this.cherry.borderActive ? 1 : 64 / 255);
-    const cherryStr = String(Math.max(0, Math.trunc(this.cherry.cherry)));
-    this.drawNumber(r, this.cherry.cherry, PLAYFIELD.x + 84 - cherryStr.length * DIGIT_W, 450);
-    this.drawNumber(r, this.cherry.cherryMax, PLAYFIELD.x + 96, 450);
-    // Exe layout (all.c:1846-1850 + rdata 0x48ec7c/0x48eac0): cherryPlus is
-    // drawn one text row ABOVE the cherry/cherryMax line (base+2 vs base+11),
-    // in the purple B/G/R 0xb0/0x80/0xc0 — right-aligned over the cherry
-    // field so it never collides with cherryMax.
-    // While a border is up, the exe repurposes the live cherryPlus storage
-    // itself as the countdown. CherrySystem preserves the native write-before-
-    // timer-advance order, including the repeated 50000 first active tick.
-    const plusVal = Math.max(0, Math.trunc(this.cherry.cherryPlus));
-    if (this.cherry.borderEngaged) {
-      // AsciiManager.cpp:1251-1295: while a border is pending/active the
-      // cherryPlus digits switch to the native recolor (r=255, g/b computed
-      // from the value with the %4000 triangle fold), scale x1.41, a 10px
-      // advance, LEFT-aligned from gauge.x + 40+6+7 (+2,-2 border offset).
-      // The web used to right-align them at the cherry field's edge, which
-      // landed ~20px left / 3px low of vanilla and collided with the
-      // cherry/cherryMax row below.
-      const rem = plusVal % 4000;
-      const tri = rem >= 2000 ? 4000 - rem : rem;
-      const gb = Math.min(255, Math.trunc(plusVal * 192 / 50000) + Math.trunc(tri * 64 / 2000));
-      const color = (0xff << 16) | (gb << 8) | gb;
-      const digits = String(plusVal);
-      const left = PLAYFIELD.x + 53 + 2;
-      for (let i = 0; i < digits.length; i++) {
-        const d = digits.charCodeAt(i) - 48;
-        r.drawSprite('ascii', d * DIGIT_W, DIGIT_Y, DIGIT_W, DIGIT_H,
-          left + 5 + i * 10, 447, { color, scaleMultiplier: 1.41 });
-      }
-    } else {
-      r.text(`+${plusVal}`, PLAYFIELD.x + 84, 444, { size: 10, color: '#c080b0', align: 'right' });
-    }
-    // AsciiManager.cpp:1301-1308: the pulsing border badge rides the cherry
-    // gauge while BORDER_ACTIVE (ascii.anm entry-0 script 5, gauge +24/+8).
-    if (this.cherry.borderActive && this.borderBadgeRunner) {
-      r.drawAnmFrame(this.borderBadgeRunner.spriteFrame(), PLAYFIELD.x + 24, 448 + 8);
-    }
-    }
-
-    if (this.bossActive) {
-      const hp = Math.max(0, this.bossActive.hp);
-      const max = Math.max(1, this.bossActive.maxHp);
-      ctx.fillStyle = '#311';
-      ctx.fillRect(PLAYFIELD.x + 40, PLAYFIELD.y + 6, PLAYFIELD.width - 80, 5);
-      ctx.fillStyle = '#e55';
-      ctx.fillRect(PLAYFIELD.x + 40, PLAYFIELD.y + 6, (PLAYFIELD.width - 80) * (hp / max), 5);
-      for (let i = 0; i < this.bossLifeCount; i++) {
-        this.drawStar(ctx, PLAYFIELD.x + 12 + i * 12, 9, '#e55');
-      }
-      const seconds = Math.max(0, Math.trunc((this.timerThreshold() - this.bossActive.ecl.bossTimer) / 60));
-      this.drawNumber(r, seconds, PLAYFIELD.x + PLAYFIELD.width - 20, PLAYFIELD.y + 4, 2);
-      // ename.png rows 0..15 are stage pairs (midboss, final boss) — the
-      // row follows the CURRENT boss's root sub (UI-001), not a
-      // dialogue-seen latch (stage 6 has two dialogue-bearing encounters).
-      if (!this.dialogue) {
-        const row = enameRowForBoss(this.stageNumber, this.bossActive.ecl.subId);
-        this.blit(r, 'ename', [0, row * 16, 128, 16], 32, 26);
-      }
-    }
+    this.drawSidebarTh08(r);
   }
 
   // Bottom-right difficulty tag (+ the Practice tag above it), straight from
@@ -7341,29 +5919,5 @@ export class StageScene implements GameHost {
     const rect = DIFF_TAG_RECTS[this.difficulty] ?? DIFF_TAG_RECTS[1];
     this.blit(r, 'pause', rect, 344, 444, 0.9);
     if (this.mode === 'practice') this.blit(r, 'pause', [192, 240, 64, 16], 344, 428, 0.9);
-  }
-
-  private timerThreshold(): number {
-    const s = this.bossActive?.ecl;
-    if (!s) return 0;
-    if (s.timerCallbackThreshold >= 0) return s.timerCallbackThreshold;
-    // op148 is now an HP-threshold callback (no timer subs remain); fall back
-    // to the default spell-card window.
-    return 6000;
-  }
-
-  private drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, color: string): void {
-    ctx.save();
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    for (let i = 0; i < 5; i++) {
-      const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
-      const b = a + Math.PI / 5;
-      ctx.lineTo(cx + Math.cos(a) * 6, cy + Math.sin(a) * 6);
-      ctx.lineTo(cx + Math.cos(b) * 2.6, cy + Math.sin(b) * 2.6);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
   }
 }

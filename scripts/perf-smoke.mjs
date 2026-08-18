@@ -39,18 +39,18 @@ async function runArm(query) {
   await client.send('Emulation.setCPUThrottlingRate', { rate: 2 });
   try {
     await page.goto(`${server.baseUrl}/index.html?test=1&perf=1&difficulty=3&power=128${query}`);
-    await page.waitForFunction(() => window.__TH07_TEST__?.ready, null, { timeout: 30000 });
-    await page.waitForFunction(() => window.__TH07_TEST__.snapshot().frame >= 120, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__TH08_TEST__?.ready, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__TH08_TEST__.snapshot().frame >= 120, null, { timeout: 30000 });
     await page.evaluate(() => {
-      window.__TH07_TEST__.fillItems(1100);
-      window.__TH07_TEST__.inject(['shoot'], ['shoot']);
+      window.__TH08_TEST__.fillItems(1100);
+      window.__TH08_TEST__.inject(['shoot'], ['shoot']);
     });
     // Record vsync tick intervals while the real loop runs the dense
     // scenario; the sim advances ~600 frames during collection.
     const cadence = await page.evaluate(async () => {
       const intervals = [];
       let last = null;
-      const startFrame = window.__TH07_TEST__.snapshot().frame;
+      const startFrame = window.__TH08_TEST__.snapshot().frame;
       await new Promise((resolve) => {
         const tick = (time) => {
           if (last != null) intervals.push(time - last);
@@ -60,10 +60,10 @@ async function runArm(query) {
         };
         requestAnimationFrame(tick);
       });
-      return { intervals, frames: window.__TH07_TEST__.snapshot().frame - startFrame };
+      return { intervals, frames: window.__TH08_TEST__.snapshot().frame - startFrame };
     });
-    const costs = await page.evaluate(() => window.__TH07_TEST__.frameCost());
-    const canvas = await page.evaluate(() => window.__TH07_TEST__.canvasContextAttributes());
+    const costs = await page.evaluate(() => window.__TH08_TEST__.frameCost());
+    const canvas = await page.evaluate(() => window.__TH08_TEST__.canvasContextAttributes());
     const update = costs.update.slice(120);
     const draw = costs.draw.slice(120);
     const total = update.map((value, index) => value + (draw[index] ?? 0));

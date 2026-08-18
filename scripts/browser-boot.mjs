@@ -9,9 +9,9 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
 const errors = attachPageDiagnostics(page);
 try {
   await page.goto(`${server.baseUrl}/index.html?test=1&paused=1&difficulty=3`);
-  await page.waitForFunction(() => window.__TH07_TEST__?.ready, null, { timeout: 30000 });
-  await page.evaluate((count) => window.__TH07_TEST__.advance(count), frames);
-  const snapshot = await page.evaluate(() => window.__TH07_TEST__.snapshot());
+  await page.waitForFunction(() => window.__TH08_TEST__?.ready, null, { timeout: 30000 });
+  await page.evaluate((count) => window.__TH08_TEST__.advance(count), frames);
+  const snapshot = await page.evaluate(() => window.__TH08_TEST__.snapshot());
   console.log(JSON.stringify(snapshot));
   const pageErrors = uniqueErrors(errors);
   if (pageErrors.length) {
