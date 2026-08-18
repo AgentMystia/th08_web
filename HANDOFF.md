@@ -678,3 +678,46 @@ the gating = the replay player was youkai-side during familiar phases,
 so those kills were wrongly credited before). Ghost-tint pixel diff is
 inconclusive (frame drift between A/B captures) — the tint is verified
 structurally; a frozen-frame A/B would pin it visually.
+
+## 2026-08-19 (later): 节奏/收敛 pass — 7e142c6 / c161589 / 7232e34
+
+用户报告：Boss战节奏崩坏 + 道中对话期间小怪仍在攻击 + 要求静态逆向完成
+Stage 1 replay 收敛。三个 exe 实证根因（两项推翻/修正了 08-17 的结论）：
+
+1. **时间线 hold 净冻结时钟**（7e142c6）：op 7/10/13 先 FUN_00418110
+   Subtract(1) 再 goto Tick(+1) —— 净零。08-17 的"时钟推进"读法漏了
+   Subtract，把两 hold 之间的所有 op 压缩掉了：midboss 死后波次（t=2935..
+   3735，从死亡时刻起播）瞬间齐发、boss 提前 ~1240 帧出现。ECL 解码佐证：
+   #124 op10 停在 2935 → 波次从释放点播 800 帧 → t=4175 op6 对话 → 释放后
+   立即 spawn boss。AGENTS/HANDOFF 的旧结论已撤回。
+2. **对话开始清场**（c161589）：FUN_0043396d 尾部三调用 ——
+   FUN_00415c60（弹→时计玉+laser 取消）、FUN_0042efb0(0,0)（普通敌清扫，
+   hp=0 走死亡路径，豁免 flags1 bit1/flags2 bit6，cap=0）、FUN_004413e0
+   （自机弹无害上漂 (0,−0.5)，每 MSG 帧重申；仅死亡/决死重置）。原生不
+   force-collect、玩家可动、背景照常滚 —— 只清场上实体。我们的
+   forceCollectAllItems 是发明的，已删；敌机清扫此前缺失（"对话中被小怪
+   打死"的根因）。killNonBossEnemies 增加 valueCap 参数镜像 (0,0) 调用。
+3. **弹幕过渡积分**（7232e34）：state 2/3/4 分步速度 = ½/¼/⅛（0x431240
+   立即数 0x40000000/0x40200000/0x40400000；此前沿用 TH07 的 ½,1/2.5,⅓）；
+   过渡跨 duration+2 个管理 tick（FUN_0045e430 构造无同步 t0 消化 +
+   终止指令后一 tick 才报完成）。+2 parity 由录像实证钉死（f530 环的穿越
+   带只在 +2 清空 f685 幻影死亡；0/+1 均残留）。autofire 重执行炮口取
+   +0x2d88 循环头快照+炮口偏移（Th08EclState.loopHeadX/Y）。
+
+顺带一手核实的事实（防后人重查）：mode-3 = row·spread+base+col·2π/count1
+（无 π/count1 相位、无瞄准）；sprite-2 米弹命中尺寸 = 4.0（AddedCallback
+0x40800000 档）；机炮链 ins_107/96/108 + ins_105 读时间线 spawn 写入的
+var 10000=30 → rank8 期限 33、每 33 tick 连发；f545 前 rank 恒 8；
+T8RP stage1 = 10504×u16（trailer 352=1+ceil(10504/30) 实证；
+re-specs/th08-replay.md 里"5245×u32/0x40 头"是旧读法，勿信）。
+
+收敛现状：f685 死亡清除；首个分歧移至 f830 机炮族（row-3 速 1.5667 弹，
+玩家骑线 dy=0.48；开火相位 ±1 tick 与 −2 均仍命中——需要 ~2 tick 前置，
+机制未定位）；其余死亡为级联。无敌直通下 midboss 活到出现后 1444 帧，
+其后全部内容整体后移；道具经济偏薄（point 生成 47 vs 原生收集 61，
+无敌下收集 36/power96/score158万）。下一步线索：每杀掉落表/数量、
+以及（有 wine 环境时）逐帧原生 trace。
+
+验证：check/build 干净；409/410 测试过；TH07 replay:verify 6/6（全程未动
+TH07 路径）；dev-shot 无 PAGE ERRORS。replay:verify:th08 仍 DIVERGED
+（如实：收敛未完成，残差见上）。

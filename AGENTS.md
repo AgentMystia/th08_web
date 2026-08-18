@@ -172,6 +172,54 @@ v1.00d decompilation, replacing inherited-TH07 or speculative behavior:
 player00.anm entry 1 (spriteBase 44, on-disk scripts 19-22) holds the bomb
 art; PlayerEffects now resolves entry-scoped sprite tables for it.
 
+2026-08-19 pacing/convergence pass (commits 7e142c6/c161589/7232e34) —
+three more exe-proven roots, each reversing or extending a prior claim:
+- **Timeline holds NET-FREEZE the clock** (corrects the 2026-08-17 bullet 4
+  above): op 7/10/13 each call FUN_00418110 (ZunTimer::Subtract 1) BEFORE
+  `goto LAB_0042ad52` (Tick +1) — net zero while parked (asm 42abdc/42ac3d/
+  42ac81). The dispatcher fires ops only on exact clock match, so the old
+  "advance" reading compacted every op between two holds: the post-midboss
+  waves (t=2935..3735, timed FROM midboss death) all fired at once and the
+  boss appeared immediately at midboss-death instead of ~1240 frames later.
+- **Gui::StartMsg's field clears** (FUN_0043396d tail, all.c:24655-24657):
+  FUN_00415c60 (bullets→time orbs + laser cancel), FUN_0042efb0(0,0)
+  (ordinary-enemy sweep via the hp=0 death path, value cap 0, return
+  discarded — the spare bits are flags1 bit1 / flags2 bit6), FUN_004413e0
+  (live player shots flagged harmless drifting at (0,−0.5), re-asserted
+  every MSG frame; reset only on death/last-spell, never after dialogue).
+  NO force-collect: items keep falling; the player keeps moving; the STD
+  background keeps scrolling. The port previously force-collected and
+  skipped the sweep — that was the "shot mid-conversation" bug.
+- **Bullet spawn-transition**: creep is vel·(½, ¼, ⅛) for states 2/3/4
+  (0x431240 immediates 0x40000000/0x40200000/0x40400000 — TH07's ½, 1/2.5,
+  ⅓ do not carry over), and the transition spans duration+2 manager ticks
+  (FUN_0045e430 constructs the VM with no synchronous t0 pass; the
+  finished-report lands a tick after the terminal op itself). The +2 parity
+  is empirically pinned by the fixture (see below); the exact VM-internal
+  reason is inferred, not single-stepped.
+- The auto-fire re-execution (FUN_00423150 → FUN_00422720) builds its
+  template origin from the loop-head position snapshot (+0x2d88 sync at
+  0x418520) + muzzle offset, not the live post-move position.
+- Corollary facts re-verified first-hand this pass: FIRE angle-mode 3 is
+  `row·spread + base + col·2π/count1` (all.c:22727-22733, no π/count1
+  phase, no aim); bullet hit sizes ARE prototype-derived with sprite-2
+  rice = 4.0 (AddedCallback all.c:24344-24420 — the 0x40800000 case); the
+  machine-gun capture/auto-fire deadline chain (ins_107/96/108 + ins_105
+  reading timeline-spawned var 10000 = 30 → deadline 33 at rank 8) works
+  and fires every 33 ticks; rank stays 8 through f545 (no adjustRank
+  events), so rankSpeed −0.25 is correct for the early waves.
+- Verifier state after this pass: the f685 phantom death (the f530 ring's
+  crossing band) is GONE; the first divergence is now the f830 machine-gun
+  family (row-3 speed-1.5667 bullet, player rides its line, dy 0.48 —
+  ±1 tick of fire phase or transition parity both still contact; needs
+  ~2 ticks of lead, and the machine-gun phase knob −2 only moves the
+  contact to f829). The remaining deaths are cascade-dominated; the
+  midboss dies at wall +1444 in our run, shifting all post-midboss
+  content vs the recording. Item economy is thin (47 point spawns vs 61
+  native collects with the player invulnerable). Next threads: item drop
+  tables/counts per kill, and a per-frame native trace when a wine-capable
+  host exists.
+
 2026-08-19 familiar (使魔) system pass — the human/youkai tangibility
 system decoded end-to-end from v1.00d (polarity NOTE: human form
 MATERIALIZES familiars; youkai form etherealizes them — confirmed by the
