@@ -333,10 +333,13 @@ Exe-proven fixes landed this pass (commits 634704d, f106ff8, 7dc4333):
   header; op17 (`*=`) against a zero time-field zeroed Sub0's chase
   target (`0.6*(player-enemy)+enemy`), so wave fairies never entered
   the shot column — the kill/collect cascade died with it.
-- **Timeline holds advance the clock**: op 7 (dialogue), op 10 (boss
-  alive), op 13 (latch) all `goto LAB_0042ad52` in FUN_0042a8a0 — the
-  clock advances while the cursor parks. Freezing it put the boss intro
-  at midboss-death + 1236 frames. (TH07's freeze retained for TH07.)
+- **Timeline holds NET-FREEZE the clock** (2026-08-19 correction of the
+  entry below's original claim): op 7 (dialogue), op 10 (boss alive),
+  op 13 (latch) each call FUN_00418110 (Subtract 1) before `goto
+  LAB_0042ad52` (Tick +1) — net zero while parked. The old "advances"
+  reading measured the tick and missed the compensating subtract; the
+  boss intro at midboss-death + ~1240 frames is native-correct pacing
+  (post-midboss waves t=2935..3735 stream from the release point).
 - **Death mode is flags bits 20-22** (ins_129; the switch at
   all.c:21639), not the TH07 deathMode field. The misread forced every
   TH08 death to mode 0, skipping the death callback — the midboss never

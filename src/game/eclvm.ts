@@ -549,14 +549,19 @@ export class StageRuntime {
       // authored wait locally by cancelling this tail increment while the
       // message manager is active; op 8 starting a message must not freeze
       // the clock on its own.
-      // TH08 DIFFERS: its hold events (op 7 dialogue-hold, op 10 boss-hold,
-      // op 13 latch-park) all `goto LAB_0042ad52` in FUN_0042a8a0, which
-      // advances the timeline clock while the cursor stays parked
-      // (all.c:20320-20339, 20358-20369). Parking the clock instead made the
-      // stage-1 boss intro land midboss-death + 1236 frames instead of
-      // immediately after it (every event between the two holds had already
-      // gone due on the native clock).
-      if (!held || this.ecl.version === 8) cursor.frame += rate;
+      // TH08 holds freeze the clock too: FUN_0042a8a0's hold cases (op 7
+      // dialogue @ 42abdc, op 10 boss-alive @ 42ac3d, op 13 latch @ 42ac81)
+      // each call FUN_00418110 (ZunTimer::Subtract 1) BEFORE `goto
+      // LAB_0042ad52` (ZunTimer::Tick +1) — net zero while parked. The
+      // dispatcher only fires an op when the clock equals its time exactly,
+      // so a parked-but-running clock would skip every op between two holds.
+      // This reverts the 2026-08-17 reading that the goto alone advanced
+      // the clock: it measured the tick but missed the compensating
+      // subtract. Stage-1's timeline confirms the freeze: the post-midboss
+      // waves sit at t=2935..3735 with the midboss hold parked at 2935, so
+      // they stream for ~800 real frames after the midboss dies, and the
+      // pre-boss dialogue (t=4175) lands midboss-death + ~1240 frames.
+      if (!held) cursor.frame += rate;
     }
   }
 

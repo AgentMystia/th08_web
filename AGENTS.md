@@ -61,10 +61,17 @@ five more exe-proven root fixes, each against all.c:
    exe cases 9-0x12), not TH07's three-operand forms; the remap zeroed
    Sub0's chase-curve targets (`0.6*(player-enemy)+enemy`), so fairies
    never entered the shot column.
-4. **Timeline holds advance the clock** (op 7/10/13 `goto LAB_0042ad52`),
-   they do not freeze it — parking the clock put the boss intro at
-   midboss-death + 1236 frames instead of right after it. TH07's freeze
-   is retained for TH07 only.
+4. **Timeline holds NET-FREEZE the clock** (2026-08-19 correction of the
+   2026-08-17 claim that they advance it): op 7/10/13 each call
+   FUN_00418110 (ZunTimer::Subtract 1) *before* `goto LAB_0042ad52`
+   (ZunTimer::Tick +1) — net zero while parked (asm 42abdc/42ac3d/42ac81).
+   The dispatcher fires an op only when the clock equals its time exactly,
+   so a parked-but-running clock would skip every op between two holds.
+   Stage-1 proof: post-midboss waves sit at t=2935..3735 with the midboss
+   hold parked at 2935 (they stream ~800 real frames after the midboss
+   dies), and the pre-boss dialogue at t=4175 lands midboss-death + ~1240
+   frames. The old "+1236 frames is wrong" reading had the polarity
+   backwards.
 5. **TH08 death mode** lives in flags bits 20-22 (ins_129; the switch at
    all.c:21639), not the TH07 deathMode field — reading the wrong field
    skipped every death callback, so the midboss never ran her phase-exit
