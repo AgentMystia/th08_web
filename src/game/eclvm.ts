@@ -3839,40 +3839,29 @@ export class StageRuntime {
         }
         return null;
       }
-      case 65: { // mode-1 velocity (angle, speed); flags |= 0x1000
-        s.angle = normalizeNativeAngleF32(gf(0));
-        s.heading = s.angle;
-        s.speed = gf(4);
-        s.moveMode = 1;
-        // The label-0x40 write (all.c:11509-11528) also clears the stop
-        // timer (+0x2de8 = 0 + ZunTimer::SetCurrent(0)): an op-66 timed move
-        // that already expired must not kill this velocity on its next tick.
-        s.orbitDuration = 0;
-        s.orbitLeft = 0;
+      case 65: {
+        // ins_65, dispatcher label 0x40 (all.c:11509-11528): writes the
+        // var-readable motion bookkeeping — angle to +0x2d94 (var 10069),
+        // speed to +0x2da8 — sets flags bit 12 (0x1000), clears the stop
+        // timer, and that is ALL: a full .text scan finds NO reader of
+        // +0x2d94/+0x2da8 outside the var accessors (0x41f9b0/0x42067f), so
+        // this op does not itself move the enemy (the TH07 mover consumed
+        // those fields; TH08 motion goes through the armed 0x2000 state and
+        // the interpolation ops).
+        s.heading = normalizeNativeAngleF32(gf(0));
         return null;
       }
       case 66: {
         // ins_66, dispatcher label 0x41 (all.c:11530-11562). arg0 < 1 is the
-        // plain label-0x40 velocity write. arg0 >= 1 is FUN_00420d10's armed
-        // state: velocity dir(arg2)·speed(arg3)·arg0 into +0x2dc4, origin
-        // snapshot into the var-readable 10058-60 bank, stop timer +0x2de8 =
-        // arg0, flags 0x2000 | spriteOffset<<14. The consumer that turns the
-        // armed vector + timer into per-tick motion is NOT yet recovered
-        // (plain linear dir·speed·arg0-ticks was tried: it drove the
-        // machine-gun fairy through a 192px entry drop and produced EARLIER
-        // phantom contacts, f634 vs f873 without any move — so the armed
-        // motion is not that shape). Until the consumer is pinned, arm
-        // nothing (the fairy stays at its timeline spawn position, the
-        // empirically closest variant) and warn once.
-        const anmId = gi(0);
-        if (anmId < 1) {
-          s.angle = normalizeNativeAngleF32(gf(8));
-          s.heading = s.angle;
-          s.speed = gf(12);
-          s.moveMode = 1;
-          s.orbitDuration = 0;
-          s.orbitLeft = 0;
-        }
+        // plain label-0x40 bookkeeping write. arg0 >= 1 is FUN_00420d10's
+        // armed state: velocity dir(arg2)·speed(arg3)·arg0 into +0x2dc4
+        // (var 10063/10064), origin snapshot into +0x2dd0 (var 10058-60),
+        // stop timer +0x2de8 = arg0 with the ZunTimer at +0x2ddc armed, and
+        // flags 0x2000 | spriteOffset<<14. The per-tick consumer of the
+        // armed state is NOT yet recovered (linear dir·speed·arg0-ticks and
+        // an instant total-vector jump were both tested and produced
+        // earlier/equal phantom contacts); until it is pinned, this branch
+        // arms nothing and the enemy keeps its timeline spawn position.
         return null;
       }
       case 67: { // aimed move clamped into the op-75 rect (FUN_00422020)
