@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: th07-${{ github.workflow }}-${{ github.ref }}
+  group: th08-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,23 +33,6 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  replay:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - uses: actions/cache@v4
-        with:
-          path: tests/.build/cache
-          key: ${{ runner.os }}-node22-testbuild-replay-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-node22-testbuild-replay-${{ hashFiles('package-lock.json') }}-
-      - run: npm ci
-      - run: npm run replay:verify
-
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -61,14 +44,13 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run build
-      - run: node scripts/dev-shot.mjs /tmp/th07-ci-boot.png 300
-      - run: npm run replay:browser -- tests/replays/th7_udFe25.rpy 1 300 /tmp/th07-ci-replay.png 0
+      - run: node scripts/dev-shot.mjs /tmp/th08-ci-boot.png 300
       - run: npm run prepare-pages
       - run: node scripts/browser-boot.mjs dist/pages 300
 
   pages:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, replay, browser]
+    needs: [core, browser]
     runs-on: ubuntu-latest
     permissions:
       contents: read

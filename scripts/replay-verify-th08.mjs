@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// TH08 Stage-1 replay verifier (node). Replays replay/th8_udLy01.rpy stage 1
-// through the production StageScene (the same bundle the browser ships) and
-// reports the earliest frame where our simulation diverges from the recorded
-// run — drive that number upward; it is the vertical slice's convergence
-// oracle.
+// TH08 Stage-1 replay verifier (node). Replays the committed fixture
+// tests/replays/th8_udLy01.rpy stage 1 through the production StageScene
+// (the same bundle the browser ships) and reports the earliest frame where
+// our simulation diverges from the recorded run — drive that number upward;
+// it is the vertical slice's convergence oracle.
 //
 // Usage: node scripts/replay-verify-th08.mjs [replay-file] [--trace N]
 import { existsSync, readFileSync } from 'node:fs';
@@ -12,9 +12,15 @@ import {
 } from './lib/replay-harness.mjs';
 
 const args = process.argv.slice(2);
-const REPLAY = args[0] && !args[0].startsWith('-') ? args[0] : 'replay/th8_udLy01.rpy';
+// Fixture resolution: the committed tests/replays/ copy first (CI has no
+// local replay/ dir), the git-ignored local-evidence copy second.
+const DEFAULT_REPLAYS = ['tests/replays/th8_udLy01.rpy', 'replay/th8_udLy01.rpy']
+  .filter(existsSync);
+const REPLAY = args[0] && !args[0].startsWith('-')
+  ? args[0]
+  : DEFAULT_REPLAYS[0] ?? 'replay/th8_udLy01.rpy';
 if (!existsSync(REPLAY)) {
-  console.error(`replay file not found: ${REPLAY} (local-only evidence; never commit it)`);
+  console.error(`replay file not found: ${REPLAY} (expected the committed fixture tests/replays/th8_udLy01.rpy)`);
   process.exit(2);
 }
 

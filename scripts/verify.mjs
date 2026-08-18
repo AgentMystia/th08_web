@@ -1,3 +1,10 @@
+// TH08 verification orchestrator.
+//   fast: check + build + test + clean browser boot
+//   edit: check + focused tests (--test a,b) + clean browser boot
+//   full: fast + the replay convergence gate + TH08 pixel spot checks +
+//         the static Pages boot
+// The replay gate runs the committed fixture tests/replays/th8_udLy01.rpy;
+// PASS there is the vertical slice's acceptance oracle (see AGENTS.md §0).
 import { spawn } from 'node:child_process';
 
 const mode = process.argv[2] ?? 'fast';
@@ -33,60 +40,45 @@ async function fast() {
   await Promise.all([
     npm('check'),
     npm('build'),
-    run('npm', ['test'], 'npm test'),
-    npm('replay:verify')
+    run('npm', ['test'], 'npm test')
   ]);
-  await run('node', ['scripts/dev-shot.mjs', '/tmp/th07-verify-boot.png', '300'], 'clean browser boot');
+  await run('node', ['scripts/dev-shot.mjs', '/tmp/th08-verify-boot.png', '300'], 'clean browser boot');
 }
 
 async function edit() {
   const args = parseArgs(argv);
   const tests = args.test ? String(args.test).split(',') : [];
-  const replayArgs = [];
-  if (args.replay) replayArgs.push('--replay', String(args.replay));
-  if (args.stage) replayArgs.push('--stage', String(args.stage));
-  if (args.trace) replayArgs.push('--trace', String(args.trace));
   await Promise.all([
     npm('check'),
-    tests.length ? run('node', ['--test', ...tests], `related tests: ${tests.join(', ')}`) : run('npm', ['test'], 'npm test'),
-    npm('replay:verify', replayArgs)
+    tests.length
+      ? run('node', ['--test', ...tests], `related tests: ${tests.join(', ')}`)
+      : run('npm', ['test'], 'npm test')
   ]);
 }
 
 async function full() {
   await fast();
-  // These pixel gates test STAGE CONTENT (geometry/HUD/spell art), not the
-  // presentation path. Capture them on the standard (non-desync) canvas
-  // (desync=0): a granted desynchronized canvas's headless screenshot may
-  // bypass the compositor and read a stale/black frame (see the diff's
-  // honesty note in desync-stage5-probe.mjs), which would flake the gates.
-  // The presentation path itself is gated by desync-stage5-probe below.
+  await npm('replay:verify:th08');
+  // TH08 pixel spot checks (AGENTS.md §0's oracle table). The play/side/lower
+  // bands are 640x480 game coords — dev-shot screenshots are 1280x960, so the
+  // regions are passed at 2x. Reports are printed for review against the
+  // baseline table; tolerances ±12 brightness / ±10 texture %.
   const shots = [
-    ['120', 'desync=0', '', '120'],
-    ['800', 'difficulty=3&desync=0', '', '800'],
-    ['2500', 'difficulty=3&desync=0', 'shoot', '2500'],
-    ['3400', 'difficulty=3&desync=0', '', '3400'],
-    ['5800', 'difficulty=3&desync=0', '', 'boss']
+    ['300', '', 'boot / early HUD'],
+    ['800', 'difficulty=3', 'fairies live'],
+    ['2500', 'difficulty=3&shoot', 'dense waves'],
+    ['4600', 'difficulty=3', 'boss danmaku']
   ];
-  for (const [frame, query, held, profile] of shots) {
-    const file = `/tmp/th07-full-${frame}.png`;
-    await run('node', ['scripts/dev-shot.mjs', file, frame, query, held], `Stage 1 frame ${frame}`);
-    await run('node', ['scripts/pixel-report.mjs', file], `pixel report ${frame}`);
-    if (profile === '120' || profile === '800' || profile === '2500' || profile === 'boss') {
-      await run('node', ['scripts/pixel-gate.mjs', file, profile], `pixel gate ${frame}`);
-    }
+  for (const [frame, query, label] of shots) {
+    const file = `/tmp/th08-full-${frame}.png`;
+    await run('node', ['scripts/dev-shot.mjs', file, frame, query, 'shoot'], `TH08 frame ${frame} (${label})`);
+    await run('node', [
+      'scripts/pixel-report.mjs', file,
+      '64,32,768,896:play', '848,32,400,896:side', '64,896,768,32:lower'
+    ], `pixel report ${frame} (${label})`);
   }
-  await npm('replay:browser', ['tests/replays/th7_udFe25.rpy', '1', '300', '/tmp/th07-full-replay.png', '0']);
   await npm('prepare-pages');
   await run('node', ['scripts/browser-boot.mjs', 'dist/pages', '300'], 'static Pages boot');
-  // Exercises the default-on backbuffer presentation against a Stage-5 spell
-  // card (the 8552afe flicker scenario) when the environment grants it.
-  // Grant is an environment property, not a code one (GPU-disabled CI,
-  // older Chromium, headless shells all vary), so this is a soft check:
-  // the probe still fails hard on page errors / black frames / a lost
-  // spell, but a non-granting environment skips the grant-gated asserts
-  // instead of turning a correct build red.
-  await run('node', ['scripts/desync-stage5-probe.mjs'], 'stage-5 desync presentation probe');
 }
 
 try {

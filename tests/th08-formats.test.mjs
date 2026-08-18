@@ -17,14 +17,19 @@ const { Anm, AnmRunner } = await import(`${outDir}/anm.mjs`);
 const { Std } = await import(`${outDir}/std.mjs`);
 const { Msg } = await import(`${outDir}/msg.mjs`);
 const { Sht } = await import(`${outDir}/sht.mjs`);
-const { Rpy } = await import(`${outDir}/rpy.mjs`);
+const { Rpy, lzssDecompress } = await import(`${outDir}/rpy.mjs`);
 
 const SAMPLES = 'reference/th08-original';
 const sample = (name) => readFileSync(`${SAMPLES}/${name}`);
+// The committed fixture is the CI-stable copy; the git-ignored replay/ dir
+// is the local-evidence original.
+const REPLAY = existsSync('tests/replays/th8_udLy01.rpy')
+  ? 'tests/replays/th8_udLy01.rpy'
+  : 'replay/th8_udLy01.rpy';
 const hasSamples = [
   'ecldata1.ecl', 'title01.anm', 'stg1enm.anm', 'stage1.std',
   'msg1a.dat', 'ply00a.sht', 'ply00as.sht'
-].every((name) => existsSync(`${SAMPLES}/${name}`)) && existsSync('replay/th8_udLy01.rpy');
+].every((name) => existsSync(`${SAMPLES}/${name}`)) && existsSync(REPLAY);
 
 test('TH08 ECL decodes the v3 container, timeline v2, and sub instructions', { skip: !hasSamples }, () => {
   const ecl = new Ecl(sample('ecldata1.ecl'));
@@ -140,7 +145,7 @@ test('TH08 SHT decodes the 56-byte header, records, unknowns, and callbacks', { 
 });
 
 test('TH08 T8RP decrypts, decompresses, and exposes wide stage records', { skip: !hasSamples }, () => {
-  const rpy = new Rpy(readFileSync('replay/th8_udLy01.rpy'));
+  const rpy = new Rpy(readFileSync(REPLAY));
   assert.equal(rpy.version, 6);
   assert.equal(rpy.shotByte, 0);
   assert.equal(rpy.th08Character, 'reimuYukari');
@@ -168,4 +173,32 @@ test('TH08 T8RP decrypts, decompresses, and exposes wide stage records', { skip:
   );
   assert.equal(stage.slowdown.length, Math.ceil(10504 / 30));
   assert.equal(stage.slowdown[0], 0x3c);
+});
+
+// TH06-era bitstream LZSS (shared by the T8RP body decompressor): literals
+// and window matches must round-trip. Hand-packed stream: 3 literals 'aba'
+// then a match at window pos 1 len 3 ("aba" again — window cursor starts at
+// 1) then EOS (pos 0).
+test('lzss: literals and window matches round-trip', () => {
+  const bits = [];
+  const push = (v, n) => {
+    for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1);
+  };
+  for (const c of [0x61, 0x62, 0x61]) {
+    push(1, 1);
+    push(c, 8);
+  }
+  push(0, 1);
+  push(1, 13);
+  push(0, 4); // len 3
+  push(0, 1);
+  push(0, 13); // EOS
+  const src = new Uint8Array(Math.ceil(bits.length / 8));
+  bits.forEach((b, i) => {
+    src[i >> 3] |= b << (7 - (i & 7));
+  });
+  const dst = new Uint8Array(6);
+  const n = lzssDecompress(src, dst);
+  assert.equal(n, 6);
+  assert.equal(Buffer.from(dst).toString('latin1'), 'abaaba');
 });

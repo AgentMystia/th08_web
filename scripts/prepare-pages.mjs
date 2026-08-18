@@ -1,4 +1,4 @@
-// Assembles the static-deploy tree in dist/pages/ from the TH07 runtime
+// Assembles the static-deploy tree in dist/pages/ from the TH08 runtime
 // surface only: entry page, stylesheet, the built bundle, and the asset
 // subset the browser actually loads. reference/, tests/, scripts/, and
 // docs/ never ship.
@@ -9,11 +9,11 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const out = join(root, 'dist', 'pages');
 
-const files = ['index.html', 'src/th07.css', 'dist/th07.js'];
-const dirs = ['assets/th07-img', 'assets/audio/th07', 'assets/sfx/th07'];
+const files = ['index.html', 'src/th08.css', 'dist/th08.js'];
+const dirs = ['assets/th08-img', 'assets/audio/th08', 'assets/sfx/th08'];
 
-if (!existsSync(join(root, 'dist/th07.js'))) {
-  console.error('dist/th07.js missing — run `npm run build` first.');
+if (!existsSync(join(root, 'dist/th08.js'))) {
+  console.error('dist/th08.js missing — run `npm run build` first.');
   process.exit(1);
 }
 
