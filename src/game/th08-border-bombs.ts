@@ -39,8 +39,12 @@ export interface Th08BombHost {
   clearBullets(x: number, y: number, radius: number): void;
   /** Effect VM request (FUN_00425430(script, pos, scale, color)). */
   effectVm(script: number, x: number, y: number, scale: number, color: number): void;
-  /** Orb VM request (FUN_004069f0(slotVm, script) on the 0x16f0-strided pool). */
-  orbVm(index: number, script: number): void;
+  /**
+   * Orb VM request (FUN_004069f0(slotVm, script) on the 0x16f0-strided
+   * pool). x/y are the spawn position — the bombardment slots (16/17)
+   * draw at the TARGET, not the player.
+   */
+  orbVm(index: number, script: number, x?: number, y?: number): void;
   playSfx(id: number, arg?: number): void;
 }
 
@@ -283,7 +287,7 @@ export class Th08BorderBomb {
       // damage-400 slot at the target (0x40d047-0x40d0a0).
       // The 0x40c910 latch writes literal 1 after each spawn: slot 16 for
       // the first bombardment, then slot 17 for every following one.
-      host.orbVm(16 + (this.bombardments > 0 ? 1 : 0), 0x14);
+      host.orbVm(16 + (this.bombardments > 0 ? 1 : 0), 0x14, fallback.x, fallback.y);
       host.effectVm(0x31, fallback.x, fallback.y, 1, 0);
       host.effectVm(0x37, fallback.x, fallback.y, 1, 0);
       host.addAttackSlot(fallback.x, fallback.y, 64, 400);

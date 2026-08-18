@@ -371,6 +371,11 @@ interface SpawnEclEnemyOptions {
   // FUN_0041db60 installs inherited scratch variables before the child's
   // first synchronous ECL dispatch.
   initialVars?: ArrayLike<number>;
+  // TH08 familiar marking (ops 90-93, exe cases 0x59-0x5c): applied BEFORE
+  // the synchronous t0 core so the child's own FIRE re-arms contact after
+  // the spawn's clear — the native order (all.c:12082-12116 constructs and
+  // marks before the first sub tick).
+  th08Familiar?: boolean;
 }
 
 export class StageRuntime {
@@ -729,6 +734,22 @@ export class StageRuntime {
       frame: 0,
       ecl
     };
+    // TH08 familiar master link (exe child+0x2da4): consumed by the death
+    // sweep. makeEnemyState only used the pointer for var inheritance.
+    if (parent) ecl.parent = parent;
+    // Familiar marking BEFORE the synchronous t0 core (native order: the
+    // spawn's flag writes precede the child's first sub tick, so a t0
+    // FIRE re-arms contact after the spawn's clear).
+    if (opts.th08Familiar && ecl.th08) {
+      const t8 = ecl.th08;
+      const form = game.th08PlayerForm ? game.th08PlayerForm() : 0;
+      t8.familiar = true;
+      t8.sideBit = form;
+      t8.managerList = form === 1 ? 0 : 2;
+      t8.flags = (t8.flags | 0x100 | (form << 11)) & ~4;
+      ecl.collisionEnabled = false;
+      game.playSfx(36); // se_option — FUN_0045d660(0x24, parentPos)
+    }
     if (game.addEnemy) {
       if (!game.addEnemy(e)) e.dead = true;
     } else {
@@ -939,6 +960,10 @@ export class StageRuntime {
         deathByte2: 0,
         flags: 0,
         flags2: 0,
+        familiar: false,
+        sideBit: 0,
+        markerHandle: null,
+        markerActor: null,
         clampRect: null,
         suppressRadiusSq: 0,
         managerList: 0,
@@ -2658,7 +2683,16 @@ export class StageRuntime {
       const instr = instrs[ctx.index];
       if (!instr) return false;
       if (ctx.time !== instr.time) break;
-      if (instr.rankMask & (1 << game.difficulty)) {
+      // Rank gate (all.c:10801): the mask byte must cover the difficulty
+      // bit AND — for FAMILIARS only — the current form bit (enemy+0x3330
+      // = 0x40 youkai / 0x20 human, set by FUN_0042c420; ordinary enemies
+      // keep +0x3330 = 0). Stage-1 masks only exercise this via 0xff/0xf1
+      // rows, so the form leg is inert there but structurally required.
+      let rankGate = 1 << game.difficulty;
+      if (e.ecl.th08?.familiar && game.th08PlayerForm) {
+        rankGate |= game.th08PlayerForm() === 1 ? 0x40 : 0x20;
+      }
+      if ((instr.rankMask & rankGate) === rankGate) {
         const prevExecuting = this.executingEnemy;
         this.executingEnemy = e;
         const action = this.execute(game, e, instr);
@@ -4238,15 +4272,12 @@ export class StageRuntime {
     }
     // Op 105 is an immediate PlaySE. A callback's own op105 plays separately
     // when that sub runs; this is the generic enemy-death request.
-    // TH07 death SE (disasm @ 0x420379): slot 2 + (counter & 1) — plain
-    // kills alternate se_enep00's two volume slots (-1200/-1500 mB).
-    // TH08's own death site (0x42d9c0) also computes (counter%2)+2, but the
-    // TH08 id table de-duplicated the doubled pair: enep00 is id 1 and ids
-    // 2/3 would be se_pldead00/se_power0 (the audibly-wrong miss sound).
-    // The original's fairy kill sounds as se_enep00 (the wav is
-    // byte-identical across both games), so the TH08 path plays id 1 —
-    // flagged: the +2 bank-site discrepancy is not resolved statically.
-    game.playSfx(this.ecl.version === 8 ? 1 : 2 + (e.id & 1));
+    // Exe death SE (TH07 disasm @ 0x420379; TH08's own site 0x42d9c0):
+    // slot 2 + (counter & 1) — plain kills alternate se_enep00's two
+    // volume slots (-1200/-1500 mB). The TH08 46-channel id table keeps
+    // the doubled pair at ids 2/3 (bank clones of se_enep00, .data
+    // 0x4c8040), resolving the earlier "+2 bank-site" discrepancy.
+    game.playSfx(2 + (e.id & 1));
     if (mode === 3 && s.deathAnm1 >= 0) {
       game.spawnEffectParticles(s.deathAnm1, e.x, e.y, 3, 0xffffffff);
     }
@@ -4754,6 +4785,13 @@ export class StageRuntime {
           | (arg & 8 ? 0x10 : 0)
           | (arg & 0x10 ? 0x10000000 : 0);
         t.flags2 = (t.flags2 & ~0x40) | (arg & 0x20 ? 0x40 : 0);
+        // The manager reads bits 6/2 through the semantic collision flags
+        // (the exe's damage gate all.c:21473 and contact gate all.c:21451):
+        // bit 6 = shootable by player shots/attack slots, bit 2 = body
+        // contact. Stage-1 familiars FIRE(16) — both re-armed at sub entry
+        // (op 92's spawn had cleared bit 2).
+        s.shotCollision = (t.flags & 0x40) !== 0;
+        s.collisionEnabled = (t.flags & 4) !== 0;
         return null;
       }
       case 80: case 81: { // complementary clear/set flag pairs (0x50/0x51)
@@ -4798,7 +4836,7 @@ export class StageRuntime {
       }
       case 90: { // createEnemy absolute 2D (sub, x, y, life, item, score)
         if (e.hp <= 0) return null;
-        this.spawnEclEnemy(game, {
+        this.spawnTh08Familiar(game, {
           subId: v.i32(a), x: gf(4), y: gf(8), life: gi(12),
           item: gi(16), score: gi(20), mirrored: false, parent: e
         });
@@ -4806,7 +4844,7 @@ export class StageRuntime {
       }
       case 91: { // createEnemy at parent's render position + (x, y)
         if (e.hp <= 0) return null;
-        this.spawnEclEnemy(game, {
+        this.spawnTh08Familiar(game, {
           subId: v.i32(a), x: e.x + gf(4), y: e.y + gf(8), life: gi(12),
           item: gi(16), score: gi(20), mirrored: false, parent: e
         });
@@ -4817,10 +4855,19 @@ export class StageRuntime {
         // matrix is the ANM transform; approximate with a plain relative
         // spawn (flagged: vertical slice has no ANM-transform inheritance).
         if (e.hp <= 0) return null;
-        this.spawnEclEnemy(game, {
+        this.spawnTh08Familiar(game, {
           subId: v.i32(a), x: e.x + gf(4), y: e.y + gf(8), life: gi(12),
           item: gi(16), score: gi(20), mirrored: false, parent: e
-        });
+        }, true);
+        return null;
+      }
+      case 93: { // createEnemy absolute (op 92's sibling, case 0x5c): the
+        // same familiar marking with the position taken as absolute.
+        if (e.hp <= 0) return null;
+        this.spawnTh08Familiar(game, {
+          subId: v.i32(a), x: gf(4), y: gf(8), life: gi(12),
+          item: gi(16), score: gi(20), mirrored: false, parent: e
+        }, true);
         return null;
       }
       case 96: case 97: case 98: case 99:
@@ -4998,9 +5045,16 @@ export class StageRuntime {
         return null;
       }
       case 184: {
-        // set the enemy's human(0)/youkai(1) side (flags bit 11): the
-        // familiar-side system re-syncs it to the player every tick.
-        t.flags = (t.flags & ~0x800) | ((gi(0) & 1) << 11);
+        // SetHumanYoukaiSide — the receiver is the GLOBAL side mirror
+        // (singleton 0x4ea670's base dword, bit 11: `mov ecx,0x4ea670` at
+        // 0x41e7da before the call), NOT the running enemy. Every boss/
+        // midboss phase sub opens with ins_184(1). Consumers seen so far:
+        // FUN_00416b10 gates the spell-bonus accumulator on the bit being
+        // CLEAR (0x4ea670-family this) — the full consumer set stays
+        // flagged in AGENTS.md §7; the write itself is recorded on the
+        // run state when the host provides the hook.
+        const value = (gi(0) & 1) as 0 | 1;
+        game.th08SetSideMirror?.(value);
         return null;
       }
       default:
@@ -5015,6 +5069,24 @@ export class StageRuntime {
     // write lands with the Border Team motion wiring (Step 3); armed rects
     // stay stored meanwhile.
     void game;
+  }
+
+  // TH08 familiar (使魔) spawn wrapper for the child-spawn ops 90-93 (exe
+  // cases 0x59-0x5c, all.c:12020-12117). The heavy lifting (flags bit 8,
+  // side bit 11 = the player's CURRENT form, manager list 0/2, contact
+  // cleared, sfx 36 se_option) lives in spawnEclEnemy so it applies BEFORE
+  // the child's synchronous t0 core — the child's own FIRE re-arms contact
+  // afterwards (stage-1 familiars run ins_79(16)). `posInherit` records
+  // flags bit 9 (0x200, the op-92/93 origin-copy marker); our spawn
+  // already resolved the child position.
+  private spawnTh08Familiar(
+    game: GameHost,
+    opts: Omit<SpawnEclEnemyOptions, 'th08Familiar'>,
+    posInherit = false
+  ): Enemy | null {
+    const child = this.spawnEclEnemy(game, { ...opts, th08Familiar: true });
+    if (child?.ecl.th08 && posInherit) child.ecl.th08.flags |= 0x200;
+    return child;
   }
 
   private createTh08Laser(game: GameHost, e: Enemy): void {

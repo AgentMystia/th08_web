@@ -21,6 +21,15 @@ export interface PlayerEffectSpawn {
   ttl?: number;
   // Fixed draw rotation (e.g. knives oriented along their drift vector).
   rotation?: number;
+  // Host-driven color modulation (FUN_00425430/0x425b70 param_5 → VM
+  // color): an RGB multiplier applied on top of the script's own color.
+  color?: number;
+  // Host-driven initial scale multiplier (FUN_00425430's callers pass the
+  // burst magnitude — e.g. the orb-release flash at 8x).
+  scale?: number;
+  // Alpha multiplier for hosts that need a translucent presentation
+  // (enemy familiars' ethereal state draws at half alpha).
+  alpha?: number;
   // Track a live bomb actor: the entry follows its position (and, with
   // followRotate, its heading) every frame, and culls when the actor's
   // state clears — the exe attaches each attack slot's ANM to the slot
@@ -50,6 +59,9 @@ interface Entry {
   delay: number;
   ttl: number;
   rotation: number | undefined;
+  color: number | undefined;
+  scale: number | undefined;
+  alpha: number | undefined;
   age: number;
   follow?: { x: number; y: number; angle: number; state: number };
   followRotate?: boolean;
@@ -71,6 +83,9 @@ export class PlayerEffects {
       delay: s.delay ?? 0,
       ttl: s.ttl ?? Infinity,
       rotation: s.rotation,
+      color: s.color,
+      scale: s.scale,
+      alpha: s.alpha,
       age: 0,
       follow: s.follow,
       followRotate: s.followRotate
@@ -162,7 +177,12 @@ export class PlayerEffects {
       if (!e.runner) continue;
       const frame = e.runner.spriteFrame();
       if (!frame) continue;
-      r.drawAnmFrame(frame, ox + e.x, oy + e.y, e.rotation != null ? { rotation: e.rotation } : {});
+      const opts: { rotation?: number; color?: number; scaleMultiplier?: number; alpha?: number } = {};
+      if (e.rotation != null) opts.rotation = e.rotation;
+      if (e.color != null) opts.color = e.color;
+      if (e.scale != null) opts.scaleMultiplier = e.scale;
+      if (e.alpha != null) opts.alpha = e.alpha;
+      r.drawAnmFrame(frame, ox + e.x, oy + e.y, opts);
     }
   }
 }

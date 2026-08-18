@@ -199,16 +199,24 @@ const SFX_SLOTS: [string, number][] = [
 // this index). Every id from 1 on is offset from TH07's mapping — the TH08
 // path must never index SFX_SLOTS. Gains reuse the TH07-measured gain for
 // the same file; files TH07 never plays carry a neutral placeholder gain.
-const TH08_SFX_SLOTS: [string, number][] = [
-  ['se_plst00', 0.1], ['se_enep00', 0.251], ['se_pldead00', 0.316], ['se_power0', 0.631],
-  ['se_power1', 0.631], ['se_tan00', 0.178], ['se_tan01', 0.141], ['se_tan02', 0.112],
-  ['se_ok00', 0.316], ['se_cancel00', 0.316], ['se_select00', 0.141], ['se_gun00', 0.251],
-  ['se_cat00', 0.355], ['se_lazer00', 0.355], ['se_lazer01', 0.355], ['se_enep01', 0.355],
-  ['se_nep00', 0.794], ['se_damage00', 0.2], ['se_item00', 0.224], ['se_kira00', 0.398],
-  ['se_kira01', 0.316], ['se_kira02', 0.224], ['se_extend', 0.708], ['se_timeout', 0.355],
-  ['se_graze', 0.355], ['se_powerup', 0.562], ['se_pause', 0.708], ['se_cardget', 0.5],
-  ['se_option', 0.5], ['se_damage01', 0.251], ['se_timeout2', 0.5], ['se_opshow', 0.5],
-  ['se_ophide', 0.5], ['se_invalid', 0.5], ['se_slash', 0.5], ['se_item01', 0.35]
+export const TH08_SFX_SLOTS: [string, number][] = [
+  // The exe's 46-channel id table (.data 0x4c8040, stride 8: {u32 srcBank,
+  // i16 volA@+4, i16 volB@+6}) over the 36-file name table at 0x4c81b0 —
+  // FUN_0045d3f0's preload clones bank record.src per id with SetVolume
+  // (volA, centibels; gain = 10^(volA/2000)). Duplicated ids are volume
+  // variants (2/3 = the two enep00 kill slots, 30/32 graze, 42/43 slash).
+  ['se_plst00', 0.112], ['se_plst00', 0.089], ['se_enep00', 0.251], ['se_enep00', 0.178],
+  ['se_pldead00', 0.282], ['se_power0', 0.447], ['se_power1', 0.447], ['se_tan00', 0.112],
+  ['se_tan01', 0.079], ['se_tan02', 0.063], ['se_ok00', 0.282], ['se_cancel00', 0.282],
+  ['se_select00', 0.178], ['se_gun00', 0.178], ['se_cat00', 0.316], ['se_tan00', 0.282],
+  ['se_lazer00', 0.224], ['se_lazer01', 0.2], ['se_enep01', 0.355], ['se_nep00', 0.631],
+  ['se_damage00', 0.363], ['se_item00', 0.178], ['se_tan00', 0.708], ['se_tan01', 0.126],
+  ['se_tan02', 0.126], ['se_kira00', 0.282], ['se_kira01', 0.224], ['se_kira02', 0.178],
+  ['se_extend', 0.562], ['se_timeout', 0.562], ['se_graze', 0.282], ['se_powerup', 0.398],
+  ['se_graze', 0.251], ['se_kira00', 0.562], ['se_pause', 0.398], ['se_cardget', 0.398],
+  ['se_option', 0.398], ['se_damage01', 0.447], ['se_timeout2', 0.708], ['se_opshow', 0.398],
+  ['se_ophide', 0.398], ['se_invalid', 0.794], ['se_slash', 1.0], ['se_slash', 0.501],
+  ['se_item01', 0.398], ['se_ok00', 0.891]
 ];
 
 // front.png sprite rects [x,y,w,h], recovered from front.anm's entry0 sprite
@@ -699,6 +707,10 @@ export class StageScene implements GameHost {
   // Live player spell-card declaration (bomb cut-in), FUN_00415d60's four
   // VMs; retires itself once every script has removed.
   private th08Declaration: Th08SpellDeclaration | null = null;
+  // Focus aura (FUN_00425870(0x16) on focus-in, interrupt 1 out): the
+  // follow-actor + handle pair so the aura tracks the player.
+  private th08AuraActor: { x: number; y: number; angle: number; state: number } | null = null;
+  private th08AuraHandle: PlayerEffectHandle | null = null;
   private bombContext!: BombContext;
   // Latched bomb duration (frames) for end-window checks (ReimuA focused's
   // final-30-frames detonation, etc.).
@@ -1273,7 +1285,7 @@ export class StageScene implements GameHost {
     this.refreshPowerHudRandomState();
     this.adjustRank(200);
     // se_extend: TH07 id 28, TH08 id 22 (.data 0x4c81b0).
-    this.playSfx(this.runState ? 22 : 28);
+    this.playSfx(28); // extend: TH08 id 28, TH07 id 28
   }
 
   private adjustRank(delta: number): void {
@@ -1937,11 +1949,24 @@ export class StageScene implements GameHost {
     // per-bullet se_damage00 spam).
     if (this.sfxPlayedThisFrame.has(id)) return;
     this.sfxPlayedThisFrame.add(id);
-    // TH08 plays through its own id table (.data 0x4c81b0 — ids 1+ are
-    // offset from TH07's, so a shared id means a different FILE per game).
+    // TH08 plays through its own 46-channel id table (.data 0x4c8040 —
+    // ids resolve to different FILES than TH07's table for the same id).
     const slots = this.runState ? TH08_SFX_SLOTS : SFX_SLOTS;
     const slot = slots[id];
     if (slot) this.audio.sfx(slot[0], slot[1], id);
+  }
+
+  // TH08 form byte (exe player+5 / FUN_0040bc40) for the ECL VM's familiar
+  // spawn marking and form-rank gate.
+  th08PlayerForm(): 0 | 1 {
+    return this.playerObj.th08Form;
+  }
+
+  // TH08 op 184 receiver: the global side mirror on singleton 0x4ea670
+  // (bit 11). Consumers outside the slice: FUN_00416b10's spell-bonus
+  // accumulator gate — kept on the run state for later wiring.
+  th08SetSideMirror(value: 0 | 1): void {
+    if (this.runState) this.runState.th08SideMirror = value;
   }
 
   // TH08 pre-boss/post-boss conversation (timeline ins_6 -> FUN_0043396d
@@ -2018,7 +2043,7 @@ export class StageScene implements GameHost {
     if (armed) {
       this.th08IdleFrames = 0;
       if (p.th08FocusFrames >= 30) {
-        run.addYoukaiGauge(run.gaugeFireDrift(p.focusHeld, p.th08FocusFrames));
+        run.addYoukaiGauge(run.gaugeFireDrift(p.th08Form === 1, p.th08FocusFrames));
       }
     } else {
       this.th08IdleFrames++;
@@ -2627,6 +2652,39 @@ export class StageScene implements GameHost {
       } else if (p.focusTransition === 'out' && this.focusEffectRunner) {
         this.focusEffectRunner.interrupt(1);
       }
+      // TH08 form-transition presentation (FUN_0044aec0's toggle branch):
+      // the to-human/to-youkai tint (effects 28/29 = etama archive 57/58)
+      // after >= 5 held frames, and the focus aura (effect 22 = archive 54,
+      // handle player+0xbe834) armed on every focus-in and released by
+      // interrupt 1 on the way out.
+      if (this.runState) {
+        const fx = p.pendingTh08FormEffect;
+        p.pendingTh08FormEffect = 0;
+        if (fx === 28) {
+          this.spawnTh08Effect(57, p.x, p.y, 90, { color: 0x8080ff });
+        } else if (fx === 29) {
+          this.spawnTh08Effect(58, p.x, p.y, 90, { color: 0xff8080 });
+        }
+        const aura = p.pendingTh08Aura;
+        p.pendingTh08Aura = null;
+        if (aura === 'in') {
+          this.th08AuraHandle?.release();
+          const actor = { x: p.x, y: p.y, angle: 0, state: 1 };
+          this.th08AuraActor = actor;
+          this.th08AuraHandle = this.th08Effects.spawnHandle({
+            scriptId: archiveScript(this.assets.anms.etama, 54).localId,
+            x: p.x, y: p.y, follow: actor
+          });
+        } else if (aura === 'out') {
+          this.th08AuraHandle?.interrupt(1);
+          this.th08AuraHandle = null;
+          this.th08AuraActor = null;
+        }
+        if (this.th08AuraActor) {
+          this.th08AuraActor.x = p.x;
+          this.th08AuraActor.y = p.y;
+        }
+      }
     }
     // The popup/ascii manager is priority 1, ahead of every gameplay
     // manager. Existing popups age now; item pickups later this frame create
@@ -2806,8 +2864,8 @@ export class StageScene implements GameHost {
       p.bombTimer = this.th08Bomb.duration;
       p.bombInvuln = TH08_BOMB_INVULN[p.th08BombType];
       // FUN_0040be30 → FUN_00415d60: every bomb declares its spell card
-      // (portrait + banner VMs + the rdata name, sfx id 14 se_lazer01);
-      // the bomb callback then queues sfx id 13 (se_lazer00) itself
+      // (portrait + banner VMs + the rdata name, sfx id 14 se_cat00);
+      // the bomb callback then queues sfx id 13 (se_gun00) itself
       // (0x40c067-0x40c07f pushes 0x4b43a0's declaration first).
       this.startTh08Declaration(p.th08BombType);
       this.playSfx(13);
@@ -2933,8 +2991,8 @@ export class StageScene implements GameHost {
   // sakuya}.md). Slot consumption below is exe-exact.
   private tickBombChoreography(): void {
     // TH08 path: the border-bomb simulation runs its own tick and applies
-    // its bullet-clear events against the live enemy-bullet list. Damage
-    // stays null until the v1.00d callback damage fields are decoded.
+    // its bullet-clear events against the live enemy-bullet list; damage
+    // settles immediately through the host's addAttackSlot.
     if (this.th08Bomb) {
       this.tickTh08Bomb();
       return;
@@ -2951,7 +3009,9 @@ export class StageScene implements GameHost {
     // Keep the orb visual actors on their simulation state; the 1->2
     // transition fires the orb VM's label-1 interrupt (the authored 6x
     // balloon + 20-frame fade, FUN_00407120's VM+0x1fe write at 0x40c640).
-    for (let i = 0; i < 16; i++) {
+    // The loop covers the bombardment slots 16/17 too (they have no sim
+    // orb — they park at their spawn target until the ttl lapses).
+    for (let i = 0; i < this.th08BombOrbActors.length; i++) {
       const orb = sim.orbAt(i);
       const actor = this.th08BombOrbActors[i];
       if (orb && actor) {
@@ -2977,8 +3037,12 @@ export class StageScene implements GameHost {
 
   // Spawn an etama.anm VM by ARCHIVE script index (Th08.exe FUN_004069f0
   // indexes the archive's script table, so index 37 = entry 1's 13th script
-  // regardless of its negative on-disk id).
-  private spawnTh08Effect(archiveIndex: number, x: number, y: number, ttl = 240): void {
+  // regardless of its negative on-disk id). color/scale carry the
+  // FUN_00425430 host params (VM color / burst magnitude).
+  private spawnTh08Effect(
+    archiveIndex: number, x: number, y: number, ttl = 240,
+    opts: { color?: number; scale?: number; alpha?: number } = {}
+  ): void {
     const etama = this.assets.anms.etama;
     const ref = archiveScript(etama, archiveIndex);
     if (!etama.hasScriptInEntry(ref.entryIndex, ref.localId)) return;
@@ -2986,7 +3050,10 @@ export class StageScene implements GameHost {
       scriptId: ref.localId,
       x,
       y,
-      ttl
+      ttl,
+      color: opts.color,
+      scale: opts.scale,
+      alpha: opts.alpha
     });
   }
 
@@ -3041,15 +3108,27 @@ export class StageScene implements GameHost {
         }
       },
       effectVm(script, x, y, scale, color) {
-        void scale; void color;
         // FUN_00425430's effect pool draws from etama.anm; `script` is the
         // archive script index (DAT_004c6d30's second word for effect ids).
-        scene.spawnTh08Effect(script, x, y);
-      },
-      orbVm(index, script) {
-        const actor = scene.th08BombOrbActors[index] ?? (scene.th08BombOrbActors[index] = {
-          x: scene.playerObj.x, y: scene.playerObj.y, angle: 0, state: 1
+        // scale/color are the host params (the burst magnitudes — e.g. the
+        // orb-release flash at 8x — and the VM color word at +0x7c). Color
+        // 0xffffffff is neutral; a literal 0 marks an unread transcription
+        // (the bombardment effects) — both draw unmodulated.
+        scene.spawnTh08Effect(script, x, y, 240, {
+          scale: scale === 1 ? undefined : scale,
+          color: color === 0xffffffff || color === 0 ? undefined : (color & 0xffffff)
         });
+      },
+      orbVm(index, script, x, y) {
+        // The bombardment slots (16/17) spawn AT THE TARGET; the orb ring
+        // slots (0-15) follow the sim actors from the cast point.
+        const actor = scene.th08BombOrbActors[index] ?? (scene.th08BombOrbActors[index] = {
+          x: x ?? scene.playerObj.x, y: y ?? scene.playerObj.y, angle: 0, state: 1
+        });
+        if (x !== undefined) {
+          actor.x = x;
+          actor.y = y!;
+        }
         actor.state = 1;
         actor.handle = scene.playerEffects.spawnHandle({
           scriptId: script, x: actor.x, y: actor.y, follow: actor, ttl: 300
@@ -3342,7 +3421,7 @@ export class StageScene implements GameHost {
     // Scripts 0-3 = 一時停止 + the three menu rows; 4-6 = the confirm set.
     for (let i = 0; i <= 3; i++) runners[i].interrupt(1);
     this.pauseState = { cursor: 0, confirm: false, confirmCursor: 1, closing: 0, action: null, runners };
-    this.playSfx(this.runState ? 26 : 37); // se_pause (TH08 id 26)
+    this.playSfx(this.runState ? 34 : 37); // se_pause (TH08 id 34)
   }
 
   private updatePause(input: InputFrame): void {
@@ -3464,7 +3543,7 @@ export class StageScene implements GameHost {
     this.gameOver = false;
     this.gameOverTimer = 0;
     this.continueScreen = null;
-    this.playSfx(this.runState ? 8 : 10); // se_ok00 (TH08 id 8)
+    this.playSfx(10); // se_ok00 (TH08 id 10, TH07 id 10)
   }
 
   private declineContinue(): void {
@@ -3486,6 +3565,10 @@ export class StageScene implements GameHost {
   // bit2 check only guards the HP subtraction).
   damageEnemy(e: Enemy, damage: number, kind: 'shot' | 'bomb' = 'shot'): void {
     if (!e.ecl.interactable || e.ecl.invisible) return;
+    // TH08 familiar side gate (all.c:21448, flags bit 11): an ETHEREAL
+    // familiar (player in youkai form) takes no player-shot or attack-slot
+    // damage at all — the whole settlement block is behind bit11==0.
+    if (e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1) return;
     // Th07.exe FUN_0043a980 @ 0x43a9e6: while the player's own bomb is
     // active (player+0x16a20), each SHOT deals table/3 damage, min 1.
     if (kind === 'shot' && this.bombActiveThisFrame) {
@@ -3872,7 +3955,7 @@ export class StageScene implements GameHost {
             b.vy /= 8;
           }
           // se_damage00: TH07 id 20, TH08 id 17.
-          this.playSfx(this.runState ? 17 : 20);
+          this.playSfx(20); // damage00: TH08 id 20, TH07 id 20
         }
       }
     }
@@ -4162,11 +4245,118 @@ export class StageScene implements GameHost {
     this.onPlayerHit(b);
   }
 
+  // TH08 familiar (使魔) per-tick side sync — FUN_0042c420 @ all.c:
+  // 21146-21185, run for every flags-bit-8 child before the collision
+  // block. On a player form flip the familiar plays the materialize/
+  // dematerialize transition — effect 0x1e (etama 59, red 0x80803030)
+  // when the player becomes HUMAN (materialize, se_opshow), effect 0x1f
+  // (etama 60, blue 0x80303080) when the player becomes YOUKAI
+  // (etherealize, se_ophide) — fires interrupt 2/1 on the marker VM,
+  // relinks the manager list (0 = player-youkai / 2 = player-human) and
+  // re-syncs bit 11 to the form. The marker VM itself (FUN_00425b70(0x20)
+  // at spawn — etama archive 48) is attached lazily here.
+  private tickTh08FamiliarSync(e: Enemy): void {
+    const t8 = e.ecl.th08;
+    if (!t8?.familiar || e.dead) return;
+    const form = this.playerObj.th08Form;
+    if (t8.sideBit !== form) {
+      const toYoukai = form === 1;
+      // FUN_0042c420's transition colors as ARGB -> our rgb multiplier +
+      // alpha: 0x80303080 (blue, player -> youkai) / 0x80803030 (red,
+      // player -> human).
+      this.spawnTh08Effect(
+        toYoukai ? 60 : 59, e.x, e.y, 60,
+        { color: toYoukai ? 0x303080 : 0x803030, alpha: 0x80 / 255 }
+      );
+      t8.markerHandle?.interrupt(toYoukai ? 2 : 1);
+      this.playSfx(toYoukai ? 40 : 39); // se_ophide / se_opshow
+      t8.managerList = toYoukai ? 0 : 2;
+      t8.sideBit = form;
+      t8.flags = (t8.flags & ~0x800) | (form << 11);
+    }
+    if (!t8.markerHandle) {
+      const etama = this.assets.anms.etama;
+      const ref = archiveScript(etama, 48);
+      const actor = { x: e.x, y: e.y, angle: 0, state: 1 };
+      t8.markerActor = actor;
+      t8.markerHandle = this.th08Effects.spawnHandle({
+        scriptId: ref.localId, x: e.x, y: e.y, follow: actor, ttl: Infinity
+      });
+      t8.markerHandle.interrupt(form === 1 ? 2 : 1);
+    }
+    if (t8.markerActor) {
+      t8.markerActor.x = e.x;
+      t8.markerActor.y = e.y;
+    }
+  }
+
+  // TH08 familiar death settlement:
+  // - A familiar killed by damage (only possible while materialized) fires
+  //   interrupt 3 on its marker VM — the death-mode-0 path at all.c:
+  //   21643-21646 (FUN_00407120(3) when +0x14f2 is armed) — then releases.
+  // - A master's death sweeps its familiars (FUN_0042adb0(1) from the
+  //   settlement at all.c:21631): pos-inherit children (flags bit 9)
+  //   snapshot the master's position into their origin, every child gets
+  //   flags bit 10 (0x400), its parent link cleared, and death mode 8 —
+  //   the silent auto-despawn with the enep00 pop per child (all.c:
+  //   20445-20528). Then the time-orb shower at the master's position:
+  //   two per familiar, each scattered by (frand*128, frand*pi) in that
+  //   draw order (all.c:20533-20541), plus FUN_0044df00's burst pool
+  //   registration (pos, 32.0, 1.0, 0x10, 7) — a 16-orb batch, spawned
+  //   directly here with the item pool's own state-3 velocity draws
+  //   (flagged: the native burst is pool-deferred, its release draws are
+  //   not yet traced).
+  private settleTh08FamiliarDeath(e: Enemy): void {
+    const t8 = e.ecl.th08;
+    if (t8?.familiar) {
+      t8.markerHandle?.interrupt(3);
+      t8.markerHandle?.release();
+      t8.markerHandle = null;
+      t8.markerActor = null;
+      return;
+    }
+    const children = this.enemies.filter(
+      c => !c.dead && c.ecl.parent === e && c.ecl.th08?.familiar
+    );
+    if (children.length === 0) return;
+    for (const c of children) {
+      const ct8 = c.ecl.th08!;
+      ct8.flags |= 0x400;
+      c.ecl.parent = null;
+      c.dead = true;
+      ct8.markerHandle?.release();
+      ct8.markerHandle = null;
+      ct8.markerActor = null;
+      this.playSfx(2 + (c.id & 1));
+    }
+    for (let i = 0; i < children.length * 2; i++) {
+      const radius = this.rng.f() * 128;
+      const angle = this.rng.f() * Math.PI;
+      this.spawnItem(
+        'time',
+        Math.fround(e.x + Math.cos(angle) * radius),
+        Math.fround(e.y + Math.sin(angle) * radius),
+        {}
+      );
+    }
+    for (let i = 0; i < 16; i++) this.spawnItem('time', e.x, e.y, {});
+  }
+
   private collideEnemyBody(e: Enemy): void {
     const p = this.playerObj;
     if (this.gameOver || !p.alive || !e.ecl.collisionEnabled ||
         (this.runState && e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) ||
         !e.ecl.interactable || e.ecl.invisible || e.dead) return;
+    // TH08 familiar body contact — two stacked gates:
+    // 1. Ethereal familiars (bit 11, player in youkai form) never contact
+    //    (the all.c:21448 bit11==0 gate ahead of the contact block).
+    // 2. Reimu's special skill (FUN_0042c290 @ all.c:21101): the Border
+    //    Team and solo Reimu (DAT_0164d0b1 == 0/4) require
+    //    FUN_0041fd20()==0 — i.e. familiars NEVER contact them; every
+    //    other team takes familiar body contact while materialized.
+    //    The vertical slice is Border Team only, so familiars never
+    //    body-contact here.
+    if (this.runState && e.ecl.th08?.familiar) return;
     // FUN_0041ebc0 runs first at the live head, then at position-history
     // indices 1,7,13,... below. Each call performs graze before body hit.
     this.collideEnemyBodyAt(e, e.x, e.y, e.ecl.hitbox);
@@ -4256,7 +4446,7 @@ export class StageScene implements GameHost {
         this.spawnItem('time2', sourceX, sourceY, {});
       }
       // se_graze: TH07 id 30, TH08 id 24.
-      this.playSfx(this.runState ? 24 : 30);
+      this.playSfx(30); // graze: TH08 id 30, TH07 id 30
       return;
     }
     // Th07.exe (v1.00b) FUN_0043bb30 @ 0x43bb3b-0x43bb8a: an active bomb
@@ -4276,7 +4466,7 @@ export class StageScene implements GameHost {
     }
     this.cherry?.onGraze(this.focusHeld);
     // se_graze: TH07 id 30, TH08 id 24.
-    this.playSfx(this.runState ? 24 : 30);
+    this.playSfx(30); // graze: TH08 id 30, TH07 id 30
   }
 
   private onPlayerHit(sourceBullet: EnemyBullet | null, kind: 'bullet' | 'laser' | 'body' = 'bullet'): void {
@@ -4330,7 +4520,7 @@ export class StageScene implements GameHost {
       this.rng.u32InRange(100000);
       this.rng.u32InRange(100000);
       // se_pldead00: TH07 id 4, TH08 id 2.
-      this.playSfx(this.runState ? 2 : 4);
+      this.playSfx(4); // player death: TH08 id 4 (pldead00), TH07 id 4
       this.spawnEffectParticles(12, p.x, p.y, 1, 0xff4040ff);
       this.spawnEffectParticles(6, p.x, p.y, 16, 0xffffffff);
     }
@@ -4451,6 +4641,7 @@ export class StageScene implements GameHost {
       // shot/attack absorption, no damage settlement and no homing target.
       let bombContactThisFrame = false;
       if (!e.ecl.bombCollisionSuppressed) {
+        this.tickTh08FamiliarSync(e);
         this.collideEnemyBody(e);
         this.collidePlayerShots(e);
         // FUN_0041ed50 keeps FUN_0043a980's local_18 bomb-contact flag
@@ -4465,9 +4656,11 @@ export class StageScene implements GameHost {
         const keep = this.runtime.killEnemy(this, e, bombContactThisFrame);
         if (!keep) e.dead = true;
         // 0x42d65c: every enemy death settles the gauge toward the side the
-        // player is currently acting as (-200 unfocused / +200 focused).
+        // player is currently acting as (-200 human / +200 youkai, read from
+        // the form byte via the DAT_017d5efb mirror).
         if (this.runState) {
-          this.runState.addYoukaiGauge(this.runState.gaugeKillDelta(this.playerObj.focusHeld));
+          this.runState.addYoukaiGauge(this.runState.gaugeKillDelta(this.playerObj.th08Form === 1));
+          this.settleTh08FamiliarDeath(e);
         }
       }
       this.runtime.tickEnemyManagerTail(this, e);
@@ -5429,7 +5622,7 @@ export class StageScene implements GameHost {
     const p = this.playerObj;
     it.dead = true;
     // se_item00: TH07 id 21, TH08 id 18.
-    this.playSfx(this.runState ? 18 : 21);
+    this.playSfx(21); // item00: TH08 id 21, TH07 id 21
     // TH08 collect dispatch: the TH08 item types settle through the run
     // state's native scoring (CollectPoint/CollectPointSmall/CollectTimeOrb,
     // reference/re-specs/th08-decomp-items/), not the TH07 cherry path. The
@@ -5462,7 +5655,7 @@ export class StageScene implements GameHost {
           if (this.powerTier(p.power) > before) {
             this.spawnScorePopup(-1, it.x, it.y, 0xffffc0a0);
             // se_powerup: TH07 id 31, TH08 id 25.
-            this.playSfx(this.runState ? 25 : 0x1f);
+            this.playSfx(this.runState ? 31 : 0x1f);
           } else {
             this.spawnScorePopup(10, it.x, it.y, 0xffffffff);
           }
@@ -5508,7 +5701,7 @@ export class StageScene implements GameHost {
         if (p.power < 128) {
           this.spawnScorePopup(-1, it.x, it.y, 0xffffc0a0);
           // se_powerup: TH07 id 31, TH08 id 25.
-          this.playSfx(this.runState ? 25 : 0x1f);
+          this.playSfx(this.runState ? 31 : 0x1f);
           this.convertLivePowerItems();
           // Case 4's crossing cancel (all.c:22172) is NOT spell-gated,
           // unlike the power/bigPower cases.
@@ -5787,8 +5980,16 @@ export class StageScene implements GameHost {
       }
       for (const e of this.enemies) {
         if (e.ecl.invisible) continue;
+        // TH08 ethereal familiars (player in youkai form) draw through the
+        // ghost tint — FUN_0042c420 sets +0x3330 = 0x40 and the manager's
+        // LAB_0042db0b else-branch holds the enemy VM's color1 at
+        // R=G=0x20, B base, ALPHA HALVED every frame (all.c:21757-21763).
+        const t8ghost = e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1;
+        const ghostOpts = t8ghost
+          ? { color: 0x2020ff, alpha: 0.5 } as { color: number; alpha: number }
+          : undefined;
         for (const slot of e.ecl.anmSlots) {
-          if (slot?.runner) r.drawAnmFrame(slot.runner.spriteFrame(), ox + e.x, oy + e.y);
+          if (slot?.runner) r.drawAnmFrame(slot.runner.spriteFrame(), ox + e.x, oy + e.y, ghostOpts);
         }
         const frame = e.ecl.anmRunner?.spriteFrame() ?? null;
         // op150 writes an absolute VM rotation; the op27 angle-follow flag
@@ -5798,7 +5999,13 @@ export class StageScene implements GameHost {
         // sprite rotZ — not the mode-1 polar angle, which mode-3 orbiters
         // (Letty's テーブルターニング papers) never touch.
         const rotation = e.ecl.anmRotateWithAngle ? e.ecl.heading : e.ecl.anmRotZ;
-        r.drawAnmFrame(frame, ox + e.x, oy + e.y, rotation != null ? { rotation } : {});
+        const opts: { rotation?: number; color?: number; alpha?: number } = {};
+        if (rotation != null) opts.rotation = rotation;
+        if (ghostOpts) {
+          opts.color = ghostOpts.color;
+          opts.alpha = ghostOpts.alpha;
+        }
+        r.drawAnmFrame(frame, ox + e.x, oy + e.y, opts);
       }
       this.markPass('enemies');
       // Th07.exe layers the player sprite UNDER the enemy bullet/laser danmaku

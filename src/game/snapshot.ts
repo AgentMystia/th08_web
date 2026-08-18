@@ -83,6 +83,9 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
       lives: scene.playerObj.lives,
       bombs: scene.playerObj.bombs,
       power: scene.playerObj.power,
+      // TH08 human(0)/youkai(1) form byte (player+5) and the focus key.
+      th08Form: scene.playerObj.th08Form,
+      focusHeld: scene.playerObj.focusHeld,
       invuln: scene.playerObj.invulnFrames,
       bombInvuln: scene.playerObj.bombInvuln,
       // Compat view of the old one-shot countdown: remaining window frames
@@ -191,6 +194,11 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
       pendingInterrupt: e.ecl.pendingInterrupt,
       interactable: e.ecl.interactable,
       invisible: e.ecl.invisible,
+      // TH08 familiar (使魔) state: the side bit (0 materialized / 1
+      // ethereal) and the manager list id (0 = player-youkai / 2 = human).
+      familiar: e.ecl.th08?.familiar ?? false,
+      sideBit: e.ecl.th08?.sideBit ?? 0,
+      managerList: e.ecl.th08?.managerList ?? 0,
       deathMode: e.ecl.deathMode,
       timer: e.ecl.bossTimer
     }))

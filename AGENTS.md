@@ -165,6 +165,73 @@ v1.00d decompilation, replacing inherited-TH07 or speculative behavior:
 player00.anm entry 1 (spriteBase 44, on-disk scripts 19-22) holds the bomb
 art; PlayerEffects now resolves entry-scoped sprite tables for it.
 
+2026-08-19 familiar (使魔) system pass — the human/youkai tangibility
+system decoded end-to-end from v1.00d (polarity NOTE: human form
+MATERIALIZES familiars; youkai form etherealizes them — confirmed by the
+collision gates AND by the sound names: the player→human transition plays
+se_opshow, player→youkai plays se_ophide):
+- Player form byte (player+5, FUN_0040bc40): teams follow the focus key
+  through a stability gate — the native counter (player+8, reset each
+  toggle) must exceed 6, i.e. the flip lands on the 8th frame counting the
+  toggle (FUN_0044aec0 @ player-other.c:135-190; solos pin by char-index
+  parity). Port: `player.th08Form` (1-based th08FocusFrames > 7). The
+  toggle branch also plays the transition tints (effect 0x1c blue
+  0x808080ff → human / 0x1d red 0x80ff8080 → youkai, only after the
+  previous form held >= 5 frames) and arms the focus aura VM (effect 0x16
+  = etama archive 54, interrupt 1 on release). Bomb side selection reads
+  the FORM byte, not the raw key.
+- Familiars = child spawns ops 90-93 (exe cases 0x59-0x5c, all.c:
+  12020-12117): the child gets flags bit 8 (the side-sync marker), bit 11
+  = the player's CURRENT form, manager list id (0 = player-youkai / 2 =
+  player-human — `(-(form!=0)&0xfe)+2`), body contact cleared (bit 2),
+  the marker VM (FUN_00425b70(0x20) → etama archive 48, interrupt label
+  form?2:1), parent link +0x2da4, and sfx id 36 (se_option). Stage 1:
+  Sub19/20 (Wriggle's familiars, ~f3600) and the boss's 6-familiar waves
+  (~f4025+); the children's own FIRE(16) re-arms bit 6/bit 2.
+- Per-tick side sync (FUN_0042c420 @ all.c:21146-21185, flags-bit-8
+  enemies): on a form flip the familiar plays effect 0x1e (red
+  0x80803030 → human) or 0x1f (blue 0x80303080 → youkai), marker
+  interrupt 1/2, sfx 39 (se_opshow) / 40 (se_ophide), relinks the list,
+  and re-syncs bit 11; +0x3330 = 0x40 youkai / 0x20 human.
+- Tangibility gates: the manager's damage AND contact AND pointer-cache
+  block all require bit11 == 0 (all.c:21448-21595) — an ethereal familiar
+  (player youkai) is unshootable, contact-free, and graze-free. Lab_
+  0042db0b (all.c:21731-21763): bit11==1 holds the enemy VM's color1 at
+  R=G=0x20, B base, ALPHA HALVED (the ghost tint; color1 sits at
+  enemy+0x200 — VM base +0x60, fields +0x1a0/+0x1a4); bit11==0 gives the
+  1-frame damage flash (R=0xff, G=0x60) + hit sfx 20/37 by spell tier.
+- Reimu's special skill (FUN_0042c290 @ all.c:21097-21111): Border Team
+  and solo Reimu (DAT_0164d0b1 0/4) take NO body contact from familiars
+  (FUN_0041fd20 = is-familiar, +0x2da4 != 0); other teams do while
+  materialized. FUN_0041fd20 also decrements the parent's child count on
+  the child's own death.
+- ECL form-rank gate (all.c:10801): a FAMILIAR's instruction masks must
+  additionally contain the form bit (0x20 human / 0x40 youkai) —
+  enemy+0x3330 ORs into the difficulty bits. Stage-1 census: masks are
+  0xff/0xf1-family plus ONE 0x5f row (Sub42's FIRE, youkai+Extra) — inert
+  for non-familiars in the main game.
+- Op 184's receiver is the GLOBAL side mirror (singleton 0x4ea670 dword
+  bit 11, `mov ecx,0x4ea670` @ 0x41e7da) — NOT the running enemy. Every
+  boss/midboss phase sub opens with ins_184(1). Known reader:
+  FUN_00416b10 gates the spell-bonus accumulator on the bit being clear.
+- Familiar death: killed-by-damage fires marker interrupt 3 (all.c:
+  21643-6); a master's death sweeps its children (FUN_0042adb0(1) @
+  20440-20544): pos-inherit children snapshot the master pos, flags bit
+  10 set, parent links cleared, death mode 8 (silent pop, enep00), then
+  the time-orb shower at the master pos — 2 per familiar scattered by
+  (frand*128, frand*pi) draws, plus FUN_0044df00's 16-orb burst pool
+  registration (pos, 32.0, 1.0, 0x10, 7).
+- SFX table REBUILT (the old id==name-index table was wrong from id 2 on):
+  the exe plays through a 46-channel id table (.data 0x4c8040, stride 8:
+  {u32 srcBank, i16 volA@+4, i16 volB@+6}) over the 36-file name table at
+  0x4c81b0; FUN_0045d3f0 preloads one channel per id cloning bank
+  record.src with SetVolume(volA) (gain = 10^(volA/2000)). Key ids: 0/1
+  plst00 (two volumes), 2/3 enep00 (-1200/-1500 — the kill alternation,
+  resolving the old "+2 bank-site" flag), 4 pldead00 (miss), 13 gun00
+  (bomb cast), 14 cat00 (declaration), 20 damage00, 21 item00, 28 extend,
+  30/32 graze (two volumes), 31 powerup, 34 pause, 36 option (familiar
+  spawn), 37 damage01, 39 opshow, 40 ophide, 44 item01, 45 ok00-loud.
+
 Verification oracle for text-mode reviewers, measured on the TH08 build
 (dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture).
 NOTE: the headless advance() batches skip per-frame draws, so the sidebar
@@ -705,15 +772,32 @@ deployment gate rather than a manual-only checkpoint.
 ## 7. Approximations registry (known, flagged, improvable)
 
 TH08-slice additions (2026-08-18 second presentation pass, inline comments at the sites):
-- Enemy-death SE: the exe's death site (0x42d9c0) computes (counter%2)+2,
-  which under the .data 0x4c81b0 file table would select
-  se_pldead00/se_power0 (the audible miss sound). The original's fairy kill
-  sounds as se_enep00 (the wav is byte-identical across TH07/TH08), so the
-  TH08 path plays id 1 — the +2 bank-site discrepancy is unreconciled
-  statically.
 - FUN_0045d660's second argument tunes playback FREQUENCY (the consumer's
   vtable+0x40 call receives the channel's queued-value average); the port's
   audio bus has no per-request pitch control and ignores it.
+
+TH08-slice additions (2026-08-19 familiar-system pass, inline comments at
+the sites):
+- The ghost tint's exact channel mapping reads B-base/R=G=0x20/alpha-half
+  from the color1 byte writes (enemy+0x200..+0x203 as B,G,R,A); drawn as
+  the rgb multiplier 0x2020ff at alpha 0.5. If a native capture later
+  shows a red-dimmed ghost instead, swap the channel order at the draw
+  site (stage-scene.ts's ghostOpts).
+- The master-death time-orb burst: the 2-per-familiar scattered ring is
+  draw-order exact ((frand*128, frand*pi) per orb); FUN_0044df00's pool
+  registration (pos, 32.0, 1.0, 0x10, 7) is spawned directly as 16 time
+  orbs at the master position — the native burst is pool-deferred and its
+  release draws are not traced.
+- CreateFamiliarPopup (AsciiManager.cpp:522, the time-orb-style kill
+  popup for destroyed familiars) is not implemented.
+- The familiar-kill gauge settle reuses the shared death-path ±200
+  (form-relative); the wiki's "destroying familiars pulls the gauge
+  toward 0" was NOT found as a separate exe site.
+- op 184's global side mirror (0x4ea670 bit 11) is recorded on
+  Th08RunState.th08SideMirror; its consumers (FUN_00416b10's spell-bonus
+  accumulator gate) are not wired.
+- FUN_0042c420's extra branch (flags2 bit 1 + FUN_0040ebc0(2) → effect
+  0x26 white at the familiar) is skipped — the condition is unrecovered.
 
 TH08-slice additions (2026-08-18 presentation pass, inline comments at the sites):
 - Declaration banner hold is bounded: face_cdbg's authored hold loops (op5
@@ -723,12 +807,6 @@ TH08-slice additions (2026-08-18 presentation pass, inline comments at the sites
 - The declaration's fourth native VM (capture.anm flash) reads the
   runtime-generated 'capture:@' surface — not recoverable from data, so
   the cut-in is carried by portrait + banners + typeset name.
-- TH08_SFX_SLOTS gains for files TH07 never plays (se_cardget, se_option,
-  se_damage01, se_timeout2, se_opshow, se_ophide, se_invalid, se_slash,
-  se_item01) are neutral placeholders; the id→file mapping itself is
-  exe-exact (.data 0x4c81b0).
-- Effect VM host-driven scale/color params (FUN_00425430's +0x7c color /
-  scale arg) are not applied — the etama scripts self-animate.
 
 TH08-slice additions (2026-08-17, all with inline comments at the site):
 - Border Team option-sourced shots spawn at the player center: the exe

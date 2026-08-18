@@ -8,6 +8,12 @@ export class Th08RunState {
   spellcardsCaptured = 0;
   youkaiGauge = 0;
   youkaiGaugeCopy = 0;
+  // TH08 op 184's write: the GLOBAL side mirror on singleton 0x4ea670 bit
+  // 11 (every boss/midboss phase sub opens with ins_184(1)). Known reader:
+  // FUN_00416b10 gates the spell-bonus accumulator on the bit being CLEAR
+  // — the consumer set is not fully recovered, so the value is stored but
+  // not yet acted upon (flagged in AGENTS.md §7).
+  th08SideMirror: 0 | 1 = 0;
   pointItemValue = 300000;
   clockTime = 0;
   pointItemsCollectedInStage = 0;

@@ -22,7 +22,8 @@ import type { Renderer } from '../gfx/renderer';
 //    texture is generated at runtime by the exe's AsciiManager
 //    (FUN_004663b0 typesets the SJIS name into it); this port typesets the
 //    name with the canvas font at the script's live position instead.
-//  - sound: FUN_0045d550(0xe = sfx id 14, se_lazer01) once at declaration.
+//  - sound: FUN_0045d550(0xe = sfx id 14, se_cat00 per the 46-channel id
+//    table) once at declaration.
 // The fourth native VM (the capture.anm flash behind the banner) reads the
 // runtime-generated 'capture:@' surface, which is not recoverable from the
 // data — flagged in AGENTS.md §7 rather than approximated here.

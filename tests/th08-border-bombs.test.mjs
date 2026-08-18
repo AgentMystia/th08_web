@@ -33,8 +33,8 @@ function makeHost(enemies = [], targetPos = null) {
     effectVm(script, x, y, scale, color) {
       log.effects.push({ script, x, y, scale, color });
     },
-    orbVm(index, script) {
-      log.orbs.push({ index, script });
+    orbVm(index, script, x, y) {
+      log.orbs.push({ index, script, x, y });
     },
     playSfx(id, arg) {
       log.sfx.push({ id, arg });
@@ -114,6 +114,26 @@ test('type 2 deathbomb parks orbs at speed 0 and bursts them staggered', () => {
   assert.ok(bomb.frame >= 170);
   const orb0 = bomb.orbAt(0);
   assert.ok(orb0 === null || orb0.state === 2);
+});
+
+test('type 2 bombardments land their orb VM at the TARGET, not the player', () => {
+  // 0x5241-0x5276: every 20 frames past 40 the bombardment slot (16 then
+  // 17) fires at the primary target with VM 0x14 — the 20-frame 4x flash
+  // family must draw at the target position.
+  const bomb = new Th08BorderBomb(2, 192, 300);
+  const host = makeHost();
+  host.targetPos = { x: 240, y: 120 };
+  bomb.cast(host, 192, 300);
+  for (let i = 0; i < 61; i++) bomb.tick(host, 192, 300, true);
+  const bombardments = host.log.orbs.filter(o => o.index >= 16);
+  assert.ok(bombardments.length >= 1, 'first bombardment by frame 60');
+  assert.equal(bombardments[0].script, 0x14);
+  assert.deepEqual(
+    { x: bombardments[0].x, y: bombardments[0].y },
+    { x: 240, y: 120 },
+    'orb VM spawned at the target coords'
+  );
+  assert.ok(!host.log.orbs.some(o => o.index < 16 && o.script === 0x14), 'ring orbs keep script 0x13');
 });
 
 test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () => {

@@ -270,6 +270,24 @@ export class Player {
   // each transition, 0x44b1b1/0x44b404): drives the gauge fire-rate ramp
   // (<=300 -> 20/frame, then counter/15, 0x44be67).
   th08FocusFrames = 0;
+  // TH08 human(0)/youkai(1) form byte — exe player+5, read by FUN_0040bc40.
+  // Teams flip it from the focus key through a stability gate: the native
+  // counter (player+8, reset at each toggle) must exceed 6 first
+  // (FUN_0044aec0 @ player-other.c:135-138/180-183) — with this port's
+  // 1-based th08FocusFrames that is the 8th frame counting the toggle, i.e.
+  // seven frames after the edge. Solos pin it by character-index parity
+  // (out of slice scope). Enemy familiars gate their whole tangibility on
+  // this byte; bomb side selection reads it too.
+  th08Form: 0 | 1 = 0;
+  // One-shot form-transition requests for the scene's etama effect layer
+  // (FUN_0044aec0's toggle branch): 28 = effect 0x1c, the blue to-human
+  // tint 0x808080ff; 29 = effect 0x1d, the red to-youkai tint 0x80ff8080.
+  // Played only when the previous form held >= 5 frames (native `3 <
+  // counter`, the 0-based stable count). Cleared by the scene each frame.
+  pendingTh08FormEffect: 0 | 28 | 29 = 0;
+  // Focus-in spawns the aura VM (FUN_00425870(0x16, pos, 2, 1, white),
+  // handle player+0xbe834); focus-out fires interrupt 1 on it. Scene-owned.
+  pendingTh08Aura: 'in' | 'out' | null = null;
   // TH08 bomb type (player+0xfe0): 0 human / 1 youkai / 2|3 deathbomb (the
   // side INVERTS before +2, 0x44c7f7). Latched by tryBomb.
   th08BombType: 0 | 1 | 2 | 3 = 0;
@@ -391,6 +409,11 @@ export class Player {
     this.updateFocusGlide(input.held.has('focus'), rate);
     if (this.character === 'reimuYukari') {
       this.th08FocusFrames++;
+      // FUN_0044aec0 tails: the form byte flips once the stable counter
+      // passes 6 (player+8; 1-based here -> flip at 8). th08FocusFrames
+      // was zeroed on the toggle frame and incremented right above, so
+      // the flip lands on the 8th frame counting the toggle itself.
+      if (this.th08FocusFrames > 7) this.th08Form = this.focusHeld ? 1 : 0;
       // The focused option follows its anchor with the exe's 0.2 lerp
       // (FUN_0044e770); on focus-in it snaps to the anchor first. While the
       // lunge trigger holds (FUN_0044e770 tail: cycle armed, counter >= 10,
@@ -521,6 +544,10 @@ export class Player {
     let advancedOnReverse = false;
     if (focused !== this.focusHeld) {
       this.focusHeld = focused;
+      // Frames the previous form actually held, in this port's 1-based
+      // counting of th08FocusFrames (toggle frame = 1). Native gate is
+      // `3 < counter` on the 0-based player+8, i.e. five held frames.
+      const prevHeld = this.th08FocusFrames;
       // Timer player+0xe2ae8 (the gauge fire-rate clock) re-arms to 0 at
       // every focus transition (0x44b1b1/0x44b404).
       this.th08FocusFrames = 0;
@@ -530,6 +557,11 @@ export class Player {
       if (this.character === 'reimuYukari') {
         const script = focused ? 5 : 0;
         if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
+        // FUN_0044aec0's transition branch: the tint fires only after the
+        // previous form held long enough; the aura arms on every focus-in
+        // and is released by interrupt 1 on the way out.
+        this.pendingTh08FormEffect = prevHeld > 4 ? (focused ? 29 : 28) : 0;
+        this.pendingTh08Aura = focused ? 'in' : 'out';
       }
       this.focusTransition = focused ? 'in' : 'out';
       if (this.focusGlideFrame < GLIDE_FRAMES) {
@@ -871,13 +903,16 @@ export class Player {
     // end of the deathbomb window.
     if (this.bombs <= 0 || this.bombTimer > 0 || this.bombCooldown > 0 || this.deathbombMeter <= 0) return false;
     if (this.character === 'reimuYukari') {
-      // TH08 bomb machine (0x44c650/0x44c71b-0x44c75f): bombType = focus
-      // byte; a deathbomb (cast from the hit state) INVERTS the side before
-      // adding 2 — focused-cast runs table[2] (0x40c910), unfocused-cast
-      // runs table[3] (0x410fe0). A deathbomb consumes TWO bombs when the
-      // stock has them (FUN_00439883(-2)), one when it does not.
+      // TH08 bomb machine (0x44c650/0x44c71b-0x44c75f): bombType = the FORM
+      // byte (FUN_0040bc40 reads player+5 — the focus key latched through
+      // the 7-frame stability gate, so a bomb cast inside that window uses
+      // the OLD side); a deathbomb (cast from the hit state) INVERTS the
+      // side before adding 2 — focused-cast runs table[2] (0x40c910),
+      // unfocused-cast runs table[3] (0x410fe0). A deathbomb consumes TWO
+      // bombs when the stock has them (FUN_00439883(-2)), one when it does
+      // not.
       const deathbomb = this.hitState;
-      const base = this.focusHeld ? 1 : 0;
+      const base = this.th08Form;
       this.th08BombType = (deathbomb ? 1 - base : base) as 0 | 1 | 2 | 3;
       this.bombs -= deathbomb ? Math.min(this.bombs, 2) : 1;
       this.hitState = false; // deathbomb rescue

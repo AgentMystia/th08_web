@@ -605,3 +605,73 @@ play texture 86-90% with warm additive centers (#8c671c) — the balloon
 explosions render. Deathbomb probe: hit at f586, invuln window follows the
 new tables, wave cleared (score +17k); the miss-vs-deathbomb race in that
 probe is a probe-timing artifact, the deathbomb gates are unit-tested.
+
+## 2026-08-19: 使魔实体化系统 + SFX 表重建 + Bomb 视觉落位 (pending commit)
+
+User report: "Bomb视觉效果还是一塌糊涂，永夜抄的系统也没做好。妖形态，
+敌方使魔应该可以攻击（实体化）；人形态，敌方使魔虚化……全系统应做做好。"
+
+**Polarity correction (user's description was inverted; three independent
+sources agree):** HUMAN form (unfocused, Reimu) MATERIALIZES familiars —
+shootable, contact per team rules; YOUKAI form (focused, Yukari)
+ETHEREALIZES them — shots pass through, no contact, ghost tint. Evidence:
+all.c:21448 (damage+contact+pointer-cache block requires flags bit11==0 =
+player human), all.c:21757 (the permanent half-alpha tint when bit11==1),
+and the transition sound ids 39=se_opshow (player→human) / 40=se_ophide
+(player→youkai) from the 46-channel table. Touhou Wiki concurs: "Familiars
+may only be hit while the player is in human form."
+
+Decoded + implemented (all exe sites cited in AGENTS.md §0's 2026-08-19
+block):
+1. **Player form byte** player+5: `player.th08Form`, 8-frame stability
+   gate (FUN_0044aec0), transition tints (effects 0x1c/0x1d after >=5
+   held frames), focus aura VM (effect 0x16, interrupt 1 on release).
+   Bomb side + gauge kill/fire direction now read the FORM byte.
+2. **Familiar marking** on ops 90-93 children (flags bit 8, side bit 11 =
+   form, manager list 0/2, contact cleared BEFORE the child's synchronous
+   t0 core so its FIRE(16) re-arms, sfx 36 se_option, parent link). The
+   FIRE bit-6/bit-2 writes now bridge onto shotCollision/collisionEnabled.
+3. **Per-tick side sync** FUN_0042c420: transition flashes (etama 59 red
+   →human / 60 blue →youkai with the native ARGB colors), marker VM
+   (etama 48) interrupt 1/2, sfx 39/40, list relink; marker attached
+   lazily with a follow actor.
+4. **Tangibility gates**: damageEnemy skips ethereal familiars (covers
+   shots, attack slots, the bomb host); collideEnemyBody skips familiars
+   entirely for the Border Team (Reimu's special skill, FUN_0042c290 @
+   21101 with FUN_0041fd20 = is-familiar) and ethereal familiars for
+   everyone.
+5. **Ghost tint**: VM color1 decode (enemy+0x200..3 = B,G,R,A; ghost =
+   R=G=0x20, B base, A/2) drawn as rgb 0x2020ff @ alpha 0.5 (channel
+   order flagged).
+6. **ECL form-rank gate** (all.c:10801): familiar instruction masks must
+   contain the form bit (0x20/0x40). Stage-1 census: only one authored
+   0x5f row (Sub42) — inert for non-familiars.
+7. **op 184 fix**: receiver is the GLOBAL singleton 0x4ea670 bit 11, not
+   the enemy — recorded on Th08RunState.th08SideMirror (consumers
+   unwired, flagged).
+8. **Deaths**: familiar kill → marker interrupt 3; master death sweep →
+   children silent-killed (mode 8, enep00 pop, links cleared) + the
+   time-orb shower (2N scattered with exact RNG draw order + a 16-orb
+   burst, the FUN_0044df00 pool part flagged).
+9. **SFX table rebuilt** as the real 46-channel id table (.data 0x4c8040
+   {srcBank, volA} over the 36-file 0x4c81b0 table; gains 10^(volA/2000)).
+   This fixed the whole id≥2 mapping: miss=4(pldead00), graze=30,
+   item=21, damage=20, extend=28, powerup=31, pause=34, bomb cast=13
+   (gun00), declaration=14 (cat00), and resolved the old "+2 bank-site"
+   kill-sfx flag (ids 2/3 are enep00's two volume slots, matching TH07).
+10. **Bomb visuals**: bombardment orb VMs (slot 16/17, script 0x14) now
+    spawn AT THE TARGET with the sync loop covering them; effectVm's
+    scale/color host params are applied (the burst flash's 8x magnitude,
+    the cast flash color) instead of being void-dropped.
+
+Verification: check/build clean; 409/410 tests (8 new familiar tests + 1
+bombardment test); replay:verify 6/6 PASS (TH07 golden untouched); clean
+headless boot; full-stage familiar sweep with zero page errors — Sub19/20
+(Wriggle, ~f3600) and the boss's 6-familiar waves (~f4025+) live, side
+flips verified in both directions by live probe (form byte + all
+familiars' sideBit + managerList). replay:verify:th08 unchanged
+DIVERGED (the phantom-death cascade predates this; kills 144→122 with
+the gating = the replay player was youkai-side during familiar phases,
+so those kills were wrongly credited before). Ghost-tint pixel diff is
+inconclusive (frame drift between A/B captures) — the tint is verified
+structurally; a frozen-frame A/B would pin it visually.

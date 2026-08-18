@@ -265,6 +265,13 @@ export interface GameHost {
   ): void;
   releaseEnemyEffects?(ownerEnemyId: number): void;
   playSfx(id: number): void;
+  // TH08 form byte (exe player+5 via FUN_0040bc40): 0 human / 1 youkai.
+  // Familiar spawning, the per-tick side sync, and the ECL form-rank gate
+  // read it live. Absent on TH07/minimal hosts.
+  th08PlayerForm?(): 0 | 1;
+  // TH08 op 184's receiver is the GLOBAL side mirror (singleton 0x4ea670
+  // dword bit 11, `mov ecx,0x4ea670` @ 0x41e7da) — not the running enemy.
+  th08SetSideMirror?(value: 0 | 1): void;
   startDialogue?(index: number): void;
   isDialogueActive?(): boolean;
   isDialogueBlocking?(): boolean;
@@ -377,6 +384,9 @@ export interface EclState {
   subId: number;
   mirrored: boolean;
   itemDrop: number;
+  // TH08 child-spawn parent link (exe enemy+0x2da4): the familiar's
+  // master, cleared by FUN_0042adb0's death sweep.
+  parent?: Enemy | null;
   // The enemy's 26-dword ECL variable block, Th07.exe enemy+0x6fc..+0x763.
   // [0..15]  locals 10000-10015 (ints 10000-10003/10012-10015, floats
   //          10004-10011 — one shared block for every sub this enemy runs;
@@ -650,6 +660,21 @@ export interface Th08EclState {
   // decoded system stay here verbatim.
   flags: number;
   flags2: number;
+  // TH08 familiar (使魔) system — enemy flags bit 8 (0x100), set by the
+  // child-spawn ops 90-93 (all.c:12020-12117): the child is a FAMILIAR and
+  // runs the per-tick human/youkai side sync FUN_0042c420.
+  familiar: boolean;
+  // Enemy flags bit 11 (0x800): the side mirror, synced to the player's
+  // form byte each tick (FUN_0042c420 tail). 0 = human-side (materialized:
+  // shootable, contact per team rules, damage flash), 1 = youkai-side
+  // (ethereal: player shots pass through, no contact, ghost tint).
+  sideBit: 0 | 1;
+  // The familiar's attached marker VM (FUN_00425b70(0x20) at spawn —
+  // etama archive script 48): interrupt 2 on materialize, 1 on ethereal,
+  // 3 on death. Scene-owned handle.
+  markerHandle: { interrupt(label: number): void; release(): void } | null;
+  // The marker VM's follow actor (keeps the marker at the enemy).
+  markerActor: { x: number; y: number; angle: number; state: number } | null;
   // +0x3340..+0x334c: player clamp rect (ins_75), armed by flags bit 19.
   clampRect: { x1: number; y1: number; x2: number; y2: number } | null;
   // +0x3350: squared suppress-fire radius (ins_85's op writes f*f).
