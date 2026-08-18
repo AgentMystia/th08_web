@@ -1,8 +1,19 @@
 #!/usr/bin/env node
-// Native TH08 PRE-trace under wine + winedbg gdb stub + gdb breakpoint
+// Native TH08 trace under wine + winedbg gdb stub + gdb breakpoint
 // commands (auto-print + auto-continue; ONE 'cont' drives the window).
 // Evidence plan: AGENTS.md §5 — the original engine's per-event state is the
 // convergence oracle for TH08 Stage 1. Output: /tmp/native-trace.txt.
+//
+// Breakpoints (keep the set SMALL: every stop is a gdb round-trip and slows
+// the game — never break on the RNG draw):
+//   P @0x44d650  player per-frame calc callback — the sim-frame clock + the
+//                native player path (pos read from the aim mirror
+//                0x17d61ac/0x17d61b0, i.e. exactly what enemy FIRE aims at)
+//   V @0x430e10  volley spawn — template pos/mode/counts/angles/speeds
+//   B @0x422720  auto-fire re-execution (captured FIRE rebuild)
+//   S @0x42a680  enemy spawn into the 480-slot pool
+// The game plays the title demo with our recording staged as
+// demo/demorpy0.rpy, so the trace replays the exact verifier input stream.
 // Usage: node scripts/native-trace.mjs [seconds]
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync } from 'node:fs';
@@ -10,7 +21,7 @@ import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync } fr
 const SECONDS = Number(process.argv[2] ?? 600);
 const ROOT = '/tmp/th08-native';
 const SRC = '/workspace/reference/th08-original/th08';
-const REPLAY = '/workspace/replay/th8_udLy01.rpy';
+const REPLAY = '/workspace/tests/replays/th8_udLy01.rpy';
 const OUT = '/tmp/native-trace.txt';
 const GDB_PORT = 31337;
 
@@ -28,47 +39,44 @@ cpSync(REPLAY, `${ROOT}/demo/demorpy0.rpy`);
 const gdbCmds = `
 set pagination off
 set confirm off
-set $ev = 0
-set $rng = 0
+set $p = 0
 target remote :${GDB_PORT}
+# Wine games raise intentional SEH exceptions; the gdb stub surfaces them as
+# SIGSEGV/SIGILL stops. --batch would otherwise end the script at the first
+# one (observed: zero breakpoint hits in 420s). Pass them through to the
+# program's own handlers; breakpoints stop via SIGTRAP and are unaffected.
+handle SIGSEGV nostop noprint pass
+handle SIGILL nostop noprint pass
+handle SIGABRT nostop noprint pass
 
-break *0x004a619e
+break *0x0044d650
 commands
   silent
-  set $ev = $ev + 1
-  printf "ev=%d ENTRY\\n", $ev
-  cont
-end
-
-break *0x0043ecc0
-commands
-  silent
-  set $rng = $rng + 1
+  set $p = $p + 1
+  printf "P %d %f %f\\n", $p, *(float*)0x17d61ac, *(float*)0x17d61b0
   cont
 end
 
 break *0x0042a680
 commands
   silent
-  set $ev = $ev + 1
-  set $pos = *(int*)($esp+4)
-  printf "ev=%d SPAWN sub=%d x=%f y=%f life=%d item=%d score=%d\\n", $ev, $edx, *(float*)$pos, *(float*)($pos+4), *(int*)($esp+8), *(int*)($esp+12), *(int*)($esp+16)
+  set $pos = *(int*)($esp+8)
+  printf "S %d sub=%d x=%f y=%f a=%d b=%d c=%d\\n", $p, *(int*)($esp+4), *(float*)$pos, *(float*)($pos+4), *(int*)($esp+12), *(int*)($esp+16), *(int*)($esp+20)
   cont
 end
 
-break *0x0042f5f0
+break *0x00430e10
 commands
   silent
-  set $ev = $ev + 1
-  printf "ev=%d FIRE type=%d off=%d ways=%d stacks=%d speed=%f angle=%f\\n", $ev, *(short*)$ecx, *(short*)($ecx+2), *(short*)($ecx+0x1f4), *(short*)($ecx+0x1f6), *(float*)($ecx+0x18), *(float*)($ecx+0x10)
+  set $tpl = *(int*)($esp+4)
+  printf "V %d pos=%f,%f mode=%d c1=%d c2=%d a1=%f a2=%f s1=%f s2=%f pl=%f,%f\\n", $p, *(float*)($tpl+4), *(float*)($tpl+8), *(short*)($tpl+0x1f8), *(short*)($tpl+0x1f4), *(short*)($tpl+0x1f6), *(float*)($tpl+0x10), *(float*)($tpl+0x14), *(float*)($tpl+0x18), *(float*)($tpl+0x1c), *(float*)0x17d61ac, *(float*)0x17d61b0
   cont
 end
 
 break *0x00422720
 commands
   silent
-  set $ev = $ev + 1
-  printf "ev=%d FIREBUILD sprite=%d offset=%d\\n", $ev, *(short*)$edx, *(short*)($edx+2)
+  printf "B %d epos=%f,%f pl=%f,%f\\n", $p, *(float*)($ecx+0x2d88), *(float*)($ecx+0x2d8c), *(float*)0x17d61ac, *(float*)0x17d61b0
   cont
 end
 
@@ -106,9 +114,7 @@ out.stdin.end();
 
 const trace = existsSync(OUT) ? readFileSync(OUT, 'utf8') : '';
 const lines = trace.trim().split('\n').filter(Boolean);
-const spawns = lines.filter((l) => l.includes('SPAWN')).length;
-const fires = lines.filter((l) => l.includes('FIRE')).length;
-const entry = lines.some((l) => l.includes('ENTRY'));
-console.log(`trace: ${lines.length} lines, entry=${entry}, spawns=${spawns}, fires=${fires} -> ${OUT}`);
+const count = (tag) => lines.filter((l) => l.startsWith(tag + ' ')).length;
+console.log(`trace: ${lines.length} lines, P=${count('P')} S=${count('S')} V=${count('V')} B=${count('B')} -> ${OUT}`);
 console.log('gdb tail:', gdbRaw.trim().split('\n').slice(-3).join(' | '));
 console.log('winedbg tail:', dbgLog.trim().split('\n').slice(-2).join(' | '));

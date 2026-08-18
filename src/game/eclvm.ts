@@ -243,7 +243,14 @@ const TH08_OP_REMAP: Record<number, number> = {
   37: 40,                           // normalize angle in place
   40: 28, 41: 29, 42: 30, 43: 31, 44: 32, 45: 33,
   46: 34, 47: 35, 48: 36, 49: 37, 50: 38, 51: 39, // 12 conditional jumps
-  66: 54,                           // timed move by angle/speed
+  // NOT 66: TH08 raw op 66 (label 0x41) is fireBullet-curved (all.c:11530-
+  // 11562: anmId<1 writes motion angle/speed + flags 0x1000 + timer 0, else
+  // FUN_00420d10 arms a delayed fire: origin=render pos, vel=dir·speed·
+  // anmId, timer=anmId, flags 0x2000|spriteOffset<<14) — NOT TH07's timed
+  // move. Remapping it made every ins_66 enemy perform a phantom
+  // (duration=anmId, mode=spriteOffset) move instead of arming the fire
+  // (stage-1 Sub1's ins_66(60,4,π/2,3.2) displaced the machine-gun fairy by
+  // a full 60·3.2=192px entry slide).
   70: 48, 71: 50,                   // angular velocity, acceleration
   93: 93, 94: 92,                   // createEnemy 3D relative / absolute
   95: 94,                           // kill sweep (same FUN(8000,0) call)
@@ -4001,13 +4008,15 @@ export class StageRuntime {
           // 21/22/23 trio runs 10/15/30, the 24 family 30/30/30, the bubble
           // family's script 27 runs 24.
           spawnDuration = !hasSpawnState ? 0 : this.th08FlashDuration(p.sprite, flags);
-          // BulletManager::OnUpdate states 2/3/4 integrate at vel * 1/2,
-          // 1/4, 1/8 (immediates 0x40000000/0x40200000/0x40400000 @
-          // 0x43177e-0x4317a5) — TH07's 1/2, 1/2.5, 1/3 do NOT carry over.
-          // Stage 1's dominant wave family (flags 680516 -> state 3) was
-          // creeping at 0.4v instead of 0.25v, leaving every such bullet a
-          // constant speed-proportional lead — the 7 phantom contacts.
-          spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 4 : flags & 8 ? 1 / 8 : 1;
+          // BulletManager::OnUpdate states 2/3/4 integrate at vel * (1.0/k)
+          // with k = 2.0/2.5/3.0 — the pushed immediates at the four
+          // FUN_0040c7d0 call sites (0x43177e k=0x40000000, 0x431890
+          // k=0x40200000, 0x4319a1 k=0x40400000, 0x431aa2 k=0x40000000);
+          // FUN_0040c7d0 computes factor = _DAT_004b4338(1.0) / k via fdiv
+          // then multiplies. TH07's 1/2, 1/2.5, 1/3 DO carry over — the
+          // earlier 1/4, 1/8 reading misparsed the float bit patterns
+          // (0x40200000 = 2.5f, 0x40400000 = 3.0f).
+          spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
         } else {
           spawnDuration = !hasSpawnState ? 0
             : p.sprite === 10 ? 24
