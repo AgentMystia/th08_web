@@ -1,6 +1,5 @@
 import { Sht, type ShtShot } from '../formats/sht';
 import { Anm, AnmRunner } from '../formats/anm';
-import { TH07_DATA } from '../data/th07-data';
 import { TH08_DATA } from '../data/th08-data';
 import { clamp } from '../core/util';
 import type { InputFrame } from '../core/input';
@@ -341,7 +340,7 @@ export class Player {
   constructor(character: CharacterId, anms: Record<string, Anm>) {
     this.character = character;
     const spec = CHARACTERS[character];
-    const sht = (character === 'reimuYukari' ? TH08_DATA.sht : TH07_DATA.sht) as Record<string, string>;
+    const sht = TH08_DATA.sht as Record<string, string>;
     this.unfocused = new Sht(sht[spec.shtBase]);
     this.focused = new Sht(sht[`${spec.shtBase}s`]);
     this.anm = anms[spec.anmKey];

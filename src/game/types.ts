@@ -274,7 +274,6 @@ export interface GameHost {
   th08SetSideMirror?(value: 0 | 1): void;
   startDialogue?(index: number): void;
   isDialogueActive?(): boolean;
-  isDialogueBlocking?(): boolean;
   consumeDialogueResume?(): boolean;
   startBossSpell?(spellId: number, arg0: number, name: string): void;
   // Returns whether the phase-end field sweep applies — Th07.exe
@@ -303,7 +302,6 @@ export interface GameHost {
   // fires are gated on it unless the laser is bomb-immune, all.c:15737).
   postBombLaserCounter?: number;
   // ECL op 160 = FUN_0042dc6f(arg): cherry + cherryPlus gain.
-  awardCherry?(v: number): void;
   // Bullet-effect id 20: hardcoded BGM cue (Yuyuko phase 2, th07_13b).
   playBgmTrack?(name: string): void;
   // Bullet-effect id 19 (FUN_00418ee0): three-second BGM fade-out.

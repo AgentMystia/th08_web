@@ -16,7 +16,6 @@ import {
   type CharacterId, type PlayerBullet
 } from './player';
 import { PlayerEffects, type PlayerEffectHandle } from './player-effects';
-import type { CherrySystem } from './cherry';
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
 import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-border-bombs';
@@ -396,12 +395,6 @@ export class StageScene implements GameHost {
   stageClearTimer = 0;
   private exitFired = false;
   private stageCompleteFired = false;
-  // Vestigial TH07 cherry hook: permanently null now that the committed
-  // Th08RunState (time orbs, night clock, human/youkai gauge) replaced the
-  // Supernatural Border system. Kept declared so the read-only external
-  // readers (snapshot.ts, replay-playback.ts, the main.ts debug probe)
-  // still type-check; every consumer's TH07 branch is unreachable.
-  cherry: CherrySystem | null = null;
   runState: Th08RunState;
   hiScore = 100000;
   // TH08 dialogue (timeline ins_6): the committed Th08DialogueMachine plus
@@ -2006,11 +1999,6 @@ export class StageScene implements GameHost {
     this.postBombLaserCounter = 10;
   }
 
-  awardCherry(v: number): void {
-    // TH07's cherry accumulator no longer exists; the ECL op160 hook stays
-    // for the GameHost interface.
-    void v;
-  }
 
   // Test/debug-only: replace the live field with a deterministic three-shot
   // border-break fixture, reusing a real parsed bullet frame. The production

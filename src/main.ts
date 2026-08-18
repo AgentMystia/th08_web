@@ -31,8 +31,6 @@ interface TestHook {
   setPower(v: number): void;
   inject(held: string[], pressed: string[]): void;
   damageBoss(n: number): void;
-  addCherry(n: number): void;
-  primeBorderCollision(): boolean;
   clearEnemyBullets(): void;
   spawnLog(): { t: number; time: number; sub: number }[];
   lifecycleLog(): { f: number; ev: string; id: number; sub: number; a?: number }[];
@@ -62,7 +60,7 @@ interface TestHook {
 
 declare global {
   interface Window {
-    __TH07_TEST__?: TestHook;
+    __TH08_TEST__?: TestHook;
   }
 }
 
@@ -325,7 +323,7 @@ async function boot(): Promise<void> {
   // jitter between probe runs so fixed-frame checkpoints are comparable.
   const startPaused = isTest && params.get('paused') === '1';
   if (isTest) {
-    window.__TH07_TEST__ = {
+    window.__TH08_TEST__ = {
       ready: true,
       pause: () => loop.stop(),
       resume: () => loop.start(),
@@ -379,16 +377,11 @@ async function boot(): Promise<void> {
         const b = stage?.bossActive;
         if (b && b.ecl.canTakeDamage && b.ecl.interactable) b.hp -= n;
       },
-      addCherry: (n: number) => {
-        if (!stage) return;
-        stage.cherry?.debugAddCherry(n);
-      },
-      primeBorderCollision: () => stage?.debugPrimeBorderCollision() ?? false,
       clearEnemyBullets: () => { if (stage) stage.enemyBullets.length = 0; },
       // Test-only: force the life count so probes can reach and observe
       // late-stage content (boss spells, the Supernatural Border) that a
       // no-dodge headless run would otherwise die before reaching. Same
-      // spirit as setPower/addCherry above.
+      // spirit as setPower above.
       setLives: (n: number) => { if (stage) stage.playerObj.lives = n; },
       // Test-only, same spirit as setLives: hold spawn-invulnerability so
       // probes can observe full bullet patterns without death-wipes

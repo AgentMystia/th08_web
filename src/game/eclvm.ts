@@ -1548,7 +1548,7 @@ export class StageRuntime {
     // bossTimer name. FUN_0041ed50 snapshots it to +0x2bc4 and advances it
     // for every occupied slot (all.c:14436-14439); body graze uses both.
     // DAT_0061c25c gates only this tail clock during a true global freeze.
-    if (!game.timeStopped && !game.isDialogueBlocking?.()) {
+    if (!game.timeStopped) {
       s.bossTimerPrevious = s.bossTimer;
       const rate = game.slowRate ?? 1;
       s.bossTimerFrac = (s.bossTimerFrac ?? 0) + rate;
@@ -3744,7 +3744,6 @@ export class StageRuntime {
       // op 160 (exe case 0x9f) calls FUN_0042dc6f(arg) — the cherry +
       // cherryPlus accumulator, NOT a spell-value award (spec-lasers.md
       // §4.13 corrected the old TH07-TODO guess).
-      case 160: game.awardCherry?.(v.i32(a)); return null;
       default:
         warnOnce(`op${op}`, `unhandled ECL op ${op} (sub ${ctx.subId})`);
         return null;

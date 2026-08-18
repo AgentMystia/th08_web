@@ -104,7 +104,7 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
     bomb: { timer: scene.playerObj.bombTimer },
     graze: scene.graze,
     pointItems: scene.pointItems,
-    spellsCaptured: scene.cherry?.spellsCaptured ?? scene.runState?.spellcardsCaptured ?? 0,
+    spellsCaptured: scene.runState?.spellcardsCaptured ?? 0,
     playerBullets: scene.playerBullets.length,
     playerBulletDump: scene.playerBullets.slice(0, 8).map((b) => ({
       x: Math.round(b.x),
@@ -115,39 +115,6 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
       vx: Number(b.vx.toFixed(2)),
       vy: Number(b.vy.toFixed(2))
     })),
-    cherry: scene.cherry
-      ? {
-          c: scene.cherry.cherry,
-          max: scene.cherry.cherryMax,
-          plus: scene.cherry.cherryPlus,
-          border: scene.cherry.borderTimer,
-          pending: scene.cherry.borderPending,
-          message: scene.borderMessage ? { ...scene.borderMessage } : null,
-          clearWave: scene.borderClearWave ? { ...scene.borderClearWave } : null
-        }
-      : null,
-    th08: scene.runState
-      ? {
-          youkaiGauge: scene.runState.youkaiGauge,
-          clockTime: scene.runState.clockTime,
-          timeOrbs: {
-            current: scene.runState.currentTimeOrbs,
-            total: scene.runState.totalTimeOrbs,
-            stage: scene.runState.stageTimeOrbs
-          },
-          pointItemValue: scene.runState.pointItemValue,
-          pointItemsCollected: scene.runState.pointItemsCollected,
-          pointItemExtends: scene.runState.pointItemExtends,
-          nextExtendThreshold: scene.runState.nextPointItemExtendThreshold
-        }
-      : null,
-    std: {
-      frame: scene.runtime.std.frame,
-      animationFrame: scene.runtime.std.animationFrame,
-      paused: scene.runtime.std.paused,
-      primary: scene.runtime.std.primaryAnm ? { ...scene.runtime.std.primaryAnm } : null,
-      secondary: scene.runtime.std.secondaryAnm ? { ...scene.runtime.std.secondaryAnm } : null
-    },
     // PLAN.md Phase 0: full-pool bullet type histogram keyed `sprite:offset`
     // (RENDER-001/VM-001 evidence) — the capped bulletDump under-samples
     // dense boss patterns.
