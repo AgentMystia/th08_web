@@ -849,3 +849,30 @@ a2=0.1963),每发带 **EX opcode 64(0x40 转向)**:arg3=40/50/60/70(转向
 3. 然后 graze 步进与 ins_66 曲线弹(与 EX 曲线同属转向族)。
 
 STAGE 1 仍 DIVERGED(score 1238237/graze 159/items 30/lives −1),如实。
+
+## 2026-08-19(六)——重大结构发现:FUN_00422c40 运动消费者(修正此前误判)
+
+**08f7169 的"ins_65/66 是记账不移动"结论是错的**(我的 grep 漏检):真正
+的消费者是 **FUN_00422c40**(解释器尾部 0x41eca7 每 tick 调用),按
+flags 位 12-13(+0x3324>>0xc & 3)分派:
+
+- **case 1(0x1000,ins_65)**:angle(+0x2d94) += angVel(+0x2d98)·scale;
+  speed(+0x2da8) += accel(+0x2dac)·scale;velocity=sincos;**无镜像翻转**;
+  若停止计时器(+0x2de8)>0 则倒数,归零清位停 motion。
+- **case 2(0x2000,ins_66 anmId≥1)**:计时器倒数, t = 1−elapsed/total
+  (SetCurrent(anmId) 后 Subtract——elapsed 从 anmId 递减,t 从 0→1),
+  经 spriteOffset&7(bits 14-16)选缓动公式(同 ANM formula 表),每 tick
+  delta = (origin 快照+总位移·ease(t)) − pos(追踪式),到期落位
+  origin+total、清 delta、清 motion 位。
+- case 3(0x3000):+0x2d9c/2db0 速度系 + origin(+0x2dd0) 的轨道族。
+
+实测:缓动落地实现仍带回 f828 族(机枪妖精下落+漂移期齐射仍接触);
+镜像 X 翻转开/关两版都有早接触(f822/f828)——**缓动追踪的精确 f32 路径
+或漂移镜像语义仍差一环**。已回退到提交态(静态妖精,f3301/f3952,
+score 1238237)。下一会话从 case-2 的逐 tick delta 精确重建入手
+(追踪式 delta 每帧全量施加=位置精确等于 origin+total·ease(t),与端口
+mode-2 插值的 f32 累加路径不同!)。
+
+另:runtime subId ↔ ECL 表索引非恒等(sub15↔表 idx21)——dump 时必须用
+名字表映射;boss 环相位 sub = 表 idx21(t=200 首环+t=300 jump 循环)。
+STAGE 1 仍 DIVERGED,如实。
