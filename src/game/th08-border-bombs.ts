@@ -13,10 +13,13 @@
  *
  * A deathbomb INVERTS the side before adding +2 (0x44c7f7: fe0 = 1 - focus),
  * so casting focused runs table[2] and casting unfocused runs table[3].
- * 0x40be30 takes two counts: param_5 arms the frame-limit timer at
- * player+0xe2af4 (260/200/260/300 — the durations below), while param_4
- * lands at player+0xfe4 and is the GAUGE denominator (200/150/200/250):
- * 0x44c81b-0x44c850 pays ±26000/param_4 per frame, bypassing the lock.
+ * 0x40be30 takes two counts, and BOTH are live clocks. param_4 lands at
+ * player+0xfe4 and is the ACTIVE bomb length: the machine's end compare
+ * (0x44c667), the deathbomb's staggered-burst gate (param_4-0x28-i) and
+ * the type-0 aura-burst gate (param_4-0x1e) all read it, and the gauge
+ * pays ±26000/param_4 per frame (0x44c81b-0x44c850, lock bypassed).
+ * param_5 arms the separate, LONGER timer at player+0xe2af4 — the
+ * post-cast invulnerability that outlives the active bomb.
  *
  * Every constant below carries its native site. Slot damage fields that the
  * decompile shows explicitly are kept verbatim; the attack-slot pool plumbing
@@ -43,11 +46,16 @@ export interface Th08BombHost {
 
 export type Th08BombType = 0 | 1 | 2 | 3;
 
-// 0x40be30's param_5: the frame-limit timer armed at player+0xe2af4.
-const DURATION: Record<Th08BombType, number> = { 0: 260, 1: 200, 2: 260, 3: 300 };
-// 0x40be30's param_4 → player+0xfe4: the per-frame gauge payment's
-// denominator (0x44c81b: ±26000/param_4 — NOT the duration).
-const GAUGE_DENOMINATOR: Record<Th08BombType, number> = { 0: 200, 1: 150, 2: 200, 3: 250 };
+// 0x40be30's param_4 → player+0xfe4: the ACTIVE bomb length. The state
+// machine ends the callback when the count-up reaches it (0x44c667), the
+// deathbomb's staggered bursts fire at (param_4-0x28-i), and the type-0
+// aura-burst gate is (param_4-0x1e).
+const DURATION: Record<Th08BombType, number> = { 0: 200, 1: 150, 2: 200, 3: 250 };
+// 0x40be30's param_5: the separate, LONGER clock at player+0xe2af4 — the
+// post-cast invulnerability that outlives the active bomb.
+export const TH08_BOMB_INVULN: Record<Th08BombType, number> = { 0: 260, 1: 200, 2: 260, 3: 300 };
+// The gauge denominator is the same param_4 (±26000 per active frame).
+const GAUGE_DENOMINATOR: Record<Th08BombType, number> = DURATION;
 
 const F32 = Math.fround;
 const PI_F = F32(Math.PI);
@@ -64,7 +72,7 @@ const CHARGE_ACCEL_ODD = F32(1.2);
 const SEEK_START_SPEED = 8;
 const SEEK_MAX_SPEED = 10;
 const SEEK_MIN_SPEED = 1;
-const SEEK_DIVISOR = 4;
+const SEEK_DIVISOR = 8; // _DAT_004b4300
 // 0x40c010: seek auras track each orb (r64 dmg 200 pool entry + the r128
 // clear pool entry); an orb detonates once its aura settles 200 damage.
 const ORB_AURA_DAMAGE = 200;
@@ -99,6 +107,8 @@ export class Th08BorderBomb {
   private orbs: BombOrb[] = [];
   private ended = false;
   private bombardmentArmed = false;
+  // Next bombardment slot index (16+, the 0x40c910 latch at bombmgr+0x14).
+  private bombardments = 0;
   private castOrigin = { x: 0, y: 0 };
 
   constructor(type: Th08BombType, castX: number, castY: number) {
@@ -207,12 +217,6 @@ export class Th08BorderBomb {
           }
           // The r128 clear entry tracks each orb every seek frame.
           host.clearBullets(orb.x, orb.y, 128);
-          // Aura settles >= 200 damage (slot +0x30 vs +0x34): the aura's
-          // per-frame addAttackSlot below feeds auraDamage.
-          if (t >= this.duration - 30) {
-            this.burstOrb(host, orb, BURST_DAMAGE_NORMAL);
-            continue;
-          }
         } else {
           // Phase B spiral: angle wobble by parity, radius grows 3.2/frame.
           orb.angle = normalizeAngle(orb.angle, (i & 1) === 0 ? SPIN_EVEN : SPIN_ODD);
@@ -224,9 +228,17 @@ export class Th08BorderBomb {
         orb.burstAge++;
         if (orb.burstAge > 29) orb.dead = true; // dword 1 > 0x1d
       }
+      // FUN_0040b8e0(param_4 - 0x1e) gates BOTH phases (0x40c036 outer
+      // compare): every still-live orb force-bursts in the last 30 frames.
+      if (orb.state === 1 && t >= this.duration - 30) {
+        this.burstOrb(host, orb, BURST_DAMAGE_NORMAL);
+        continue;
+      }
       if (orb.state === 1) {
         orb.x = F32(orb.x + orb.vx);
         orb.y = F32(orb.y + orb.vy);
+        // Aura settles >= 200 damage (slot +0x30 vs +0x34): the aura's
+        // per-frame addAttackSlot feeds auraDamage.
         orb.auraDamage += host.addAttackSlot(orb.x, orb.y, 64, ORB_AURA_DAMAGE);
         if (orb.state === 1 && orb.auraDamage >= ORB_AURA_DAMAGE) {
           this.burstOrb(host, orb, BURST_DAMAGE_NORMAL);
@@ -266,10 +278,17 @@ export class Th08BorderBomb {
         x: F32(320 + Math.random() * 64 + 32),
         y: F32(384 + Math.random() * 64 + 32)
       };
+      // FUN_004069f0(slot16+n, 0x14): the bombardment's own orb VM (the
+      // 20-frame 4x flash family), plus effects 0x31/0x37 and the r64
+      // damage-400 slot at the target (0x40d047-0x40d0a0).
+      // The 0x40c910 latch writes literal 1 after each spawn: slot 16 for
+      // the first bombardment, then slot 17 for every following one.
+      host.orbVm(16 + (this.bombardments > 0 ? 1 : 0), 0x14);
       host.effectVm(0x31, fallback.x, fallback.y, 1, 0);
       host.effectVm(0x37, fallback.x, fallback.y, 1, 0);
       host.addAttackSlot(fallback.x, fallback.y, 64, 400);
       host.playSfx(0x0f, fallback.x);
+      this.bombardments++;
     }
   }
 

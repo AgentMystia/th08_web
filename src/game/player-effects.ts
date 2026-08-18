@@ -33,6 +33,10 @@ export interface PlayerEffectHandle {
   // Swap the running script (exe FUN_00403f50 re-arm — e.g. SakuyaA's
   // knives switch to the impact animation on their first hit).
   setScript(id: number): void;
+  // Fire an ANM interrupt on the entry's live VM (player00's bomb-orb
+  // script 19 waits through its pulse loop and label 1 runs the authored
+  // 6x-balloon burst/fade — FUN_00407120 writes VM+0x1fe natively).
+  interrupt(label: number): void;
   release(): void;
 }
 
@@ -82,6 +86,9 @@ export class PlayerEffects {
       setScript: (id: number) => {
         entry.scriptId = id;
         entry.runner = null; // re-arms on the next update
+      },
+      interrupt: (label: number) => {
+        entry.runner?.interrupt(label);
       },
       release: () => {
         entry.age = entry.ttl = 0;

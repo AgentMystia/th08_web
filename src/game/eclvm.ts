@@ -4238,9 +4238,15 @@ export class StageRuntime {
     }
     // Op 105 is an immediate PlaySE. A callback's own op105 plays separately
     // when that sub runs; this is the generic enemy-death request.
-    // Exe death SE (disasm @ 0x420379): slot 2 + (counter & 1) — plain
+    // TH07 death SE (disasm @ 0x420379): slot 2 + (counter & 1) — plain
     // kills alternate se_enep00's two volume slots (-1200/-1500 mB).
-    game.playSfx(2 + (e.id & 1));
+    // TH08's own death site (0x42d9c0) also computes (counter%2)+2, but the
+    // TH08 id table de-duplicated the doubled pair: enep00 is id 1 and ids
+    // 2/3 would be se_pldead00/se_power0 (the audibly-wrong miss sound).
+    // The original's fairy kill sounds as se_enep00 (the wav is
+    // byte-identical across both games), so the TH08 path plays id 1 —
+    // flagged: the +2 bank-site discrepancy is not resolved statically.
+    game.playSfx(this.ecl.version === 8 ? 1 : 2 + (e.id & 1));
     if (mode === 3 && s.deathAnm1 >= 0) {
       game.spawnEffectParticles(s.deathAnm1, e.x, e.y, 3, 0xffffffff);
     }

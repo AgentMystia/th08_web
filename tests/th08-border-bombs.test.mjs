@@ -9,7 +9,7 @@ execSync(
   '--outfile=tests/.build/th08-border-bombs.mjs --log-level=silent'
 );
 const mod = await import('../tests/.build/th08-border-bombs.mjs');
-const { Th08BorderBomb } = mod;
+const { Th08BorderBomb, TH08_BOMB_INVULN } = mod;
 
 // A recording host: attack slots settle damage immediately against a
 // configurable enemy list; every other request lands in a log.
@@ -42,11 +42,17 @@ function makeHost(enemies = [], targetPos = null) {
   };
 }
 
-test('durations follow the cast helper 0x40be30 (260/200/260/300)', () => {
-  assert.equal(new Th08BorderBomb(0, 0, 0).duration, 260);
-  assert.equal(new Th08BorderBomb(1, 0, 0).duration, 200);
-  assert.equal(new Th08BorderBomb(2, 0, 0).duration, 260);
-  assert.equal(new Th08BorderBomb(3, 0, 0).duration, 300);
+test('durations follow be30 param_4 (active) and param_5 (invuln)', () => {
+  // The ACTIVE length is param_4 (player+0xfe4, the end compare at
+  // 0x44c667); the LONGER param_5 clock is the post-cast invulnerability.
+  assert.equal(new Th08BorderBomb(0, 0, 0).duration, 200);
+  assert.equal(new Th08BorderBomb(1, 0, 0).duration, 150);
+  assert.equal(new Th08BorderBomb(2, 0, 0).duration, 200);
+  assert.equal(new Th08BorderBomb(3, 0, 0).duration, 250);
+  assert.equal(TH08_BOMB_INVULN[0], 260);
+  assert.equal(TH08_BOMB_INVULN[1], 200);
+  assert.equal(TH08_BOMB_INVULN[2], 260);
+  assert.equal(TH08_BOMB_INVULN[3], 300);
 });
 
 test('type 0 cast spawns the sixteen-orb ladder at -pi + i*pi/8', () => {
@@ -103,9 +109,9 @@ test('type 2 deathbomb parks orbs at speed 0 and bursts them staggered', () => {
   assert.ok(bomb.orbAt(0) != null && bomb.orbAt(0).speed === 0, 'dword 2 = 0 at cast');
   for (let i = 0; i < 30; i++) bomb.tick(host, 192, 300, true);
   assert.equal(bomb.orbAt(0).state, 1);
-  // Orb 0's forced burst lands at duration-0x28-0 = 220; run well past it.
-  for (let i = 0; i < 200; i++) bomb.tick(host, 192, 300, true);
-  assert.ok(bomb.frame >= 210);
+  // Orb 0's forced burst lands at param_4-0x28-0 = 160; run well past it.
+  for (let i = 0; i < 175; i++) bomb.tick(host, 192, 300, true);
+  assert.ok(bomb.frame >= 170);
   const orb0 = bomb.orbAt(0);
   assert.ok(orb0 === null || orb0.state === 2);
 });
@@ -145,7 +151,7 @@ test('the bomb ends exactly at its duration', () => {
   const bomb = new Th08BorderBomb(1, 192, 200);
   const host = makeHost();
   bomb.cast(host, 192, 200);
-  for (let i = 0; i < 199; i++) bomb.tick(host, 192, 200, true);
+  for (let i = 0; i < 149; i++) bomb.tick(host, 192, 200, true);
   assert.ok(bomb.active);
   bomb.tick(host, 192, 200, true);
   assert.ok(!bomb.active);

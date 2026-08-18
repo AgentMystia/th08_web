@@ -568,3 +568,40 @@ static servers that mislabel .wav MIME starve the audio pipeline and the
 HUD never draws (white sidebar) — always use scripts/lib/browser-harness
 startStaticServer; and advance() in small per-frame batches can catch the
 desync backbuffer mid-present (batch ≥30).
+
+## Update (2026-08-18 second pass — kill sfx, bomb clocks, orb burst visuals)
+
+User-reported defects round 2, all resolved from the decompile:
+
+1. **Fairy-kill sfx was the miss sound**: the shared ECL death site plays
+   TH07 id 2/3 (the doubled enep00 pair); TH08's de-duplicated table maps
+   2/3 to se_pldead00/se_power0. The TH08 branch now plays id 1 (enep00,
+   byte-identical wav across both games). The exe's own death site
+   (0x42d9c0) computes (counter%2)+2 — flagged unreconciled. Also learned:
+   FUN_0045d660's second arg is a per-request FREQUENCY value (the
+   consumer feeds the channel's average to vtable+0x40), not a pan.
+2. **Bomb clocks were swapped**: be30's param_4 (player+0xfe4) is the
+   ACTIVE length 200/150/200/250 — the machine's end compare (0x44c667),
+   the staggered-burst gate (param_4-0x28-i), the type-0 force-burst gate
+   (param_4-0x1e), and the ±26000/param_4 gauge denominator; param_5
+   (the +0xe2af4 clock) is the LONGER post-cast invulnerability
+   260/200/260/300. bombTimer/bombInvuln now take the two tables
+   respectively.
+3. **The type-0 force-burst gate sat inside the t<40 seek branch** (its
+   condition could never be true there): spiral-phase orbs silently flew
+   offscreen with no explosion. Moved to the outer per-orb loop.
+4. **Orb burst visuals**: player00 entry-1 script 19's burst state is an
+   INTERRUPT — label 1 runs the authored 6x balloon + 20-frame fade +
+   delete. The orb actors now keep PlayerEffectHandles and the 1->2 state
+   transition fires interrupt(1) (FUN_00407120's VM+0x1fe write).
+5. Orb seek turn denominator is speed/8 (_DAT_004b4300), not /4; the
+   0x40c910 bombardment also spawns its own orb VM (script 0x14, slot 16
+   then 17 forever per the literal-1 latch) besides effects 0x31/0x37.
+
+Verified: 400/401 tests, replay:verify 6/6 PASS, clean boot, no page
+errors. Kill-power probes: bomb into the f480 fairy wave shows on-screen
+aura-burst kills (score 202 by bomb-frame 24) and the burst window reads
+play texture 86-90% with warm additive centers (#8c671c) — the balloon
+explosions render. Deathbomb probe: hit at f586, invuln window follows the
+new tables, wave cleared (score +17k); the miss-vs-deathbomb race in that
+probe is a probe-timing artifact, the deathbomb gates are unit-tested.

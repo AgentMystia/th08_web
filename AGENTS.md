@@ -121,9 +121,15 @@ a working host.
   to etama ARCHIVE script indices (5→37, 6→38, 12→44) — so TH08 effects
   run on an etama-bound layer; the old host fed those indices to a
   player00-bound layer and every bomb/effect visual silently culled.
-- **Gauge drain denominator** is be30's param_4 at player+0xfe4
-  (200/150/200/250 by type), NOT the duration (param_5, the +0xe2af4 frame
-  limit): ±trunc(26000/param_4) per frame (0x44c81b-0x44c850).
+- **Bomb clocks split**: be30's param_4 (player+0xfe4) is the ACTIVE
+  length 200/150/200/250 — the machine's end compare (0x44c667), the
+  staggered-burst gate (param_4-0x28-i), the type-0 force-burst gate
+  (param_4-0x1e, which must gate BOTH the seek and spiral phases), and the
+  gauge denominator (±trunc(26000/param_4), 0x44c81b). param_5 arms the
+  separate LONGER invuln clock at +0xe2af4 (260/200/260/300). The orb
+  burst fires the orb VM's interrupt 1 (player00 script 19: 6x balloon,
+  20-frame fade, delete); the orb seek's turn denominator is speed/8
+  (_DAT_004b4300).
 - **ANM interp channels run on a monotonic tick**, not the script clock
   (exe AnmVm::interpCurrentTimers advance per tick and ignore
   currentTimeInScript resets): op5 loop jumps and interrupt entries no
@@ -148,9 +154,12 @@ v1.00d decompilation, replacing inherited-TH07 or speculative behavior:
   table at player+0x1000 = rdata 0x4c7ad0 team block {0x40c010 unfocused,
   0x410c40 focused, 0x40c910/0x410fe0 deathbombs, 0x40d100 last spell} —
   NOT the 0x40c820 youkai block (that table at +0x1014 is never
-  dispatched). Durations 260/200/260/300 (0x40be30). Deathbomb inverts the
-  side and costs 2 bombs when stocked. The old Th08BorderBombSim (null
-  damage, invented geometry) is deleted.
+  dispatched). 0x40be30's param_4 (player+0xfe4) is the ACTIVE length
+  200/150/200/250 (the end compare, the burst gates, and the ±26000 gauge
+  denominator); param_5 (the +0xe2af4 clock) is the LONGER invulnerability
+  260/200/260/300. Deathbomb inverts the side and costs 2 bombs when
+  stocked. The old Th08BorderBombSim (null damage, invented geometry) is
+  deleted.
 - 決死結界: SHT 18-frame window; FUN_0044d2c0's white 768x896 flash draws
   while it runs.
 player00.anm entry 1 (spriteBase 44, on-disk scripts 19-22) holds the bomb
@@ -694,6 +703,17 @@ deployment gate rather than a manual-only checkpoint.
 
 
 ## 7. Approximations registry (known, flagged, improvable)
+
+TH08-slice additions (2026-08-18 second presentation pass, inline comments at the sites):
+- Enemy-death SE: the exe's death site (0x42d9c0) computes (counter%2)+2,
+  which under the .data 0x4c81b0 file table would select
+  se_pldead00/se_power0 (the audible miss sound). The original's fairy kill
+  sounds as se_enep00 (the wav is byte-identical across TH07/TH08), so the
+  TH08 path plays id 1 — the +2 bank-site discrepancy is unreconciled
+  statically.
+- FUN_0045d660's second argument tunes playback FREQUENCY (the consumer's
+  vtable+0x40 call receives the channel's queued-value average); the port's
+  audio bus has no per-request pitch control and ignores it.
 
 TH08-slice additions (2026-08-18 presentation pass, inline comments at the sites):
 - Declaration banner hold is bounded: face_cdbg's authored hold loops (op5

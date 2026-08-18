@@ -16,11 +16,11 @@ import {
   CHARACTERS, Player, bombCherryDrainPerFrame, playerShotAllocationAllowed,
   type CharacterId, type PlayerBullet
 } from './player';
-import { PlayerEffects } from './player-effects';
+import { PlayerEffects, type PlayerEffectHandle } from './player-effects';
 import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoothBlendColor } from './cherry';
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
-import { Th08BorderBomb, type Th08BombHost } from './th08-border-bombs';
+import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-border-bombs';
 import { Th08SpellDeclaration, th08BombSpellName, archiveScript } from './th08-declaration';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
@@ -692,8 +692,10 @@ export class StageScene implements GameHost {
   // Frames the shot cycle has stayed disarmed (the idle-drift 30-frame gate,
   // 0x44bf22 Compare(timerB, 0x1e)).
   private th08IdleFrames = 0;
-  // Bomb-orb visual follows for the PlayerEffects entries.
-  private th08BombOrbActors: { x: number; y: number; angle: number; state: number }[] = [];
+  // Bomb-orb visual follows for the PlayerEffects entries; each actor
+  // keeps its VM handle so the burst transition can fire the authored
+  // label-1 balloon/fade interrupt (player00 script 19).
+  private th08BombOrbActors: { x: number; y: number; angle: number; state: number; handle?: PlayerEffectHandle }[] = [];
   // Live player spell-card declaration (bomb cut-in), FUN_00415d60's four
   // VMs; retires itself once every script has removed.
   private th08Declaration: Th08SpellDeclaration | null = null;
@@ -2799,8 +2801,10 @@ export class StageScene implements GameHost {
       this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
       this.th08BombOrbActors = [];
       this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
+      // param_4 (active length) drives bombTimer; the separate param_5
+      // clock at player+0xe2af4 is the LONGER invulnerability window.
       p.bombTimer = this.th08Bomb.duration;
-      p.bombInvuln = this.th08Bomb.duration;
+      p.bombInvuln = TH08_BOMB_INVULN[p.th08BombType];
       // FUN_0040be30 → FUN_00415d60: every bomb declares its spell card
       // (portrait + banner VMs + the rdata name, sfx id 14 se_lazer01);
       // the bomb callback then queues sfx id 13 (se_lazer00) itself
@@ -2944,11 +2948,14 @@ export class StageScene implements GameHost {
     if (!sim) return;
     const p = this.playerObj;
     sim.tick(this.th08BombHost(), p.x, p.y, p.shooting);
-    // Keep the orb visual actors on their simulation state.
+    // Keep the orb visual actors on their simulation state; the 1->2
+    // transition fires the orb VM's label-1 interrupt (the authored 6x
+    // balloon + 20-frame fade, FUN_00407120's VM+0x1fe write at 0x40c640).
     for (let i = 0; i < 16; i++) {
       const orb = sim.orbAt(i);
       const actor = this.th08BombOrbActors[i];
       if (orb && actor) {
+        if (actor.state === 1 && orb.state === 2) actor.handle?.interrupt(1);
         actor.x = orb.x;
         actor.y = orb.y;
         actor.angle = orb.angle;
@@ -3043,11 +3050,16 @@ export class StageScene implements GameHost {
         const actor = scene.th08BombOrbActors[index] ?? (scene.th08BombOrbActors[index] = {
           x: scene.playerObj.x, y: scene.playerObj.y, angle: 0, state: 1
         });
-        scene.playerEffects.spawn({ scriptId: script, x: actor.x, y: actor.y, follow: actor, ttl: 300 });
+        actor.state = 1;
+        actor.handle = scene.playerEffects.spawnHandle({
+          scriptId: script, x: actor.x, y: actor.y, follow: actor, ttl: 300
+        });
       },
       playSfx(id, arg) {
+        // FUN_0045d660's second arg tunes the playback frequency (the orb x
+        // position); the port's audio bus has no per-request pitch control.
         void arg;
-        scene.playSfx(id === 0x0d ? 14 : id === 8 ? 8 : 30);
+        scene.playSfx(id);
       }
     };
   }
