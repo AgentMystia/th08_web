@@ -775,3 +775,38 @@ scripts/native-trace.mjs 已重写（去 RNG 断点 + 异常穿通 + P/V/B/S 事
   score 690229/7376015、pointItems 14/61、graze 123/536、lives −1/6、
   RNG 113890 vs ≡32816。收敛未完成;下一钥匙 = ins_66 武装消费者
   （影响 611 族全部齐射几何）。
+
+## 2026-08-19（三）——链序根因:首分歧推进到 f3952
+
+**第三个根因:TH08 calc chain 降序执行**(提交 11a420f)。RegisterChain
+优先级 player=9(0x44c2ef)/EnemyManager=11(0x42c5d7)/BulletManager=14
+(0x4311f0),链按**降序**跑:弹→敌→玩家。敌人 FIRE 读的 GameManager 玩家
+镜像(0x17d61ac)因此是**帧首快照**——每发瞄准弹按玩家上一帧结束位置计算。
+对准活位置产生随飞行距离增长的幻影接触(f2182:300px 处 1.4px;f3259 族同),
+一帧镜像整族清除。同一序向也解释 spawn-state 的 +2 parity(敌人 pass 生成的
+弹要到下一帧的弹 pass 才首次 tick)。
+
+**ins_65/ins_66 语义修正**(提交 08f7169):全 .text 扫描证明 +0x2d94/
++0x2da0 无任何移动器读取(仅 var 访问器 0x41f9b0/0x42067f)——两 op 都是
+var 记账;敌人静止在时间轴出生位。机枪族(611、3513 同模板)接触全消。
+
+会话累计收敛轨迹:**f829 → f873 → f2182 → f3952**;score 441k → 1,048,449;
+pointItems 8 → 27;lives −1 → 4(玩家存活到 boss 段);bombs/extends/
+nextExtend 三字段 exact。
+
+**下一钥匙**(按序):
+1. f3952:boss 段大弹(sprite 7,flags 0 无 spawn 态,114 tick 长飞,dy 差
+   1.9px 进箱)——同"长飞 grazing"类,查 owner 5746/15(boss 相位)的齐射
+   几何与计时。
+2. graze 64 vs 536 双重缺口:(a) 步进惯例——原生每事件 +1..+3
+   (FUN_00406d10/d40 读 manager 阈值 u16 +0x3ddfc/+0x3de00,两谓词均无
+   .text 写入者,阈值疑似 0 ⇒ Lunatic 全程 +3,Lunatic 事件数≈178 与
+   536=178×3 吻合,未定案);(b) 缺失弹幕(armed-fire 曲线弹未实现)。
+3. ins_66 武装态(+0x2dc4 总位移/+0x2dd0 快照/+0x2ddc 计时器/flags 0x2000)
+   的逐 tick 消费者仍未恢复——影响除机枪外的 ins_66 使用者与缺失弹幕。
+4. rank 轨迹已对齐(survival 阶梯 lives=6 时 960 tick +1;炸弹 −200;
+   miss 钳制到 8)。
+
+验证:check/build/test(105/105)绿;replay:verify:th08 仍 DIVERGED
+(f3952 首死;score 1048449/7376015、pointItems 27/61、graze 64/536、
+lives 4/6)。
