@@ -900,3 +900,24 @@ score 1238237)仍为实证最优。
 
 STAGE 1 仍 DIVERGED(如实;score 1238237/graze 159/items 30/
 lives −1/RNG DIFF)。
+
+## 2026-08-19(八)——f3952 = f3301 级联(判定性);EX 机构核实正常
+
+**无敌直通反解(判定性)**:在无敌玩家路径下,f3952 直线环的全部偏差
+变体(列角加法序、2π 预乘、行除数 c2/c2−1、aim 滞后 ±1、开火 ±1、
+角度 ±0.01)**零接触**——f3952 是 f3301 死亡后重生路径的级联!
+真实首分歧仅剩 f3301 一处;清掉它,后续物品/分数/lives 应连锁收窄。
+
+**f3301 完整取证**:杀手= f3054 第 6 组齐射(mode-0 20×1,s1 由 rank
+lerp,f1=1.5、interval=70、f0=−π/2、maxTimes=1),spawn f3055;
+减速段(speed·(1−elapsed/interval))、转向(angle+=f0, speed:=f1)、
+一次性消费(dirTimes=1)全部按 FUN_00432460 工作——机构无误,
+接触在转后直线段(speed 1.5, angle 1.3895, hit (168,385.6) f3301,
+age 235)。剩余偏差源:转前 70 tick 减速段的 f32 累积路径
+(native: elapsed 含分数 FUN_0040b8c0,商/积的 f32 阶梯次序)、
+或第 6 组齐射的 rank-lerp 速度窗口(fireRankSpeed lo/hi 未对过表)。
+
+下一会话(单一目标):对 f3054 第 6 组逐 tick 重建减速段
+(native 公式 speed−(elapsed+frac)·speed/interval 的精确 f32 次序),
+对照 TH08_BULLET_PROTOTYPES 与 ins_111/112/113 的 fireRank 窗口,
+清除 f3301 → 重跑全量 verifier。
