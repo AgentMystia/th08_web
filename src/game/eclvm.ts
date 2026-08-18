@@ -243,14 +243,10 @@ const TH08_OP_REMAP: Record<number, number> = {
   37: 40,                           // normalize angle in place
   40: 28, 41: 29, 42: 30, 43: 31, 44: 32, 45: 33,
   46: 34, 47: 35, 48: 36, 49: 37, 50: 38, 51: 39, // 12 conditional jumps
-  // NOT 66: TH08 raw op 66 (label 0x41) is fireBullet-curved (all.c:11530-
-  // 11562: anmId<1 writes motion angle/speed + flags 0x1000 + timer 0, else
-  // FUN_00420d10 arms a delayed fire: origin=render pos, vel=dir·speed·
-  // anmId, timer=anmId, flags 0x2000|spriteOffset<<14) — NOT TH07's timed
-  // move. Remapping it made every ins_66 enemy perform a phantom
-  // (duration=anmId, mode=spriteOffset) move instead of arming the fire
-  // (stage-1 Sub1's ins_66(60,4,π/2,3.2) displaced the machine-gun fairy by
-  // a full 60·3.2=192px entry slide).
+  // NOT 66: handled by executeTh08 case 66 (timed velocity move — see there);
+  // it is NOT TH07 op 54's mode-interpreted form (the old remap fed
+  // duration=anmId/mode=spriteOffset into TH07's mode 0-3 switch and landed
+  // the machine-gun fairy 61px off).
   70: 48, 71: 50,                   // angular velocity, acceleration
   93: 93, 94: 92,                   // createEnemy 3D relative / absolute
   95: 94,                           // kill sweep (same FUN(8000,0) call)
@@ -4768,6 +4764,35 @@ export class StageRuntime {
         s.heading = s.angle;
         s.speed = gf(4);
         s.moveMode = 1;
+        // The label-0x40 write (all.c:11509-11528) also clears the stop
+        // timer (+0x2de8 = 0 + ZunTimer::SetCurrent(0)): an op-66 timed move
+        // that already expired must not kill this velocity on its next tick.
+        s.orbitDuration = 0;
+        s.orbitLeft = 0;
+        return null;
+      }
+      case 66: {
+        // ins_66, dispatcher label 0x41 (all.c:11530-11562). arg0 < 1 is the
+        // plain label-0x40 velocity write. arg0 >= 1 is FUN_00420d10's armed
+        // state: velocity dir(arg2)·speed(arg3)·arg0 into +0x2dc4, origin
+        // snapshot into the var-readable 10058-60 bank, stop timer +0x2de8 =
+        // arg0, flags 0x2000 | spriteOffset<<14. The consumer that turns the
+        // armed vector + timer into per-tick motion is NOT yet recovered
+        // (plain linear dir·speed·arg0-ticks was tried: it drove the
+        // machine-gun fairy through a 192px entry drop and produced EARLIER
+        // phantom contacts, f634 vs f873 without any move — so the armed
+        // motion is not that shape). Until the consumer is pinned, arm
+        // nothing (the fairy stays at its timeline spawn position, the
+        // empirically closest variant) and warn once.
+        const anmId = gi(0);
+        if (anmId < 1) {
+          s.angle = normalizeNativeAngleF32(gf(8));
+          s.heading = s.angle;
+          s.speed = gf(12);
+          s.moveMode = 1;
+          s.orbitDuration = 0;
+          s.orbitLeft = 0;
+        }
         return null;
       }
       case 67: { // aimed move clamped into the op-75 rect (FUN_00422020)
