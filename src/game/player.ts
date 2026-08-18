@@ -4,96 +4,36 @@ import { TH08_DATA } from '../data/th08-data';
 import { clamp } from '../core/util';
 import type { InputFrame } from '../core/input';
 
-// Player implementation driven by the original ply*.sht data files: movement
-// speeds, hitbox, item radii, PoC line, and the per-power shooter tables all
-// come from the game data. Bomb behavior is a functionally-accurate first
-// pass (damage/duration/invulnerability), visuals to be refined.
+// TH08 (Imperishable Night) player: the Border Team is the single
+// supported character. Movement speeds, hitbox, item radii, PoC line, and
+// the per-power shooter tables all come from the embedded ply00a/ply00as
+// .sht data; the bomb is the TH08 declaration machine (tryBomb latches the
+// type, StageScene applies duration/invuln from the v1.00d tables).
 
-export type CharacterId =
-  | 'reimuA' | 'reimuB' | 'marisaA' | 'marisaB' | 'sakuyaA' | 'sakuyaB'
-  | 'reimuYukari';
+// The Border Team is the only constructible character. The three TH07 ids
+// below stay in the union ONLY because stage-scene.ts (not owned by this
+// cleanup) still compares against them in its bomb clear-fade guards; they
+// have no CHARACTERS row and can never select other data.
+export type CharacterId = 'reimuYukari' | 'reimuA' | 'marisaB' | 'sakuyaB';
 
-// Th07.exe FUN_0043a820 @ 0x43a850-0x43a86b gates FUN_0043a100 only when
-// all three predicates hold: bomb-active, character family == Marisa, and
-// shot type == B. DAT_00625625/26 are the family/type bytes, so every other
-// shot continues allocating normally during a bomb (Phantasm native slot 50
-// at PRE10433 is a ReimuA shot born 26 ticks into the active bomb).
-export function playerShotAllocationAllowed(character: CharacterId, bombActive: boolean): boolean {
-  return !bombActive || character !== 'marisaB';
+// TH07's MarisaB-only shot-allocation gate (Th07.exe FUN_0043a820 @
+// 0x43a850-0x43a86b) is deleted along with the TH07 characters: TH08
+// allocates player shots normally while a bomb is active. Kept as an
+// export because stage-scene.ts (read-only here) still routes its fire
+// gate through it.
+export function playerShotAllocationAllowed(_character: CharacterId, _bombActive: boolean): boolean {
+  return true;
 }
 
-export const CHARACTERS: Record<CharacterId, { family: 0 | 1 | 2; name: string; shtBase: string; anmKey: 'player00' | 'player01' | 'player02' }> = {
-  // The deathbomb window (frames you may still bomb after being hit before
-  // actually dying) is read from each character's .sht data (deathbombWindow,
-  // int32 at header offset 8) rather than hardcoded here: it's 15 for Reimu,
-  // 8 for Marisa, 6 for Sakuya, matching independently-documented PCB values.
-  reimuA: { family: 0, name: 'Reimu A', shtBase: 'ply00a', anmKey: 'player00' },
-  reimuB: { family: 0, name: 'Reimu B', shtBase: 'ply00b', anmKey: 'player00' },
-  marisaA: { family: 1, name: 'Marisa A', shtBase: 'ply01a', anmKey: 'player01' },
-  marisaB: { family: 1, name: 'Marisa B', shtBase: 'ply01b', anmKey: 'player01' },
-  sakuyaA: { family: 2, name: 'Sakuya A', shtBase: 'ply02a', anmKey: 'player02' },
-  sakuyaB: { family: 2, name: 'Sakuya B', shtBase: 'ply02b', anmKey: 'player02' },
-  // TH08 Border Team: human reads ply00a, focused Yukari reads ply00as.
-  reimuYukari: { family: 0, name: 'Reimu & Yukari', shtBase: 'ply00a', anmKey: 'player00' }
-};
-
-// Th07.exe per-character bomb functions (exe-bombs.md §2, addresses
-// 0x407840-0x40cbf0): [duration, invulnTotal, speedMult] keyed by
-// character and focus-state AT CAST. invulnTotal = the exe's invuln
-// seed (already includes the grace beyond the bomb's own duration).
-const BOMB_PARAMS: Record<CharacterId, { unfocused: [number, number, number]; focused: [number, number, number] }> = {
-  reimuA:  { unfocused: [140, 200, 1.0], focused: [300, 360, 0.6] },
-  reimuB:  { unfocused: [140, 200, 1.0], focused: [190, 250, 0.4] },
-  marisaA: { unfocused: [200, 250, 1.0], focused: [260, 310, 0.4] },
-  // Th07.exe (v1.00b) FUN_0040a910 @ 0x40acb2 writes 0.4f for Master
-  // Spark. The focused Final Spark remains 0.2f (FUN_0040af70).
-  marisaB: { unfocused: [300, 300, 0.4], focused: [340, 390, 0.2] },
-  sakuyaA: { unfocused: [160, 210, 1.0], focused: [250, 290, 0.3] },
-  sakuyaB: { unfocused: [160, 260, 2.0], focused: [300, 420, 1.5] },
-  // Stage 1 evidence replay does not bomb; safe envelope until the exact
-  // v1.00d callback simulation is wired into the scene.
-  reimuYukari: { unfocused: [70, 200, 1.0], focused: [60, 120, 1.0] }
-};
-
-// Th07.exe FUN_00407740 @ 0x407740. Each bomb form supplies one float32
-// percentage and an EDX minimum-total Cherry loss; the helper difficulty-
-// scales the cast-time Cherry, divides both candidates by the form duration,
-// floors them to tens, and stores the larger per-frame drain at +0x16a2c.
-// The EDX immediates below were read directly at all twelve call sites:
-// 0x4079ab, 0x408458, 0x40910c, 0x409668, 0x409adc, 0x40a19f,
-// 0x40aade, 0x40b107, 0x40b5a7, 0x40bd11, 0x40c781, 0x40cece.
-const BOMB_CHERRY_DRAIN: Record<CharacterId, {
-  unfocused: [number, number]; focused: [number, number]
-}> = {
-  reimuA:  { unfocused: [0.20, 4000], focused: [0.22, 5000] },
-  reimuB:  { unfocused: [0.17, 3000], focused: [0.17, 3000] },
-  marisaA: { unfocused: [0.30, 8000], focused: [0.33, 9000] },
-  marisaB: { unfocused: [0.35, 8000], focused: [0.41, 10000] },
-  sakuyaA: { unfocused: [0.28, 6000], focused: [0.29, 6500] },
-  sakuyaB: { unfocused: [0.26, 5500], focused: [0.29, 6000] },
-  reimuYukari: { unfocused: [0, 0], focused: [0, 0] }
-};
-
-export function bombCherryDrainPerFrame(
-  character: CharacterId,
-  focused: boolean,
-  difficulty: number,
-  cherry: number,
-  duration: number
-): number {
-  const [percent, minimumTotal] = BOMB_CHERRY_DRAIN[character][focused ? 'focused' : 'unfocused'];
-  let scaled = Math.round(cherry * Math.fround(percent));
-  if (difficulty === 2) scaled = Math.trunc(scaled / 2);
-  else if (difficulty === 3) scaled = Math.trunc(scaled / 4);
-  else if (difficulty === 4 || difficulty === 5) scaled = Math.trunc(scaled / 3);
-  const byCherry = Math.trunc(scaled / duration);
-  const byMinimum = Math.trunc(minimumTotal / duration);
-  return Math.max(byCherry - byCherry % 10, byMinimum - byMinimum % 10);
-}
-
-// The game assigns the player ANM a sprite-id base of 1024; SHT sprite
-// fields are global ids (1088+ = local sprite 64+).
-export const PLAYER_SPRITE_BASE = 1024;
+// TH08 Border Team: human reads ply00a, focused Yukari reads ply00as.
+// The deathbomb window is read from the .sht data (deathbombWindow, int32
+// at header offset 8) rather than hardcoded here.
+export const CHARACTERS = {
+  family: 0,
+  name: 'Reimu & Yukari',
+  shtBase: 'ply00a',
+  anmKey: 'player00'
+} as const;
 
 export interface PlayerBullet {
   // Stable slot in Th07.exe's 96-entry player-shot pool. Each firing pass
@@ -167,15 +107,8 @@ const ORB_OFFSETS = {
 // while Y eases LINEARLY. Th07.exe FUN_0043be00 (v1.00b), all.c:28343-28345
 // and 28360-28362: focus-in is xHalf=24-16*t², y=-32*t; focus-out is
 // xHalf=8+16*t², y=-32+32*t, where t=frame/8 after the frame's counter
-// tick. Reversing these axes shifts the real shot spawn point because
-// FUN_00438b70 fires from the live option position.
+// tick.
 const GLIDE_FRAMES = 8;
-
-// Th07.exe FUN_0043a820 @ 0x43a820: the shot-cadence counter is hard-
-// capped at 30 (CMP 0x1e @ 0x43a8d5) and re-armed to 0 while shoot is
-// held — a 30-frame cycle. (Priw8's external doc said 60; direct exe
-// disassembly outranks it per AGENTS.md §2. Max data delay is 20.)
-const SHOT_CYCLE = 30;
 
 // Player spawn / lifecycle, decoded from Th07.exe (v1.00b). The exe drives
 // the player through a state byte at player+0x2408 (dispatcher fcn.0043eef0):
@@ -212,25 +145,16 @@ export class Player {
   readonly focused: Sht;
   readonly anm: Anm;
   focusHeld = false;
-  // One-frame edge emitted by FUN_0043be00's option-layout state machine.
-  // StageScene consumes it to manage the authored focus-in effect slot.
-  focusTransition: 'in' | 'out' | null = null;
   // Frames elapsed since the last focus-state toggle, saturating at
   // GLIDE_FRAMES once the orb glide has settled; see orbOffset().
   private focusGlideFrame = GLIDE_FRAMES;
-  // Th07.exe SakuyaB-only option orbit (exe-player-shot.md §7): accumulator
-  // at player+0xb7e58; rest = -PI/2; strafe steers by vx*PI/200 per frame;
-  // idle returns at 2*PI/100 per frame with snap inside PI/100; clamped to
-  // [-7*PI/10, -3*PI/10] (±36° around straight up).
+  // TH07 SakuyaB's option-orbit accumulator. The orbit STEER is deleted
+  // with the TH07 characters; the field itself stays parked at its -PI/2
+  // rest value because stage-scene.ts (read-only here) still reads it in
+  // its behavior-func-5 (SakuyaB orbit-bank) spawn branch, which no
+  // Border Team SHT record can ever select (ply00a/ply00as funcs[0] are
+  // only 0/1).
   orbitAngle = -Math.PI / 2;
-  // Previous-frame snapshot of orbitAngle: the exe computes option render
-  // positions (= orb-shot fire origins) BEFORE advancing the angle each
-  // frame (FUN_0043be00 tail, 0x43d6d5-0x43d880) — same-tick consumers must
-  // read this, not the freshly-mutated orbitAngle.
-  renderOrbitAngle = -Math.PI / 2;
-  // This frame's horizontal displacement (dx*speed from move()); 0 when not
-  // strafing. Feeds the SakuyaB orbit steer.
-  private lastVx = 0;
   shooting = false;
   // -1 while not shooting so that the first held frame lands on fireFrame 0
   // (see update()): a shot with delay 0 must fire on the very press frame,
@@ -241,10 +165,11 @@ export class Player {
   // only runs the shooter table when the integer phase changes.
   private prevFireFrame = -999;
   bullets: PlayerBullet[] = [];
-  // MarisaB persistent-laser slot tracker (exe player+0x169c4/+0x169d0
-  // 3-entry array, exe-player-shot.md §2.2): at most one live laser bullet
-  // per record slot id (the record's `delay` field). timer counts down each
-  // frame; release/bomb/dialogue clamp it; <71 arms the ANM fade.
+  // TH07 MarisaB's persistent-laser slot tracker. The laser SPAWNING is
+  // deleted with the TH07 characters (no ply00a record has funcs[0] 2/3, so
+  // the array can never be populated); the field itself stays because
+  // stage-scene.ts (read-only here) still iterates it in its beam tick and
+  // bullet-reject paths.
   laserSlots: ({ bullet: PlayerBullet; timer: number; fading: boolean; shot: ShtShot } | null)[] = [null, null, null];
   lives = 2;
   bombs = 3;
@@ -324,22 +249,18 @@ export class Player {
   // FUN_0043d9a0 decrements it before accepting a normal held-X bomb.
   bombCooldown = 0;
   bombInvuln = 0;
-  // Th07.exe player+0x16a2c: fixed Cherry drain applied on each frame that
-  // begins with the bomb already active (the trigger frame itself is free).
-  bombCherryDrain = 0;
-  // Latched from BOMB_PARAMS at cast; multiplies move speed while bombTimer>0.
-  // SakuyaB legitimately exceeds 1.0. Reset to 1.0 when the bomb ends.
-  bombSpeedMult = 1.0;
-  // Focus state latched at cast (exe player+0x16a24) — selects which of the
-  // two per-character bomb forms runs for the WHOLE bomb; toggling focus
-  // mid-bomb must not change it.
+  // Focus state latched at cast (exe player+0x16a24) — selects which side's
+  // bomb declaration runs for the WHOLE bomb; toggling focus mid-bomb must
+  // not change it.
   bombFocused = false;
   runner: AnmRunner;
   private poseState: 'idle' | 'left' | 'right' = 'idle';
 
   constructor(character: CharacterId, anms: Record<string, Anm>) {
+    // `character` is vestigial: the Border Team is the single character, so
+    // its ply00a/ply00as data loads regardless of the id passed in.
     this.character = character;
-    const spec = CHARACTERS[character];
+    const spec = CHARACTERS;
     const sht = TH08_DATA.sht as Record<string, string>;
     this.unfocused = new Sht(sht[spec.shtBase]);
     this.focused = new Sht(sht[`${spec.shtBase}s`]);
@@ -399,59 +320,51 @@ export class Player {
     return { scaleX: t, scaleY: 3 - 2 * t, alpha: t };
   }
 
-  // `rate` = global slow-motion rate: movement/orbit scale directly, the
+  // `rate` = global slow-motion rate: movement scales directly, the
   // player-side timers accumulate fractionally (spec-slowmo.md §3.1/§3.2).
   update(input: InputFrame, rate = 1, allowShotArm = true): void {
-    // FUN_0043d9a0/bomb VM runs before FUN_0043be00 movement. On the tick
-    // where the bomb clock reaches its duration, movement still observes the
-    // multiplier that was active at frame entry; the reset applies to the
-    // next player tick. Snapshot it before the local countdown retreats.
-    const movementSpeedMult = this.bombTimer > 0 ? this.bombSpeedMult : 1;
-    let bombEndedThisTick = false;
     this.updateFocusGlide(input.held.has('focus'), rate);
-    if (this.character === 'reimuYukari') {
-      this.th08FocusFrames++;
-      // FUN_0044aec0 tails: the form byte flips once the stable counter
-      // passes 6 (player+8; 1-based here -> flip at 8). th08FocusFrames
-      // was zeroed on the toggle frame and incremented right above, so
-      // the flip lands on the 8th frame counting the toggle itself.
-      if (this.th08FocusFrames > 7) this.th08Form = this.focusHeld ? 1 : 0;
-      // The focused option follows its anchor with the exe's 0.2 lerp
-      // (FUN_0044e770); on focus-in it snaps to the anchor first. While the
-      // lunge trigger holds (FUN_0044e770 tail: cycle armed, counter >= 10,
-      // pointer-cache target alive) the anchor is the ENEMY (FUN_0044e8d0:
-      // enemy pos with y+32, clamped >= 32) instead of the player.
-      const lunging = this.focusHeld && this.th08OptionLive && this.th08LungeTarget != null &&
-        this.shooting && this.fireFrame >= 10;
-      if (this.focusHeld) {
-        const anchorX = lunging ? this.th08LungeTarget!.x : this.x;
-        const anchorY = lunging
-          ? Math.max(32, Math.fround(this.th08LungeTarget!.y + 32))
-          : Math.max(32, Math.fround(this.y - 96));
-        if (lunging !== this.th08OptionLunge) {
-          this.th08OptionLunge = lunging;
-          // FUN_00407120(3) on entry, (1) on retreat — the familiar's spin
-          // interrupts (player00.anm script 18 labels).
-          this.th08OptionRunner?.interrupt(lunging ? 3 : 1);
-        }
-        if (!this.th08OptionLive) {
-          this.th08OptionX = anchorX;
-          this.th08OptionY = anchorY;
-          this.th08OptionLive = true;
-          // The familiar (FUN_0044e3a0 state 1) runs player00.anm script 18 —
-          // the ghostly Yukari hover cycle (sprites 22-28) floating at the
-          // option anchor. It is a separate ANM VM from the main sprite.
-          if (this.anm.hasScript(18)) this.th08OptionRunner = new AnmRunner(this.anm, 18);
-        } else {
-          const k = Math.fround(Math.fround(0.2) * Math.fround(rate));
-          this.th08OptionX = Math.fround(this.th08OptionX + Math.fround((anchorX - this.th08OptionX) * k));
-          this.th08OptionY = Math.fround(this.th08OptionY + Math.fround((anchorY - this.th08OptionY) * k));
-        }
-      } else {
-        this.th08OptionLive = false;
-        this.th08OptionRunner = null;
-        this.th08OptionLunge = false;
+    this.th08FocusFrames++;
+    // FUN_0044aec0 tails: the form byte flips once the stable counter
+    // passes 6 (player+8; 1-based here -> flip at 8). th08FocusFrames
+    // was zeroed on the toggle frame and incremented right above, so
+    // the flip lands on the 8th frame counting the toggle itself.
+    if (this.th08FocusFrames > 7) this.th08Form = this.focusHeld ? 1 : 0;
+    // The focused option follows its anchor with the exe's 0.2 lerp
+    // (FUN_0044e770); on focus-in it snaps to the anchor first. While the
+    // lunge trigger holds (FUN_0044e770 tail: cycle armed, counter >= 10,
+    // pointer-cache target alive) the anchor is the ENEMY (FUN_0044e8d0:
+    // enemy pos with y+32, clamped >= 32) instead of the player.
+    const lunging = this.focusHeld && this.th08OptionLive && this.th08LungeTarget != null &&
+      this.shooting && this.fireFrame >= 10;
+    if (this.focusHeld) {
+      const anchorX = lunging ? this.th08LungeTarget!.x : this.x;
+      const anchorY = lunging
+        ? Math.max(32, Math.fround(this.th08LungeTarget!.y + 32))
+        : Math.max(32, Math.fround(this.y - 96));
+      if (lunging !== this.th08OptionLunge) {
+        this.th08OptionLunge = lunging;
+        // FUN_00407120(3) on entry, (1) on retreat — the familiar's spin
+        // interrupts (player00.anm script 18 labels).
+        this.th08OptionRunner?.interrupt(lunging ? 3 : 1);
       }
+      if (!this.th08OptionLive) {
+        this.th08OptionX = anchorX;
+        this.th08OptionY = anchorY;
+        this.th08OptionLive = true;
+        // The familiar (FUN_0044e3a0 state 1) runs player00.anm script 18 —
+        // the ghostly Yukari hover cycle (sprites 22-28) floating at the
+        // option anchor. It is a separate ANM VM from the main sprite.
+        if (this.anm.hasScript(18)) this.th08OptionRunner = new AnmRunner(this.anm, 18);
+      } else {
+        const k = Math.fround(Math.fround(0.2) * Math.fround(rate));
+        this.th08OptionX = Math.fround(this.th08OptionX + Math.fround((anchorX - this.th08OptionX) * k));
+        this.th08OptionY = Math.fround(this.th08OptionY + Math.fround((anchorY - this.th08OptionY) * k));
+      }
+    } else {
+      this.th08OptionLive = false;
+      this.th08OptionRunner = null;
+      this.th08OptionLunge = false;
     }
     if (this.invulnFrames > 0) {
       const rateF32 = Math.fround(rate);
@@ -472,10 +385,7 @@ export class Player {
       }
     }
     if (this.bombInvuln > 0) this.bombInvuln = Math.max(0, this.bombInvuln - rate);
-    if (this.bombTimer > 0) {
-      this.bombTimer = Math.max(0, this.bombTimer - rate);
-      bombEndedThisTick = this.bombTimer === 0;
-    }
+    if (this.bombTimer > 0) this.bombTimer = Math.max(0, this.bombTimer - rate);
     if (this.materializeFrame >= 0) {
       // Respawn materialize (fcn.0043e170): ramp scale/alpha IN PLACE over 30
       // simulation ticks (split counter), then enter the 240-tick invuln
@@ -491,34 +401,19 @@ export class Player {
         this.deathbombMeter = Math.trunc(this.unfocused.deathbombWindow);
       }
     }
-    // Th07.exe FUN_0043be00: the option render positions (player+0x9b4/0x9c0,
-    // the fire origins for orb shots) are computed from the orbit angle
-    // (player+0xb7e58) AS IT STOOD AT THE END OF THE PREVIOUS FRAME; the
-    // angle-update block sits at the TAIL of the function (0x43d6d5-0x43d880),
-    // advancing it with this frame's vx only for NEXT frame's layout. Reading
-    // the freshly-mutated angle for this tick's spawns put SakuyaB's knife
-    // origins one 3.6° step (1.5077px, simulation-exact) ahead of native and
-    // flipped marginal kill frames (Mt01 st1 kill#86: 1982 vs native 1981).
-    this.renderOrbitAngle = this.orbitAngle;
-    if (this.controllable) this.move(input, rate, movementSpeedMult);
-    else this.lastVx = 0;
-    if (bombEndedThisTick) this.bombSpeedMult = 1.0;
+    if (this.controllable) this.move(input, rate);
     this.shooting = input.held.has('shoot') && this.controllable;
     // Shot-cycle ARM (exe FUN_0043a930): holding shoot re-arms the counter
     // to 0 only while it is DISARMED (< 0). A re-press mid-cycle does NOT
     // reset the grid, and releasing does NOT stop the cycle — the armed
-    // counter free-runs to 29 firing its remaining record phases ("release
-    // inertia"), then FUN_0043a820 disarms it (>0x1d, or player states 1/2:
-    // materialize/dying). Ticking + disarm live in fire().
+    // counter free-runs to 19 firing its remaining record phases ("release
+    // inertia"), then the TH08 20-frame cycle disarms it (see fire()).
     // FUN_0043be00 gates FUN_0043a930 (the disarmed -> frame-0 re-arm)
-    // on FUN_00429483()==0, the MSG-active predicate.  The surrounding
+    // on FUN_00429483()==0, the MSG-active predicate. The surrounding
     // player callback still runs for timestamp-only messages: an already
-    // armed 30-frame cycle keeps advancing in FUN_0043a820 and existing
-    // shots keep moving, but once that cycle expires holding Z cannot start
-    // another until the message ends.  Native Stage 6 trace, v1.00b:
-    // FUN_0043eef0 / FUN_0043a290 / FUN_0043a820 all execute at PRE
-    // 1915..2244 with DAT_0061c25c=0, while fireFrame reaches -1 and stays
-    // there until entry 22 ends at PRE2245.
+    // armed cycle keeps advancing and existing shots keep moving, but once
+    // that cycle expires holding Z cannot start another until the message
+    // ends.
     if (allowShotArm && this.shooting && this.fireFrame < 0) {
       this.fireFrame = 0;
       this.fireFrameFrac = 0;
@@ -526,23 +421,9 @@ export class Player {
     this.updatePose(input);
     this.runner.update(rate);
     this.th08OptionRunner?.update(rate);
-    // FUN_0043be00 nests SakuyaB's option-angle controller under held Z,
-    // message-inactive, and unfocused. Releasing fire or holding focus freezes
-    // the angle; the option layout still reads the frozen value every tick.
-    if (allowShotArm && this.shooting && !this.focusHeld) {
-      const vx = this.lastVx;
-      if (vx === 0) {
-        if (Math.abs(this.orbitAngle - -Math.PI / 2) <= Math.PI / 100) this.orbitAngle = -Math.PI / 2;
-        else this.orbitAngle += (this.orbitAngle < -Math.PI / 2 ? 1 : -1) * (2 * Math.PI / 100) * rate;
-      } else {
-        this.orbitAngle += vx * Math.PI / 200;
-        this.orbitAngle = Math.min(-3 * Math.PI / 10, Math.max(-7 * Math.PI / 10, this.orbitAngle));
-      }
-    }
   }
 
   private updateFocusGlide(focused: boolean, rate: number): void {
-    this.focusTransition = null;
     let advancedOnReverse = false;
     if (focused !== this.focusHeld) {
       this.focusHeld = focused;
@@ -553,19 +434,16 @@ export class Player {
       // Timer player+0xe2ae8 (the gauge fire-rate clock) re-arms to 0 at
       // every focus transition (0x44b1b1/0x44b404).
       this.th08FocusFrames = 0;
-      // TH08 Border Team: the human/youkai sprite swap is immediate with
-      // the focus flip (no 8-frame glide between different characters);
-      // refresh the pose runner here since pose changes key off direction.
-      if (this.character === 'reimuYukari') {
-        const script = focused ? 5 : 0;
-        if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
-        // FUN_0044aec0's transition branch: the tint fires only after the
-        // previous form held long enough; the aura arms on every focus-in
-        // and is released by interrupt 1 on the way out.
-        this.pendingTh08FormEffect = prevHeld > 4 ? (focused ? 29 : 28) : 0;
-        this.pendingTh08Aura = focused ? 'in' : 'out';
-      }
-      this.focusTransition = focused ? 'in' : 'out';
+      // The human/youkai sprite swap is immediate with the focus flip (no
+      // glide between different characters); refresh the pose runner here
+      // since pose changes key off direction.
+      const script = focused ? 5 : 0;
+      if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
+      // FUN_0044aec0's transition branch: the tint fires only after the
+      // previous form held long enough; the aura arms on every focus-in
+      // and is released by interrupt 1 on the way out.
+      this.pendingTh08FormEffect = prevHeld > 4 ? (focused ? 29 : 28) : 0;
+      this.pendingTh08Aura = focused ? 'in' : 'out';
       if (this.focusGlideFrame < GLIDE_FRAMES) {
         // FUN_0043be00 states 2 and 4 use the same reversal sequence: advance
         // the OLD split counter, complement its integer around 8, clear the
@@ -587,49 +465,32 @@ export class Player {
     }
   }
 
-  private move(input: InputFrame, rate = 1, speedMult = 1): void {
+  private move(input: InputFrame, rate = 1): void {
     const sht = this.sht;
-    // Th07.exe FUN_0043be00 @ all.c:28028-28055 resolves the four direction
-    // bits into a direction enum via a PRIORITY chain, not vector addition:
-    // up beats down (up+down moves UP), and right beats left (left+right
-    // moves RIGHT — the right check overwrites the left result in every
-    // branch). Real replays contain such chords (e.g. up+down+left held 53
-    // frames in the stage-1 golden fixture), so cancelling them desyncs
-    // playback and never matches live retail behavior.
+    // TH08 FUN_0044aec0 (asm 0x44aec0+): diagonal masks win first in the
+    // order UL(0x50), DL(0x60), UR(0x90), DR(0xa0); the singles chain then
+    // takes DOWN over up and LEFT over right — the opposite of TH07's
+    // FUN_0043be00 priority (up, then right). The stage-1 Lunatic recording
+    // holds left+right for 14 frames starting at f123; TH07's chain moves
+    // the player right where the original moves left.
     let dx = 0;
     let dy = 0;
-    if (this.character === 'reimuYukari') {
-      // TH08 FUN_0044aec0 (asm 0x44aec0+): diagonal masks win first in the
-      // order UL(0x50), DL(0x60), UR(0x90), DR(0xa0); the singles chain then
-      // takes DOWN over up and LEFT over right — the opposite of TH07's
-      // FUN_0043be00 priority (up, then right). The stage-1 Lunatic recording
-      // holds left+right for 14 frames starting at f123; TH07's chain moves
-      // the player right where the original moves left.
-      const up = input.held.has('up');
-      const down = input.held.has('down');
-      const left = input.held.has('left');
-      const right = input.held.has('right');
-      if (up && left) { dx = -1; dy = -1; }
-      else if (down && left) { dx = -1; dy = 1; }
-      else if (up && right) { dx = 1; dy = -1; }
-      else if (down && right) { dx = 1; dy = 1; }
-      else if (down) dy = 1;
-      else if (up) dy = -1;
-      else if (left) dx = -1;
-      else if (right) dx = 1;
-    } else if (input.held.has('up')) dy = -1;
-    else if (input.held.has('down')) dy = 1;
-    if (this.character !== 'reimuYukari') {
-      if (input.held.has('left')) dx = -1;
-      if (input.held.has('right')) dx = 1;
-    }
+    const up = input.held.has('up');
+    const down = input.held.has('down');
+    const left = input.held.has('left');
+    const right = input.held.has('right');
+    if (up && left) { dx = -1; dy = -1; }
+    else if (down && left) { dx = -1; dy = 1; }
+    else if (up && right) { dx = 1; dy = -1; }
+    else if (down && right) { dx = 1; dy = 1; }
+    else if (down) dy = 1;
+    else if (up) dy = -1;
+    else if (left) dx = -1;
+    else if (right) dx = 1;
     const diagonal = dx !== 0 && dy !== 0;
-    const baseSpeed = diagonal
+    const speed = diagonal
       ? (this.focusHeld ? sht.diagFocusedSpeed : sht.diagSpeed)
       : (this.focusHeld ? sht.focusedSpeed : sht.speed);
-    // Bombs latch a per-character speed multiplier (BOMB_PARAMS); SakuyaB
-    // legitimately exceeds 1.0 — NOT clamped (exe-bombs.md §2).
-    const speed = baseSpeed * speedMult;
     // Th07.exe (v1.00b) Player::Update clamp @ 0x43c3cc-0x43c47c reads
     // DAT_00625854/58/5c/60 = {8,16,368,416}: the player CENTER is limited
     // to x∈[8,376], y∈[16,432], inset from the 384×448 field edges.
@@ -645,11 +506,9 @@ export class Player {
     const vy = Math.fround(dy * speed * rate);
     this.x = clamp(Math.fround(this.x + vx), 8, 376);
     this.y = clamp(Math.fround(this.y + vy), 16, 432);
-    this.lastVx = vx;
   }
 
   private updatePose(input: InputFrame): void {
-    // Same right-beats-left priority as move() (exe FUN_0043be00 enum).
     const movingRight = input.held.has('right');
     const movingLeft = !movingRight && input.held.has('left');
     const pose = movingLeft ? 'left' : movingRight ? 'right' : 'idle';
@@ -659,46 +518,19 @@ export class Player {
     // scripts 1/3 (mirrored); focused Yukari has her OWN bank family — the
     // pose switch at 0x44b232+ selects scripts 6/8 for the left/right lean
     // (transitions 7/9), with 0/5 the respective idles.
-    if (this.character === 'reimuYukari') {
-      const script = this.focusHeld
-        ? (pose === 'left' ? 6 : pose === 'right' ? 8 : 5)
-        : (pose === 'left' ? 1 : pose === 'right' ? 3 : 0);
-      if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
-      return;
-    }
-    // playerXX.anm movement scripts (Th07.exe FUN_0043be00 @ all.c:28120-28143,
-    // table at +0x29ef4..+0x29f00): 0 idle, 1 bank-left, 2 return-from-left,
-    // 3 bank-right, 4 return-from-right. Scripts 3/4 are scripts 1/2 with the
-    // sprite MIRRORED (scaleX<0) — that mirror is the only thing that makes
-    // moving right lean right. The old mapping used script 2 (return-from-left,
-    // unmirrored) for the right pose, so right movement showed a left lean
-    // identical to the left pose. Right must use the mirrored bank script 3.
-    const script = pose === 'left' ? 1 : pose === 'right' ? 3 : 0;
+    const script = this.focusHeld
+      ? (pose === 'left' ? 6 : pose === 'right' ? 8 : 5)
+      : (pose === 'left' ? 1 : pose === 'right' ? 3 : 0);
     if (this.anm.hasScript(script)) this.runner = new AnmRunner(this.anm, script);
   }
 
-  // Fires shooter entries whose cadence matches this frame; called once per
-  // frame while the shoot button is held.
+  // Option (orb) offset relative to the player, used by the scene to draw
+  // the yin-yang orbs at power >= 8. TH07 SakuyaB's orbit variant is
+  // deleted; the settled/glide layout below is the shared TH07/TH08 form
+  // (settled unfocused = (∓24, 0), settled focused = (∓8, −32); the glide
+  // eases xHalf quadratically and y linearly over GLIDE_FRAMES — Th07.exe
+  // FUN_0043be00, all.c:28343-28362).
   orbOffset(orb: 1 | 2): { x: number; y: number } {
-    if (this.character === 'sakuyaB') {
-      // exe: unfocused = diametric pair on r=24 at φ=orbitAngle+π/2;
-      // focused = tight cluster at orbitAngle ∓ π/14; 8f linear glide between.
-      // Uses the PREVIOUS frame's angle (see renderOrbitAngle).
-      const a = this.renderOrbitAngle;
-      const unf = orb === 1
-        ? { x: -24 * Math.cos(a + Math.PI / 2), y: -24 * Math.sin(a + Math.PI / 2) }
-        : { x: 24 * Math.cos(a + Math.PI / 2), y: 24 * Math.sin(a + Math.PI / 2) };
-      const foc = {
-        x: 24 * Math.cos(a + (orb === 1 ? -1 : 1) * Math.PI / 14),
-        y: 24 * Math.sin(a + (orb === 1 ? -1 : 1) * Math.PI / 14)
-      };
-      const to = this.focusHeld ? foc : unf;
-      if (this.focusGlideFrame >= GLIDE_FRAMES) return to;
-      const from = this.focusHeld ? unf : foc;
-      const t = this.focusGlideFrame / GLIDE_FRAMES;
-      // simplified straight lerp, exe uses target-endpoint forms; visual nicety only
-      return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
-    }
     const to = ORB_OFFSETS[this.focusHeld ? 'focused' : 'unfocused'][orb];
     if (this.focusGlideFrame >= GLIDE_FRAMES) return to;
     const t = this.focusGlideFrame / GLIDE_FRAMES;
@@ -709,7 +541,7 @@ export class Player {
 
   fire(rate = 1, allowSpawn = true): PlayerBullet[] {
     // exe FUN_0043a820: runs while the cycle is ARMED, independent of the
-    // shoot key — released cycles still fire their remaining phases.
+    // shot key — released cycles still fire their remaining phases.
     if (this.fireFrame < 0) return [];
     if (this.dyingFrame >= 0 || this.materializeFrame >= 0) {
       this.fireFrame = -1;
@@ -718,59 +550,8 @@ export class Player {
       return [];
     }
     const out: PlayerBullet[] = [];
-    // FUN_0043a820 keeps advancing the armed 30-frame counter when its
-    // caller suppresses allocation. Retail uses that suppression only for
-    // MarisaB while a bomb is active; StageScene supplies the exact gate.
     if (allowSpawn && this.fireFrame !== this.prevFireFrame) {
       for (const shot of this.sht.shotsForPower(this.power)) {
-        const isLaser = shot.funcs[0] === 2 || shot.funcs[0] === 3;
-        if (isLaser) {
-          // MarisaB persistent lasers (FUN_00438db0/FUN_00438ef0): the record's
-          // delay field is a SLOT INDEX, not a cadence delay; a slot spawns at
-          // most one live beam, only while the option glide is settled in the
-          // record's own focus state (funcs0=2 ⇒ unfocused, 3 ⇒ focused).
-          const slotId = shot.delay;
-          if (slotId < 0 || slotId > 2) continue;
-          const existing = this.laserSlots[slotId];
-          if (existing) {
-            // FUN_00438db0/FUN_00438ef0 cache the exact shooter-record
-            // pointer at player+0x23e0[slotId]. A power-bracket change swaps
-            // that pointer even when the new record describes the same beam;
-            // native then requests interrupt 1 on the old owner, clears the
-            // owner slot, and returns without spawning until the next table
-            // pass. Keeping only "slot occupied" left Extra's pre-power-32
-            // focused beam alive 86 frames too long (native PRE1184 age 21,
-            // web age 107) and flipped its even-frame hit cadence.
-            if (existing.shot !== shot) {
-              existing.bullet.fadePending = true;
-              this.laserSlots[slotId] = null;
-            }
-            continue;
-          }
-          const settled = this.focusGlideFrame >= GLIDE_FRAMES;
-          const wantFocused = shot.funcs[0] === 3;
-          if (!settled || this.focusHeld !== wantFocused) continue;
-          const b = this.makeBullet(shot);
-          if (!b) continue;
-          if (shot.shotType === 5) {
-            // Th07.exe FUN_00438ef0 @ 0x438ef0 initializes every history X
-            // and the live bullet X to the exact -999.0 sentinel. The first
-            // beam tick therefore records an empty sample before anchoring.
-            b.history = Array.from({ length: 16 }, () => ({ x: -999, y: -999 }));
-            b.historyDepth = Math.min(16, Math.max(0, shot.interval | 0));
-            b.x = -999;
-          }
-          // funcs0=2 seeds the countdown from the record's interval field
-          // (130-330 by power); funcs0=3 seeds 999 (held indefinitely).
-          this.laserSlots[slotId] = {
-            bullet: b,
-            timer: wantFocused ? 999 : Math.max(1, shot.interval),
-            fading: false,
-            shot
-          };
-          out.push(b);
-          continue;
-        }
         const interval = Math.max(1, shot.interval);
         if (this.fireFrame % interval !== shot.delay % interval) continue;
         const b = this.makeBullet(shot);
@@ -779,8 +560,9 @@ export class Player {
     }
     this.prevFireFrame = this.fireFrame;
     // Advance the split counter (FUN_00436acc) and expire the cycle past
-    // frame 29 (exe compares > 0x1d) — the held key re-arms it to 0 on the
-    // next update tick, giving the seamless 30-frame loop.
+    // frame 19 — TH08 runs a 20-frame shot cycle, not TH07's 30: Th08.exe
+    // FUN_00451500 resets the fire timer to -1 once it reaches 0x14 and
+    // re-arms it to 0 while Z stays held (asm 0x4515b8-0x451606).
     if (rate > 0.99) {
       this.fireFrame++;
       this.fireFrameFrac = 0;
@@ -791,10 +573,7 @@ export class Player {
         this.fireFrame++;
       }
     }
-    if (this.fireFrame > (this.character === 'reimuYukari' ? 19 : 29)) {
-      // TH08 runs a 20-frame shot cycle, not TH07's 30: Th08.exe
-      // FUN_00451500 resets the fire timer to -1 once it reaches 0x14 and
-      // re-arms it to 0 while Z stays held (asm 0x4515b8-0x451606).
+    if (this.fireFrame > 19) {
       this.fireFrame = -1;
       this.fireFrameFrac = 0;
       this.prevFireFrame = -999;
@@ -803,32 +582,24 @@ export class Player {
   }
 
   private makeBullet(shot: ShtShot): PlayerBullet | null {
-    // SHT sprite is a global ANM SCRIPT id (base 1024): playerXX.anm shot
-    // scripts live at 64+, their impact variants at +0x20 (96+).
-    // TH08 (Th08.exe shot spawner FUN_0044fb70 @ 0x44fd32-0x44fd44): the shot
-    // VM runs player00.anm script (sht.sprite + 10) — scripts 0-9 are the
+    // Th08.exe shot spawner FUN_0044fb70 @ 0x44fd32-0x44fd44: the shot VM
+    // runs player00.anm script (sht.sprite + 10) — scripts 0-9 are the
     // Reimu/Yukari pose family, the shot scripts start at 10.
-    const scriptId = this.character === 'reimuYukari'
-      ? shot.sprite + 10
-      : shot.sprite - PLAYER_SPRITE_BASE;
+    const scriptId = shot.sprite + 10;
     if (!this.anm.hasScript(scriptId)) return null;
     const runner = new AnmRunner(this.anm, scriptId);
     const rect = this.anm.sprites.get(scriptId) ?? this.anm.sprites.get(64);
-    // TH08: option-sourced records (src >= 1) spawn from the focused
-    // option's live trail position (player+0x6b0, FUN_0044fb70). Unfocused
-    // records are all src 0 (the player center).
-    const source = this.character === 'reimuYukari'
-      ? (shot.orb >= 1 && this.th08OptionLive
-        ? { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) }
-        : { x: 0, y: 0 })
-      : shot.orb === 1 || shot.orb === 2 ? this.orbOffset(shot.orb) : { x: 0, y: 0 };
+    // Option-sourced records (src >= 1) spawn from the focused option's
+    // live trail position (player+0x6b0, FUN_0044fb70); unfocused records
+    // are all src 0 (the player center). The exe reads the live option-trail
+    // struct; this port anchors to the player-relative option position.
+    const source = shot.orb >= 1 && this.th08OptionLive
+      ? { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) }
+      : { x: 0, y: 0 };
     // TH08 impact: the settle path (all.c:40427-40431) re-arms the shot VM
     // with script sprite+0xb — one past the flight script, the odd-numbered
-    // 30-frame fade-out family in player00.anm entry 0. TH07 re-arms an
-    // explicit +0x20 impact script family instead.
-    const impactScript = this.character === 'reimuYukari'
-      ? scriptId + 1
-      : scriptId + 0x20;
+    // 30-frame fade-out family in player00.anm entry 0.
+    const impactScript = scriptId + 1;
     return {
       poolSlot: -1,
       // FUN_00438b70 writes spawn position and velocity into the player's
@@ -904,40 +675,23 @@ export class Player {
     // the squish (meter 0), the materialize (zeroed each frame) and past the
     // end of the deathbomb window.
     if (this.bombs <= 0 || this.bombTimer > 0 || this.bombCooldown > 0 || this.deathbombMeter <= 0) return false;
-    if (this.character === 'reimuYukari') {
-      // TH08 bomb machine (0x44c650/0x44c71b-0x44c75f): bombType = the FORM
-      // byte (FUN_0040bc40 reads player+5 — the focus key latched through
-      // the 7-frame stability gate, so a bomb cast inside that window uses
-      // the OLD side); a deathbomb (cast from the hit state) INVERTS the
-      // side before adding 2 — focused-cast runs table[2] (0x40c910),
-      // unfocused-cast runs table[3] (0x410fe0). A deathbomb consumes TWO
-      // bombs when the stock has them (FUN_00439883(-2)), one when it does
-      // not.
-      const deathbomb = this.hitState;
-      const base = this.th08Form;
-      this.th08BombType = (deathbomb ? 1 - base : base) as 0 | 1 | 2 | 3;
-      this.bombs -= deathbomb ? Math.min(this.bombs, 2) : 1;
-      this.hitState = false; // deathbomb rescue
-      this.deathbombMeter = Math.min(Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6);
-      // The frozen flag (player+0xfdc) owns invulnerability for exactly the
-      // bomb's duration; the duration comes from the cast helper (0x40be30:
-      // 260/200/260/300 by type) and is applied by the scene.
-      this.bombFocused = this.focusHeld;
-      this.bombSpeedMult = 1.0;
-      return true;
-    }
-    this.bombs--;
+    // TH08 bomb machine (0x44c650/0x44c71b-0x44c75f): bombType = the FORM
+    // byte (FUN_0040bc40 reads player+5 — the focus key latched through
+    // the 7-frame stability gate, so a bomb cast inside that window uses
+    // the OLD side); a deathbomb (cast from the hit state) INVERTS the
+    // side before adding 2 — focused-cast runs table[2] (0x40c910),
+    // unfocused-cast runs table[3] (0x410fe0). A deathbomb consumes TWO
+    // bombs when the stock has them (FUN_00439883(-2)), one when it does
+    // not.
+    const deathbomb = this.hitState;
+    const base = this.th08Form;
+    this.th08BombType = (deathbomb ? 1 - base : base) as 0 | 1 | 2 | 3;
+    this.bombs -= deathbomb ? Math.min(this.bombs, 2) : 1;
     this.hitState = false; // deathbomb rescue
-    // Every successful bomb bumps the meter min(N, meter+6) — a no-op at
-    // full meter, the shortened-next-window rule after a late deathbomb
-    // (Th07.exe 0x43dc4f-0x43dc7f).
     this.deathbombMeter = Math.min(Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6);
-    // Th07.exe per-character bomb params selected by (character, focus-state) at cast.
-    const [duration, invulnTotal, speedMult] = BOMB_PARAMS[this.character][this.focusHeld ? 'focused' : 'unfocused'];
-    this.bombTimer = duration;
-    this.bombInvuln = invulnTotal;
-    this.bombCherryDrain = 0;
-    this.bombSpeedMult = speedMult;
+    // The frozen flag (player+0xfdc) owns invulnerability for exactly the
+    // bomb's duration; the duration comes from the cast helper (0x40be30:
+    // 260/200/260/300 by type) and is applied by the scene.
     this.bombFocused = this.focusHeld;
     return true;
   }
@@ -947,12 +701,6 @@ export class Player {
     // Materialize holds the meter at 0 (0x43e237); it reloads at the
     // state-1 -> state-3 handoff in update().
     this.deathbombMeter = 0;
-    // Exe FUN_0043a290: player state 2 hard-frees all three laser slots.
-    for (let i = 0; i < 3; i++) {
-      const slot = this.laserSlots[i];
-      if (slot) slot.bullet.dead = true;
-      this.laserSlots[i] = null;
-    }
     this.lives--;
     this.bombs = Math.trunc(this.unfocused.bombs);
     // Power loss happens at the MISS itself, before the drops spawn

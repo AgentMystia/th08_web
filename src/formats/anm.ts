@@ -2,7 +2,7 @@ import { BinaryView } from './bin';
 import { normalizeAngle } from '../core/util';
 import type { Rng } from '../core/rng';
 
-// TH07/TH08 ANM (entry versions 2 and 3) parser and script runner.
+// TH08 ANM (entry version 3) parser and script runner.
 //
 // Entry header layout: anm_header06_t (64 bytes) — see thtk/extlib/thtypes.
 const warnedAnmOps = new Set<string>();
@@ -33,7 +33,7 @@ export interface AnmEntry {
   width: number;
   height: number;
   format: number;
-  version: 2 | 3;
+  version: 3;
   // Global id of this entry's embedded sprite 0 (the running entry base at
   // parse time). Callers that address an entry's sprites by embedded id must
   // add this — entry bases depend on every earlier entry's max embedded id.
@@ -57,7 +57,7 @@ interface ScriptRef {
   id: number;
   start: number; // absolute file offset of the first instruction
   imageKey: string | null;
-  version: 2 | 3;
+  version: 3;
 }
 
 function imageKeyFromName(name: string): string | null {
@@ -107,8 +107,8 @@ export class Anm {
       const nameOffset = v.u32(entryStart + 28);
       const version = v.u32(entryStart + 40);
       const nextOffset = v.u32(entryStart + 56);
-      if (version !== 2 && version !== 3) {
-        throw new Error(`${this.name}: ANM entry version ${version}, expected 2 or 3`);
+      if (version !== 3) {
+        throw new Error(`${this.name}: ANM entry version ${version}, expected 3 (TH08)`);
       }
       const name = v.cstring(entryStart + nameOffset);
       const imageKey = imageKeyFromName(name);
@@ -282,7 +282,7 @@ export class AnmRunner {
   private scriptStart: number;
   private ip: number;
   private imageKey: string | null;
-  private entryVersion: 2 | 3 = 2;
+  private entryVersion = 3;
   readonly scriptId: number;
 
   frame = 0;
@@ -666,12 +666,8 @@ export class AnmRunner {
       case 28: // visibility
         this.visible = !!v.i32(a);
         break;
-      case 29: // TH07: scale over duration (linear); TH08 changed this to one i32
-        if (this.entryVersion === 3) {
-          warnUnhandledOp(`${this.anm.name}: unimplemented ANM v3 opcode 29 in script ${this.scriptId}`);
-        } else {
-          this.scaleInterp = { start: this.ticks, duration: Math.max(1, v.i32(a + 8)), formula: 0, from: [this.scaleX, this.scaleY], to: [v.f32(a), v.f32(a + 4)] };
-        }
+      case 29: // TH08 changed TH07's scale-over-duration to one i32
+        warnUnhandledOp(`${this.anm.name}: unimplemented ANM v3 opcode 29 in script ${this.scriptId}`);
         break;
       case 30: // render-state flag (z-buffer related); no effect in Canvas renderer
       case 31: // render-state flag; no effect in Canvas renderer
@@ -691,13 +687,7 @@ export class AnmRunner {
         // not a packed u32, and the exe's float-typed reads are a Ghidra
         // artifact (the data holds integer channel values). Reading a+8 as a
         // packed color collapsed white to 0x0000ff (solid-blue portraits).
-        // ANM v2 (TH07) keeps the packed-u32 layout.
-        const to = this.entryVersion === 3
-          ? [v.i32(a + 8) & 0xff, v.i32(a + 12) & 0xff, v.i32(a + 16) & 0xff]
-          : (() => {
-              const packed = v.u32(a + 8);
-              return [(packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff];
-            })();
+        const to = [v.i32(a + 8) & 0xff, v.i32(a + 12) & 0xff, v.i32(a + 16) & 0xff];
         this.colorInterp = {
           start: this.ticks,
           duration: Math.max(1, v.i32(a)),
