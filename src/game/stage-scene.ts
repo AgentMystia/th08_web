@@ -309,6 +309,8 @@ export class StageScene implements GameHost {
   focusHeld = false;
   runtime: StageRuntime;
   playerObj: Player;
+  // The aim mirror the enemy FIRE pass reads (see GameHost.playerPosAtFrameStart).
+  playerPosAtFrameStart: { x: number; y: number } = { x: 0, y: 0 };
   playerBullets: PlayerBullet[] = [];
   private readonly playerBulletSlots: (PlayerBullet | null)[] = new Array(PLAYER_BULLET_POOL_CAP).fill(null);
   graze = 0;
@@ -2062,6 +2064,7 @@ export class StageScene implements GameHost {
   // -- update ----------------------------------------------------------------
 
   update(input: InputFrame): void {
+    this.playerPosAtFrameStart = { x: this.playerObj.x, y: this.playerObj.y };
     this.frame++;
     this.syncFixedPools();
     // The continue screen freezes gameplay entirely, like the original.

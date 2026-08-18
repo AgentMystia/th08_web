@@ -3014,7 +3014,14 @@ export class StageRuntime {
     e.ecl.lastFireFrame = game.frame;
     // FUN_0043f2b0 stores both deltas as f32 before FPATAN; FUN_00423480 then
     // stores the returned aim once more as f32 before passing it by value.
-    const aim = nativeAngleTowardPlayer(game.player.x, game.player.y, shootX, shootY);
+    // The enemy FIRE pass aims through the GameManager's player mirror,
+    // which holds the position as of the frame START: the calc chain runs
+    // descending (bullets 14 -> enemies 11 -> player 9), so the enemy pass
+    // sees where the player ended the previous frame. Verified empirically:
+    // aiming at the live (post-move) player produced phantom contacts at
+    // f2182/f3259 that the one-frame mirror clears.
+    const aimMirror = game.playerPosAtFrameStart ?? game.player;
+    const aim = nativeAngleTowardPlayer(aimMirror.x, aimMirror.y, shootX, shootY);
     // The FIRE template endpoints are raw f32 values.  Do not pre-wrap angle
     // endpoints: random modes 6/8 interpolate the authored interval first,
     // then FUN_0042fff0 wraps only the completed per-bullet angle.

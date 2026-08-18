@@ -268,7 +268,12 @@ export interface GameHost {
   // TH08 form byte (exe player+5 via FUN_0040bc40): 0 human / 1 youkai.
   // Familiar spawning, the per-tick side sync, and the ECL form-rank gate
   // read it live. Absent on TH07/minimal hosts.
-  th08PlayerForm?(): 0 | 1;
+    /** Player position as of the START of this frame — the enemy FIRE aim
+   *  mirror. TH08 runs its calc chain in DESCENDING priority (bullets 14 ->\   *  enemies 11 -> player 9; RegisterChain pushes 0x44c2ef:9, 0x42c5d7:0xb,
+   *  0x4311f0:0xe), so the enemy pass aims at where the player ended the
+   *  PREVIOUS frame. */
+  playerPosAtFrameStart?: { x: number; y: number };
+th08PlayerForm?(): 0 | 1;
   // TH08 op 184's receiver is the GLOBAL side mirror (singleton 0x4ea670
   // dword bit 11, `mov ecx,0x4ea670` @ 0x41e7da) — not the running enemy.
   th08SetSideMirror?(value: 0 | 1): void;
