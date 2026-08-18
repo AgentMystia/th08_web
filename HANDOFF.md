@@ -830,3 +830,22 @@ deadline 装填时序入手。
 
 Verifier 终态(score 1,238,237、graze 159、pointItems 30、lives −1):
 STAGE 1 仍 DIVERGED,如实。
+
+## 2026-08-19(五)——f3301 族定性:EX 曲线弹
+
+f3301 杀手(米弹,速 1.5,angle 1.3895,f3055 生,235 tick)来自 boss
+5746/15 在 f3054 的 **mode-0 20×1 扇形**(s=0.644..1.844 五档、a1=1.4749、
+a2=0.1963),每发带 **EX opcode 64(0x40 转向)**:arg3=40/50/60/70(转向
+起始间隔)、arg4=1、f0=−π/2(目标角)、f1=2.2/2.1/2.0/1.9/1.7(角速率)。
+即飞行 40-70 tick 后向 −90° 弯曲的曲线弹——f3301 接触是曲线轨迹的 grazing,
+与 f3952(直线环、无 EX)是**两个不同子系统**。
+
+下一会话:
+1. f3952(直线环):boss 控制 sub 的 ins_105 装填 tick(与机枪共用 33
+   cadence,疑 boss 段装填点差 1-2 tick);
+2. f3301(EX 曲线):对照 TH07 已收敛的 op-0x40 转向语义(port 的
+   advanceBulletExBehavior case 64)与 TH08 的 interval/速率单位——
+   f1≈2.0 疑为 度/tick 而非 弧度/tick;
+3. 然后 graze 步进与 ins_66 曲线弹(与 EX 曲线同属转向族)。
+
+STAGE 1 仍 DIVERGED(score 1238237/graze 159/items 30/lives −1),如实。
