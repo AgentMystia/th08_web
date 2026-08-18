@@ -301,7 +301,20 @@ test('Stage 5 bullet-time interrupts both authored eff05 spell-background VMs', 
   assert.equal(base.color & 0xffffff, 0xff4040);
   assert.equal(overlay.color & 0xffffff, 0xff60ff);
   assert.equal(overlay.blendAdd, true);
-  assert.ok(overlay.scaleX > 2.9, 'interrupt 2 starts the authored enlarged overlay');
+  // The exe's interp timers and scale growth advance by the frame-rate
+  // multiplier each tick (AnmVm::interpCurrentTimers++ / scaleGrowth scaled
+  // by framerateMultiplier) — the label-2 enlargement is a gradual growth
+  // under slow-mo, not an instantaneous jump. Advance at the real 1/3 rate
+  // and assert the overlay passes 2.9 within the spell's slow-mo window.
+  const overlayRunner0 = scene.spellBackgroundRunners[1];
+  const scaleAtInterrupt = overlayRunner0.spriteFrame().scaleX;
+  let reached = false;
+  for (let i = 0; i < 600 && !reached; i++) {
+    overlayRunner0.update(1 / 3);
+    reached = overlayRunner0.spriteFrame().scaleX > 2.9;
+  }
+  assert.ok(reached && scaleAtInterrupt > 2.2,
+    `interrupt 2 starts the authored enlarged overlay (from ${scaleAtInterrupt.toFixed(2)})`);
 
   // Regression (Stage-5 slow-mo flicker): the eff05b bullet-time rotation is
   // authored as ANM var10004 (~0.0628 rad/frame). op13 must resolve it via

@@ -4,6 +4,7 @@
 // the StageScene bundle sees). Not imported by src/main.ts — ships nothing.
 export { StageScene } from '../game/stage-scene';
 export type { RunCarry } from '../game/stage-scene';
+export { Th08SpellDeclaration, th08BombSpellName, archiveScript } from '../game/th08-declaration';
 export { Rpy, RPY_BITS, RPY_CHARACTERS, RPY_AUX_BITS, auxEventFrames, detectAuxAlignment } from '../formats/rpy';
 export { ReplayInputSource } from '../core/replay-input';
 export {
@@ -12,7 +13,8 @@ export {
   replaySlowdownAdvances,
   replayStageEntry
 } from '../game/replay-playback';
-export { Anm } from '../formats/anm';
+export { Anm, AnmRunner } from '../formats/anm';
+export { Sht } from '../formats/sht';
 export { TH07_DATA } from '../data/th07-data';
 export { TH08_DATA } from '../data/th08-data';
 export { stageSnapshot } from '../game/snapshot';

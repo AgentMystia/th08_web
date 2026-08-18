@@ -94,6 +94,41 @@ per-frame trace to pin — wine still cannot boot Th08.exe in this
 environment, so the trace procedure in scripts/native-trace.mjs stays for
 a working host.
 
+2026-08-18 presentation pass — five more systems from the v1.00d decompile
+(src/game/th08-declaration.ts is new; face_cdbg.anm is now embedded):
+- **Player spell-card declaration** (the bomb cut-in): FUN_0040be30 calls
+  FUN_00415d60 on the declaration manager singleton (0x4ea670) for EVERY
+  bomb. Names are rdata strings — 霊符「夢想妙珠」(0x4b43a0, type 0),
+  境符「四重結界」(0x4b44f4, type 1), 神霊「夢想封印　瞬」(0x4b43bc,
+  type 2), 境界「永夜四重結界」(0x4b4508, type 3); the selector (be30's
+  EDX) picks the side's face file (rm00/yk00), and be30 param_6=1 (both
+  deathbombs, like every enemy declaration) binds the RED banner sprite
+  variant (face_cdbg sprite 1). FUN_004069f0 indexes the ARCHIVE's script
+  table (file order) — player banners are face_cdbg scripts 0 (vertical
+  strip) and 2 (the -pi/2 full-width band), the name is text.anm script 4
+  (waits at ins_21(1); FUN_00416130's bomb-end interrupt releases it).
+  Names are canvas-typeset (text.anm's '@' texture is exe-runtime).
+- **TH08 sfx ids are a different table** (.data 0x4c81b0, 36 files, loader
+  loop 0x45d45f; FUN_0045d550/FUN_0045d660 play by this index — the second
+  arg is a pan/x position). Every id from 1 on is offset from TH07's;
+  playSfx dispatches TH08_SFX_SLOTS when runState is TH08. Bomb start =
+  id 13 (se_lazer00) + the declaration's id 14 (se_lazer01); shot fire =
+  id 0 (se_plst00, identical file in both games); graze 24, player death
+  2, item 18, impact damage 17, powerup chime 25, extend 22, pause 26.
+- **Shot impact visuals**: the settle (all.c:40420-40438) re-arms the shot
+  VM to script sprite+0xb (the odd-numbered 30-frame fade-out family in
+  player00.anm entry 0) and spawns effect 5 — DAT_004c6d30 maps effect ids
+  to etama ARCHIVE script indices (5→37, 6→38, 12→44) — so TH08 effects
+  run on an etama-bound layer; the old host fed those indices to a
+  player00-bound layer and every bomb/effect visual silently culled.
+- **Gauge drain denominator** is be30's param_4 at player+0xfe4
+  (200/150/200/250 by type), NOT the duration (param_5, the +0xe2af4 frame
+  limit): ±trunc(26000/param_4) per frame (0x44c81b-0x44c850).
+- **ANM interp channels run on a monotonic tick**, not the script clock
+  (exe AnmVm::interpCurrentTimers advance per tick and ignore
+  currentTimeInScript resets): op5 loop jumps and interrupt entries no
+  longer freeze armed tweens (this made the banner fade-ins vanish).
+
 2026-08-18 mechanics pass (commit cb42c0f) — four systems aligned from the
 v1.00d decompilation, replacing inherited-TH07 or speculative behavior:
 - Familiar lunge (0x44e3a0 sub-3 via 0x44e770's tail): the enemy manager's
@@ -659,6 +694,21 @@ deployment gate rather than a manual-only checkpoint.
 
 
 ## 7. Approximations registry (known, flagged, improvable)
+
+TH08-slice additions (2026-08-18 presentation pass, inline comments at the sites):
+- Declaration banner hold is bounded: face_cdbg's authored hold loops (op5
+  JmpDec on var 10008) reset the counter INSIDE the loop body, so they
+  never fall through; the native manager force-releases the VMs (site not
+  recovered). The port releases at 100f with the authored 50f alpha-out.
+- The declaration's fourth native VM (capture.anm flash) reads the
+  runtime-generated 'capture:@' surface — not recoverable from data, so
+  the cut-in is carried by portrait + banners + typeset name.
+- TH08_SFX_SLOTS gains for files TH07 never plays (se_cardget, se_option,
+  se_damage01, se_timeout2, se_opshow, se_ophide, se_invalid, se_slash,
+  se_item01) are neutral placeholders; the id→file mapping itself is
+  exe-exact (.data 0x4c81b0).
+- Effect VM host-driven scale/color params (FUN_00425430's +0x7c color /
+  scale arg) are not applied — the etama scripts self-animate.
 
 TH08-slice additions (2026-08-17, all with inline comments at the site):
 - Border Team option-sourced shots spawn at the player center: the exe

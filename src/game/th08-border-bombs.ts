@@ -12,10 +12,11 @@
  *   type 3 = 0x410fe0  unfocused-cast deathbomb (r100 field, stronger waves, 300f)
  *
  * A deathbomb INVERTS the side before adding +2 (0x44c7f7: fe0 = 1 - focus),
- * so casting focused runs table[2] and casting unfocused runs table[3]. The
- * machine ends the bomb when its timer reaches player+0xfe4 (set to the
- * callback's duration by the shared cast helper 0x40be30), and pays the gauge
- * ±26000/duration per frame (bypassing the lock) for the whole duration.
+ * so casting focused runs table[2] and casting unfocused runs table[3].
+ * 0x40be30 takes two counts: param_5 arms the frame-limit timer at
+ * player+0xe2af4 (260/200/260/300 — the durations below), while param_4
+ * lands at player+0xfe4 and is the GAUGE denominator (200/150/200/250):
+ * 0x44c81b-0x44c850 pays ±26000/param_4 per frame, bypassing the lock.
  *
  * Every constant below carries its native site. Slot damage fields that the
  * decompile shows explicitly are kept verbatim; the attack-slot pool plumbing
@@ -42,8 +43,11 @@ export interface Th08BombHost {
 
 export type Th08BombType = 0 | 1 | 2 | 3;
 
-// 0x40be30's duration argument (param written to player+0xfe4).
+// 0x40be30's param_5: the frame-limit timer armed at player+0xe2af4.
 const DURATION: Record<Th08BombType, number> = { 0: 260, 1: 200, 2: 260, 3: 300 };
+// 0x40be30's param_4 → player+0xfe4: the per-frame gauge payment's
+// denominator (0x44c81b: ±26000/param_4 — NOT the duration).
+const GAUGE_DENOMINATOR: Record<Th08BombType, number> = { 0: 200, 1: 150, 2: 200, 3: 250 };
 
 const F32 = Math.fround;
 const PI_F = F32(Math.PI);
@@ -120,7 +124,8 @@ export class Th08BorderBomb {
     host.clearBullets(x, y, 200);
     host.playSfx(0x0d, 0);
     if (this.type === 0 || this.type === 2) {
-      host.effectVm(0x0c, x, y, 1, 0xff4040ff);
+      // FUN_00425430(0xc = effect 12): DAT_004c6d30[12] → archive script 44.
+      host.effectVm(44, x, y, 1, 0xff4040ff);
       let angle = F32(-Math.PI);
       for (let i = 0; i < ORB_COUNT; i++) {
         // 0x40c010/0x40c910: orb VM script 0x13, ring at -pi + i*pi/8.
@@ -283,7 +288,9 @@ export class Th08BorderBomb {
         host.addAttackSlot(playerX, playerY, 100, 70);
         host.addAttackSlot(playerX, playerY, 100, this.type === 1 ? 0x28 : 100);
         host.effectVm(this.type === 1 ? 0x24 : 0x25, playerX, playerY, 5, 0xffffffff);
-        host.orbVm(1 + w.at / 10, w.script);
+        // The wave rings are etama VMs (archive scripts 0x59-0x5f), not
+        // player00 orb art.
+        host.effectVm(w.script, playerX, playerY, 1, 0xffffffff);
       }
     }
     // The field persists around the live player for the whole duration.
@@ -293,16 +300,20 @@ export class Th08BorderBomb {
   private burstOrb(host: Th08BombHost, orb: BombOrb, damage: number): void {
     host.clearBullets(orb.x, orb.y, 64);
     host.addAttackSlot(orb.x, orb.y, 64, damage);
-    host.effectVm(6, orb.x, orb.y, 8, 0xffffffff);
+    // FUN_00425430(6 = effect 6): DAT_004c6d30[6] → archive script 38; the
+    // settle plays sfx id 15 with the orb x as its pan value (0x40c667).
+    host.effectVm(38, orb.x, orb.y, 8, 0xffffffff);
     host.playSfx(0x0f, orb.x);
-    host.playSfx(8);
     orb.state = 2;
     orb.burstAge = 0;
   }
 
-  /** The per-frame gauge payment: ±26000/duration, bypassing the lock. */
+  /**
+   * The per-frame gauge payment: ±trunc(26000/player+0xfe4), bypassing the
+   * lock (0x44c81b-0x44c850). Odd (youkai-side) types pay positive.
+   */
   gaugeDeltaThisFrame(): number {
-    const per = Math.trunc(26000 / this.duration);
+    const per = Math.trunc(26000 / GAUGE_DENOMINATOR[this.type]);
     return (this.type & 1) === 1 ? per : -per;
   }
 }

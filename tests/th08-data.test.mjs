@@ -32,7 +32,7 @@ test('every stripped TH08 ANM resolves its shipped texture', () => {
   const expectedKeys = [
     'title01', 'player00', 'ascii', 'text', 'front', 'times', 'capture',
     'enemy', 'etama', 'stg1bg', 'stg1enm', 'stg1txt', 'eff01',
-    'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp'
+    'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp', 'face_cdbg'
   ];
   assert.deepEqual(Object.keys(TH08_DATA.anm), expectedKeys);
   const images = new Set(readdirSync('assets/th08-img'));

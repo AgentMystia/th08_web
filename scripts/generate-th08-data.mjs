@@ -74,7 +74,7 @@ const ANM_FILES = [
   'title01', 'player00', 'ascii', 'text', 'front', 'times', 'capture',
   'enemy', 'etama',
   'stg1bg', 'stg1enm', 'stg1txt', 'eff01',
-  'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp'
+  'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp', 'face_cdbg'
 ];
 const SHT_FILES = ['ply00a', 'ply00as'];
 

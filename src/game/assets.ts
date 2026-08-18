@@ -13,6 +13,7 @@ const IMAGE_NAMES = [
   'etama', 'etama2', 'etama3', 'etama4', 'etama5', 'etama6',
   'face_rm00', 'face_rm01an', 'face_rm01dp', 'face_rm01hp', 'face_rm01n2',
   'face_rm01no', 'face_rm01pr', 'face_rm01sp', 'face_rm01sw',
+  'face_cdbg',
   'face_st01_00', 'face_st01_name', 'face_st01an', 'face_st01n2', 'face_st01no',
   'face_yk00', 'face_yk01an', 'face_yk01dp', 'face_yk01hp', 'face_yk01n2',
   'face_yk01no', 'face_yk01pr', 'face_yk01sp', 'face_yk01sw',

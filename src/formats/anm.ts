@@ -286,6 +286,13 @@ export class AnmRunner {
   readonly scriptId: number;
 
   frame = 0;
+  // Monotonic tick counter for the interp channels. The exe's interp
+  // timers (AnmVm::interpCurrentTimers) advance every VM tick and are
+  // INDEPENDENT of currentTimeInScript — op5 loop jumps and interrupt
+  // entries reset the script clock, and an armed fade/scale tween keeps
+  // progressing across the reset (face_cdbg's banner loops reset the
+  // clock to their label time while the 50-frame alpha tween runs).
+  private ticks = 0;
   waiting = false;
   private waitTimeout = -1;
   removed = false;
@@ -381,7 +388,7 @@ export class AnmRunner {
   armFade(durationFrames: number, formula: number, fromAlpha: number, toAlpha: number): void {
     this.alpha = fromAlpha & 0xff;
     this.fadeInterp = {
-      start: this.frame,
+      start: this.ticks,
       duration: Math.max(1, durationFrames),
       formula,
       from: [fromAlpha & 0xff],
@@ -425,16 +432,17 @@ export class AnmRunner {
     if (this.rotSpeedZ) this.rotZ = normalizeAngle(this.rotZ + this.rotSpeedZ * rate);
     this.applyInterps();
     this.frame += rate;
+    this.ticks += rate;
   }
 
   private applyInterps(): void {
     if (this.fadeInterp) {
-      this.alpha = Math.round(interpValue(this.fadeInterp, this.frame, 0)) & 0xff;
-      if (this.frame >= this.fadeInterp.start + this.fadeInterp.duration) this.fadeInterp = null;
+      this.alpha = Math.round(interpValue(this.fadeInterp, this.ticks, 0)) & 0xff;
+      if (this.ticks >= this.fadeInterp.start + this.fadeInterp.duration) this.fadeInterp = null;
     }
     if (this.moveInterp) {
-      const x = interpValue(this.moveInterp, this.frame, 0);
-      const y = interpValue(this.moveInterp, this.frame, 1);
+      const x = interpValue(this.moveInterp, this.ticks, 0);
+      const y = interpValue(this.moveInterp, this.ticks, 1);
       if (this.useOffset) {
         this.offX = x;
         this.offY = y;
@@ -442,18 +450,18 @@ export class AnmRunner {
         this.x = x;
         this.y = y;
       }
-      if (this.frame >= this.moveInterp.start + this.moveInterp.duration) this.moveInterp = null;
+      if (this.ticks >= this.moveInterp.start + this.moveInterp.duration) this.moveInterp = null;
     }
     if (this.scaleInterp) {
-      this.scaleX = interpValue(this.scaleInterp, this.frame, 0);
-      this.scaleY = interpValue(this.scaleInterp, this.frame, 1);
-      if (this.frame >= this.scaleInterp.start + this.scaleInterp.duration) this.scaleInterp = null;
+      this.scaleX = interpValue(this.scaleInterp, this.ticks, 0);
+      this.scaleY = interpValue(this.scaleInterp, this.ticks, 1);
+      if (this.ticks >= this.scaleInterp.start + this.scaleInterp.duration) this.scaleInterp = null;
     }
     if (this.rotInterp) {
-      this.rotX = interpValue(this.rotInterp, this.frame, 0);
-      this.rotY = interpValue(this.rotInterp, this.frame, 1);
-      this.rotZ = interpValue(this.rotInterp, this.frame, 2);
-      if (this.frame >= this.rotInterp.start + this.rotInterp.duration) this.rotInterp = null;
+      this.rotX = interpValue(this.rotInterp, this.ticks, 0);
+      this.rotY = interpValue(this.rotInterp, this.ticks, 1);
+      this.rotZ = interpValue(this.rotInterp, this.ticks, 2);
+      if (this.ticks >= this.rotInterp.start + this.rotInterp.duration) this.rotInterp = null;
     }
     if (this.colorInterp) {
       const r = Math.round(interpValue(this.colorInterp, this.frame, 0)) & 0xff;
@@ -586,7 +594,7 @@ export class AnmRunner {
         this.scaleSpeedY = this.getVal(v.f32(a + 4));
         break;
       case 15: // fade to alpha over duration
-        this.fadeInterp = { start: this.frame, duration: Math.max(1, v.i32(a + 4)), formula: 0, from: [this.alpha], to: [v.i32(a) & 0xff] };
+        this.fadeInterp = { start: this.ticks, duration: Math.max(1, v.i32(a + 4)), formula: 0, from: [this.alpha], to: [v.i32(a) & 0xff] };
         break;
       case 16: // blend mode (bit 0 = additive)
         this.blendAdd = (v.i32(a) & 1) !== 0;
@@ -598,7 +606,7 @@ export class AnmRunner {
         const fromX = this.useOffset ? this.offX : this.x;
         const fromY = this.useOffset ? this.offY : this.y;
         this.moveInterp = {
-          start: this.frame,
+          start: this.ticks,
           duration: Math.max(1, v.i32(a + 12)),
           formula,
           from: [fromX, fromY],
@@ -644,7 +652,7 @@ export class AnmRunner {
       case 86: { // Color2Time (color interp, same arg shape as op 33)
         const packed = v.u32(a + 8);
         this.colorInterp = {
-          start: this.frame,
+          start: this.ticks,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [(this.colorRgb >> 16) & 0xff, (this.colorRgb >> 8) & 0xff, this.colorRgb & 0xff],
@@ -653,7 +661,7 @@ export class AnmRunner {
         break;
       }
       case 87: // Alpha2Time (fade interp, same arg shape as op 34)
-        this.fadeInterp = { start: this.frame, duration: Math.max(1, v.i32(a)), formula: v.i32(a + 4), from: [this.alpha], to: [v.i32(a + 8) & 0xff] };
+        this.fadeInterp = { start: this.ticks, duration: Math.max(1, v.i32(a)), formula: v.i32(a + 4), from: [this.alpha], to: [v.i32(a + 8) & 0xff] };
         break;
       case 28: // visibility
         this.visible = !!v.i32(a);
@@ -662,7 +670,7 @@ export class AnmRunner {
         if (this.entryVersion === 3) {
           warnUnhandledOp(`${this.anm.name}: unimplemented ANM v3 opcode 29 in script ${this.scriptId}`);
         } else {
-          this.scaleInterp = { start: this.frame, duration: Math.max(1, v.i32(a + 8)), formula: 0, from: [this.scaleX, this.scaleY], to: [v.f32(a), v.f32(a + 4)] };
+          this.scaleInterp = { start: this.ticks, duration: Math.max(1, v.i32(a + 8)), formula: 0, from: [this.scaleX, this.scaleY], to: [v.f32(a), v.f32(a + 4)] };
         }
         break;
       case 30: // render-state flag (z-buffer related); no effect in Canvas renderer
@@ -670,7 +678,7 @@ export class AnmRunner {
         break;
       case 32: // move with formula
         this.moveInterp = {
-          start: this.frame,
+          start: this.ticks,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [this.useOffset ? this.offX : this.x, this.useOffset ? this.offY : this.y],
@@ -691,7 +699,7 @@ export class AnmRunner {
               return [(packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff];
             })();
         this.colorInterp = {
-          start: this.frame,
+          start: this.ticks,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [(this.colorRgb >> 16) & 0xff, (this.colorRgb >> 8) & 0xff, this.colorRgb & 0xff],
@@ -700,11 +708,11 @@ export class AnmRunner {
         break;
       }
       case 34: // fade with formula
-        this.fadeInterp = { start: this.frame, duration: Math.max(1, v.i32(a)), formula: v.i32(a + 4), from: [this.alpha], to: [v.i32(a + 8) & 0xff] };
+        this.fadeInterp = { start: this.ticks, duration: Math.max(1, v.i32(a)), formula: v.i32(a + 4), from: [this.alpha], to: [v.i32(a + 8) & 0xff] };
         break;
       case 35: // rotate with formula
         this.rotInterp = {
-          start: this.frame,
+          start: this.ticks,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [this.rotX, this.rotY, this.rotZ],
@@ -713,7 +721,7 @@ export class AnmRunner {
         break;
       case 36: // scale with formula
         this.scaleInterp = {
-          start: this.frame,
+          start: this.ticks,
           duration: Math.max(1, v.i32(a)),
           formula: v.i32(a + 4),
           from: [this.scaleX, this.scaleY],

@@ -21,6 +21,7 @@ import { CherrySystem, BORDER_DURATION, CHERRY_PLUS_MAX, borderDimRequest, smoot
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
 import { Th08BorderBomb, type Th08BombHost } from './th08-border-bombs';
+import { Th08SpellDeclaration, th08BombSpellName, archiveScript } from './th08-declaration';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import { TH08_HUD } from './th08-hud-layout';
@@ -191,6 +192,23 @@ const SFX_SLOTS: [string, number][] = [
   ['se_extend', 0.708], ['se_timeout', 0.355], ['se_graze', 0.355], ['se_powerup', 0.562],
   ['se_border', 0.708], ['se_bonus', 0.708], ['se_graze', 0.708], ['se_kira00', 1],
   ['se_bonus2', 0.708], ['se_pause', 0.708]
+];
+
+// TH08 sfx ids are a DIFFERENT table: .data 0x4c81b0 (36 filename pointers,
+// loaded by the loop at Th08.exe 0x45d45f; FUN_0045d550/FUN_0045d660 play by
+// this index). Every id from 1 on is offset from TH07's mapping — the TH08
+// path must never index SFX_SLOTS. Gains reuse the TH07-measured gain for
+// the same file; files TH07 never plays carry a neutral placeholder gain.
+const TH08_SFX_SLOTS: [string, number][] = [
+  ['se_plst00', 0.1], ['se_enep00', 0.251], ['se_pldead00', 0.316], ['se_power0', 0.631],
+  ['se_power1', 0.631], ['se_tan00', 0.178], ['se_tan01', 0.141], ['se_tan02', 0.112],
+  ['se_ok00', 0.316], ['se_cancel00', 0.316], ['se_select00', 0.141], ['se_gun00', 0.251],
+  ['se_cat00', 0.355], ['se_lazer00', 0.355], ['se_lazer01', 0.355], ['se_enep01', 0.355],
+  ['se_nep00', 0.794], ['se_damage00', 0.2], ['se_item00', 0.224], ['se_kira00', 0.398],
+  ['se_kira01', 0.316], ['se_kira02', 0.224], ['se_extend', 0.708], ['se_timeout', 0.355],
+  ['se_graze', 0.355], ['se_powerup', 0.562], ['se_pause', 0.708], ['se_cardget', 0.5],
+  ['se_option', 0.5], ['se_damage01', 0.251], ['se_timeout2', 0.5], ['se_opshow', 0.5],
+  ['se_ophide', 0.5], ['se_invalid', 0.5], ['se_slash', 0.5], ['se_item01', 0.35]
 ];
 
 // front.png sprite rects [x,y,w,h], recovered from front.anm's entry0 sprite
@@ -640,6 +658,8 @@ export class StageScene implements GameHost {
   private readonly th08ItemRunners: (AnmRunner | null)[] | null = null;
   // Script-driven bomb visuals (see spawnBombEffects).
   private readonly playerEffects: PlayerEffects;
+  // TH08 effect layer bound to etama.anm (FUN_00425430's effect VMs).
+  private readonly th08Effects: PlayerEffects;
   // Reserved generic-effect slot used by the player option state machine.
   // Focus-in creates authored etama.anm effect 24; focus-out interrupts it.
   private focusEffectRunner: AnmRunner | null = null;
@@ -674,6 +694,9 @@ export class StageScene implements GameHost {
   private th08IdleFrames = 0;
   // Bomb-orb visual follows for the PlayerEffects entries.
   private th08BombOrbActors: { x: number; y: number; angle: number; state: number }[] = [];
+  // Live player spell-card declaration (bomb cut-in), FUN_00415d60's four
+  // VMs; retires itself once every script has removed.
+  private th08Declaration: Th08SpellDeclaration | null = null;
   private bombContext!: BombContext;
   // Latched bomb duration (frames) for end-window checks (ReimuA focused's
   // final-30-frames detonation, etc.).
@@ -750,7 +773,9 @@ export class StageScene implements GameHost {
     // The native game loads every SE buffer before play. Web Audio otherwise
     // drops the first request while fetching it; se_pldead00 is normally used
     // only on the first miss, so without this preload that miss is silent.
-    this.audio.preloadSfx(SFX_SLOTS.map(([file]) => file));
+    // Preload both id tables' files (the TH08 table adds lazer01/cardget/
+    // option/damage01/timeout2/opshow/ophide/invalid/slash/item01).
+    this.audio.preloadSfx([...new Set([...SFX_SLOTS, ...TH08_SFX_SLOTS].map(([file]) => file))]);
     if (initialRngSeed != null) this.rng.seed = initialRngSeed & 0xffff;
     this.difficulty = difficulty;
     this.stageNumber = stageNumber;
@@ -931,6 +956,10 @@ export class StageScene implements GameHost {
       : null;
     this.playerObj = new Player(character, assets.anms);
     this.playerEffects = new PlayerEffects(this.playerObj.anm);
+    // FUN_00425430's effect VMs run in the effect manager's etama.anm (the
+    // DAT_004c6d30 table maps effect id → archive script index: 5→37, 6→38,
+    // 12→44); the bomb callbacks reference those archive indices directly.
+    this.th08Effects = new PlayerEffects(assets.anms.etama);
     this.bombContext = this.createBombContext();
     this.player = this.playerObj;
     // Extra/Phantasm run-init (FUN_0042cf2f @ all.c:19715-19717): lives
@@ -1241,7 +1270,8 @@ export class StageScene implements GameHost {
     else return;
     this.refreshPowerHudRandomState();
     this.adjustRank(200);
-    this.playSfx(28);
+    // se_extend: TH07 id 28, TH08 id 22 (.data 0x4c81b0).
+    this.playSfx(this.runState ? 22 : 28);
   }
 
   private adjustRank(delta: number): void {
@@ -1415,6 +1445,7 @@ export class StageScene implements GameHost {
     this.activeBombSlots.length = 0;
     for (const region of this.bombClearRegions) region.framesLeft = 0;
     this.playerEffects.clear();
+    this.th08Effects.clear();
     this.screenShakes.length = 0;
     this.shakeX = 0;
     this.shakeY = 0;
@@ -1904,7 +1935,10 @@ export class StageScene implements GameHost {
     // per-bullet se_damage00 spam).
     if (this.sfxPlayedThisFrame.has(id)) return;
     this.sfxPlayedThisFrame.add(id);
-    const slot = SFX_SLOTS[id];
+    // TH08 plays through its own id table (.data 0x4c81b0 — ids 1+ are
+    // offset from TH07's, so a shared id means a different FILE per game).
+    const slots = this.runState ? TH08_SFX_SLOTS : SFX_SLOTS;
+    const slot = slots[id];
     if (slot) this.audio.sfx(slot[0], slot[1], id);
   }
 
@@ -2722,6 +2756,11 @@ export class StageScene implements GameHost {
     }
     this.prevBombTimer = p.bombTimer;
     this.playerEffects.update(this.slowRate);
+    this.th08Effects.update(this.slowRate);
+    if (this.th08Declaration) {
+      this.th08Declaration.update(this.slowRate);
+      if (this.th08Declaration.done) this.th08Declaration = null;
+    }
     this.tickScreenFx();
     // The stage object arms its results screen on the same scheduler tick
     // that the last authored timeline wait is consumed. Native Stage 1 has
@@ -2762,7 +2801,12 @@ export class StageScene implements GameHost {
       this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
       p.bombTimer = this.th08Bomb.duration;
       p.bombInvuln = this.th08Bomb.duration;
-      this.playSfx(14);
+      // FUN_0040be30 → FUN_00415d60: every bomb declares its spell card
+      // (portrait + banner VMs + the rdata name, sfx id 14 se_lazer01);
+      // the bomb callback then queues sfx id 13 (se_lazer00) itself
+      // (0x40c067-0x40c07f pushes 0x4b43a0's declaration first).
+      this.startTh08Declaration(p.th08BombType);
+      this.playSfx(13);
       // 0x44c773 FUN_0043c03f(200): every bomb cast lowers the rank by 200
       // subrank points.
       this.adjustRank(-200);
@@ -2911,13 +2955,48 @@ export class StageScene implements GameHost {
         actor.state = orb.state;
       }
     }
-    // The machine pays ±26000/duration into the gauge every frame of the
-    // bomb, bypassing the lock (0x44c81b-0x44c850).
+    // The machine pays ±26000/gaugeDuration into the gauge every frame of
+    // the bomb, bypassing the lock (0x44c81b-0x44c850); the denominator is
+    // be30's param_4 (200/150/200/250), NOT the bomb duration.
     if (this.runState) this.runState.addYoukaiGauge(sim.gaugeDeltaThisFrame(), true);
     if (!sim.active) {
       this.th08Bomb = null;
       this.th08BombOrbActors = [];
+      // FUN_00416130 (bomb end): interrupt 1 releases the name VM's
+      // label-1 wait into its exit; the portrait/banners are self-timed.
+      this.th08Declaration?.end();
     }
+  }
+
+  // Spawn an etama.anm VM by ARCHIVE script index (Th08.exe FUN_004069f0
+  // indexes the archive's script table, so index 37 = entry 1's 13th script
+  // regardless of its negative on-disk id).
+  private spawnTh08Effect(archiveIndex: number, x: number, y: number, ttl = 240): void {
+    const etama = this.assets.anms.etama;
+    const ref = archiveScript(etama, archiveIndex);
+    if (!etama.hasScriptInEntry(ref.entryIndex, ref.localId)) return;
+    this.th08Effects.spawn({
+      scriptId: ref.localId,
+      x,
+      y,
+      ttl
+    });
+  }
+
+  // FUN_00415d60 on the declaration manager (0x4ea670): selector picks the
+  // side's face file (0x2624 human / 0x2628 youkai), banners come from
+  // face_cdbg.anm (archive 0xf) with the deathbomb's red sprite variant,
+  // and the name string is the rdata table at 0x4b43a0.
+  private startTh08Declaration(type: 0 | 1 | 2 | 3): void {
+    const anms = this.assets.anms;
+    const face = (type & 1) === 0 ? anms.face_rm00 : anms.face_yk00;
+    this.th08Declaration = new Th08SpellDeclaration(
+      { face, cdbg: anms.face_cdbg, text: anms.text },
+      (type & 1) as 0 | 1,
+      th08BombSpellName(type),
+      type >= 2
+    );
+    this.playSfx(14);
   }
 
   // The Th08BombHost adapter: attack slots settle damage/clears against the
@@ -2956,7 +3035,9 @@ export class StageScene implements GameHost {
       },
       effectVm(script, x, y, scale, color) {
         void scale; void color;
-        scene.playerEffects.spawn({ scriptId: script, x, y, ttl: 120 });
+        // FUN_00425430's effect pool draws from etama.anm; `script` is the
+        // archive script index (DAT_004c6d30's second word for effect ids).
+        scene.spawnTh08Effect(script, x, y);
       },
       orbVm(index, script) {
         const actor = scene.th08BombOrbActors[index] ?? (scene.th08BombOrbActors[index] = {
@@ -3249,7 +3330,7 @@ export class StageScene implements GameHost {
     // Scripts 0-3 = 一時停止 + the three menu rows; 4-6 = the confirm set.
     for (let i = 0; i <= 3; i++) runners[i].interrupt(1);
     this.pauseState = { cursor: 0, confirm: false, confirmCursor: 1, closing: 0, action: null, runners };
-    this.playSfx(37); // se_pause
+    this.playSfx(this.runState ? 26 : 37); // se_pause (TH08 id 26)
   }
 
   private updatePause(input: InputFrame): void {
@@ -3371,7 +3452,7 @@ export class StageScene implements GameHost {
     this.gameOver = false;
     this.gameOverTimer = 0;
     this.continueScreen = null;
-    this.playSfx(10); // se_ok00
+    this.playSfx(this.runState ? 8 : 10); // se_ok00 (TH08 id 8)
   }
 
   private declineContinue(): void {
@@ -3766,12 +3847,20 @@ export class StageScene implements GameHost {
             // full 96-slot pool (native Stage 3 processing frame 2811).
             b.runner.frame = 1;
           }
-          this.spawnEffectParticles(5, b.x, b.y, 1, 0xffffffff);
+          if (this.runState) {
+            // TH08 settle (all.c:40420-40438): the VM re-arms to sprite+0xb
+            // and effect 5 (DAT_004c6d30 → etama archive script 37) bursts
+            // at the bullet position; velocity /8 unless shotType 3.
+            this.spawnTh08Effect(37, b.x, b.y, 60);
+          } else {
+            this.spawnEffectParticles(5, b.x, b.y, 1, 0xffffffff);
+          }
           if (b.shotType !== 3) {
             b.vx /= 8;
             b.vy /= 8;
           }
-          this.playSfx(20);
+          // se_damage00: TH07 id 20, TH08 id 17.
+          this.playSfx(this.runState ? 17 : 20);
         }
       }
     }
@@ -4154,7 +4243,8 @@ export class StageScene implements GameHost {
       if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
         this.spawnItem('time2', sourceX, sourceY, {});
       }
-      this.playSfx(30);
+      // se_graze: TH07 id 30, TH08 id 24.
+      this.playSfx(this.runState ? 24 : 30);
       return;
     }
     // Th07.exe (v1.00b) FUN_0043bb30 @ 0x43bb3b-0x43bb8a: an active bomb
@@ -4173,7 +4263,8 @@ export class StageScene implements GameHost {
       this.spellcard.grazeBonus += 2500 + Math.trunc((this.cherry?.cherry ?? 0) / 1500) * 20;
     }
     this.cherry?.onGraze(this.focusHeld);
-    this.playSfx(30);
+    // se_graze: TH07 id 30, TH08 id 24.
+    this.playSfx(this.runState ? 24 : 30);
   }
 
   private onPlayerHit(sourceBullet: EnemyBullet | null, kind: 'bullet' | 'laser' | 'body' = 'bullet'): void {
@@ -4226,7 +4317,8 @@ export class StageScene implements GameHost {
       // u32 draws feeding integrity-only fields — four raw u16s.
       this.rng.u32InRange(100000);
       this.rng.u32InRange(100000);
-      this.playSfx(4);
+      // se_pldead00: TH07 id 4, TH08 id 2.
+      this.playSfx(this.runState ? 2 : 4);
       this.spawnEffectParticles(12, p.x, p.y, 1, 0xff4040ff);
       this.spawnEffectParticles(6, p.x, p.y, 16, 0xffffffff);
     }
@@ -5324,7 +5416,8 @@ export class StageScene implements GameHost {
   private collectItem(it: ItemEntity): void {
     const p = this.playerObj;
     it.dead = true;
-    this.playSfx(21);
+    // se_item00: TH07 id 21, TH08 id 18.
+    this.playSfx(this.runState ? 18 : 21);
     // TH08 collect dispatch: the TH08 item types settle through the run
     // state's native scoring (CollectPoint/CollectPointSmall/CollectTimeOrb,
     // reference/re-specs/th08-decomp-items/), not the TH07 cherry path. The
@@ -5356,7 +5449,8 @@ export class StageScene implements GameHost {
           this.refreshPowerHudRandomState();
           if (this.powerTier(p.power) > before) {
             this.spawnScorePopup(-1, it.x, it.y, 0xffffc0a0);
-            this.playSfx(0x1f);
+            // se_powerup: TH07 id 31, TH08 id 25.
+            this.playSfx(this.runState ? 25 : 0x1f);
           } else {
             this.spawnScorePopup(10, it.x, it.y, 0xffffffff);
           }
@@ -5401,7 +5495,8 @@ export class StageScene implements GameHost {
         // power was below max, then always a white "1000" popup and +100.
         if (p.power < 128) {
           this.spawnScorePopup(-1, it.x, it.y, 0xffffc0a0);
-          this.playSfx(0x1f);
+          // se_powerup: TH07 id 31, TH08 id 25.
+          this.playSfx(this.runState ? 25 : 0x1f);
           this.convertLivePowerItems();
           // Case 4's crossing cancel (all.c:22172) is NOT spell-gated,
           // unlike the power/bigPower cases.
@@ -5835,7 +5930,11 @@ export class StageScene implements GameHost {
       this.markPass('items');
       const p = this.playerObj;
       this.playerEffects.draw(r, ox, oy);
+      this.th08Effects.draw(r, ox, oy);
       this.bombRunner?.draw(r, ox, oy);
+      // The declaration VMs self-position in 640x480 screen space
+      // (banner strips at y=16 over the frame, name mid-playfield).
+      this.th08Declaration?.draw(r);
       if (this.focusEffectRunner) {
         r.drawAnmFrame(this.focusEffectRunner.spriteFrame(), ox + p.x, oy + p.y);
       }

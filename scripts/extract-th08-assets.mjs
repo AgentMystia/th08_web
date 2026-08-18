@@ -16,7 +16,11 @@ export const ANM_FILES = [
   'title01', 'player00', 'ascii', 'text', 'front', 'times', 'capture',
   'enemy', 'etama',
   'stg1bg', 'stg1enm', 'stg1txt', 'eff01',
-  'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp'
+  'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp',
+  // face_cdbg.anm carries the spell-declaration banner strips (2 sprites,
+  // 94x512) used by the player bomb cut-in (Th08.exe FUN_00415d60 loads it
+  // as archive id 0xf into the declaration manager at 0x4ea670+0x2634).
+  'face_cdbg'
 ];
 
 function findThanm() {

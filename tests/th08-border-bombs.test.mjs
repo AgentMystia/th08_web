@@ -55,9 +55,10 @@ test('type 0 cast spawns the sixteen-orb ladder at -pi + i*pi/8', () => {
   bomb.cast(host, 192, 200);
   // Sixteen orb VMs on script 0x13 (0x40c010's FUN_004069f0 calls).
   assert.equal(host.log.orbs.filter(o => o.script === 0x13).length, 16);
-  // Cast-frame bullet clear + red flash (script 0xc) + cast sfx.
+  // Cast-frame bullet clear + red flash (effect 12 → archive script 44,
+  // DAT_004c6d30) + cast sfx.
   assert.ok(host.log.clears.some(c => c.radius === 200));
-  assert.ok(host.log.effects.some(e => e.script === 0x0c));
+  assert.ok(host.log.effects.some(e => e.script === 44));
   assert.ok(host.log.sfx.some(s => s.id === 0x0d));
 });
 
@@ -116,25 +117,28 @@ test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () 
     bomb.cast(host, 192, 200);
     const waveScripts = type === 1 ? [0x59, 0x5a, 0x5b] : [0x5d, 0x5e, 0x5f];
     for (let i = 0; i < 31; i++) bomb.tick(host, 192, 200, true);
-    const orbScripts = host.log.orbs.map(o => o.script);
-    for (const s of waveScripts) assert.ok(orbScripts.includes(s), `wave ${s.toString(16)} for type ${type}`);
+    // The wave rings ride the etama effect layer by archive script index.
+    const effectScripts = host.log.effects.map(e => e.script);
+    for (const s of waveScripts) assert.ok(effectScripts.includes(s), `wave ${s.toString(16)} for type ${type}`);
     // The field aura follows the player at r100 with damage 70.
     assert.ok(host.log.slots.some(s2 => s2.radius === 100 && s2.damage === 70));
   }
 });
 
-test('the machine pays the gauge +-26000/duration each frame', () => {
+test('the machine pays the gauge +-26000/param_4 each frame (0x44c81b)', () => {
+  // The denominator is 0x40be30's param_4 (player+0xfe4: 200/150/200/250),
+  // NOT the bomb duration (param_5, player+0xe2af4's frame limit).
   const human = new Th08BorderBomb(0, 0, 0);
-  assert.equal(human.gaugeDeltaThisFrame(), -Math.trunc(26000 / 260));
+  assert.equal(human.gaugeDeltaThisFrame(), -Math.trunc(26000 / 200));
   const youkai = new Th08BorderBomb(1, 0, 0);
-  assert.equal(youkai.gaugeDeltaThisFrame(), Math.trunc(26000 / 200));
+  assert.equal(youkai.gaugeDeltaThisFrame(), Math.trunc(26000 / 150));
   // Deathbomb types pay toward the INVERTED side: the focused-cast table[2]
   // (was youkai, now human-side) pays negative, the unfocused-cast table[3]
   // positive — the sign follows the post-inversion bombType bit 0.
   const focusedCast = new Th08BorderBomb(2, 0, 0);
-  assert.equal(focusedCast.gaugeDeltaThisFrame(), -Math.trunc(26000 / 260));
+  assert.equal(focusedCast.gaugeDeltaThisFrame(), -Math.trunc(26000 / 200));
   const unfocusedCast = new Th08BorderBomb(3, 0, 0);
-  assert.equal(unfocusedCast.gaugeDeltaThisFrame(), Math.trunc(26000 / 300));
+  assert.equal(unfocusedCast.gaugeDeltaThisFrame(), Math.trunc(26000 / 250));
 });
 
 test('the bomb ends exactly at its duration', () => {

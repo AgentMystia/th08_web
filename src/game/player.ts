@@ -788,10 +788,13 @@ export class Player {
         ? { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) }
         : { x: 0, y: 0 })
       : shot.orb === 1 || shot.orb === 2 ? this.orbOffset(shot.orb) : { x: 0, y: 0 };
-    // TH08 has no paired +0x20 impact-script family in player00.anm's 19
-    // entry-0 scripts; the runner plays the flight script and the bullet
-    // dies with it (TH07 re-arms an explicit impact VM instead).
-    const impactScript = this.character === 'reimuYukari' ? scriptId : scriptId + 0x20;
+    // TH08 impact: the settle path (all.c:40427-40431) re-arms the shot VM
+    // with script sprite+0xb — one past the flight script, the odd-numbered
+    // 30-frame fade-out family in player00.anm entry 0. TH07 re-arms an
+    // explicit +0x20 impact script family instead.
+    const impactScript = this.character === 'reimuYukari'
+      ? scriptId + 1
+      : scriptId + 0x20;
     return {
       poolSlot: -1,
       // FUN_00438b70 writes spawn position and velocity into the player's

@@ -519,3 +519,52 @@ ready to run unchanged once a host can debug the game.
 The 7 phantom deaths therefore remain the documented residual; all
 static candidates were exhausted (three forensic passes, each with
 recorded disproofs), and the dynamic oracle is unavailable on this host.
+
+## Update (2026-08-18 presentation pass — bomb cut-in, sfx table, shot impacts)
+
+Static-decompile alignment of the presentation layer (no wine; every fact
+below is from Th08.exe v1.00d / the unpacked data):
+
+1. **Player spell-card declaration now exists** (src/game/th08-declaration.ts).
+   FUN_0040be30 (bomb cast) → FUN_00415d60 on the singleton at 0x4ea670:
+   portrait VM (face_rm00/face_yk00 by be30's EDX selector), two banner VMs
+   from face_cdbg.anm (archive scripts 0 + 2; the deathbomb's param_6=1
+   binds the red sprite variant), and the name VM (text.anm script 4,
+   waiting at ins_21(1) until FUN_00416130's bomb-end interrupt). Names are
+   the rdata strings 0x4b43a0/0x4b44f4/0x4b43bc/0x4b4508; text.anm's '@'
+   surface is exe-runtime so the name is canvas-typeset at the VM's live
+   position/alpha. face_cdbg.anm is now embedded (extractor + generator
+   lists, assets/th08-img/face_cdbg.png).
+2. **TH08 sfx ids use their own table** (.data 0x4c81b0, 36 entries): playSfx
+   dispatches TH08_SFX_SLOTS on the TH08 path; shared call sites branch by
+   runState (graze 24, death 2, item 18, damage 17, powerup 25, extend 22,
+   pause 26, ok 8). Bomb start plays id 13 (se_lazer00) + the declaration's
+   id 14 (se_lazer01). FUN_0045d550's second arg is a pan value (shot spawns
+   pass the player x).
+3. **Shot impacts**: settle re-arms the VM to script sprite+0xb (the odd
+   30-frame fade family) and spawns effect 5 → etama archive script 37;
+   TH08 effects run on an etama-bound PlayerEffects layer (the old host fed
+   archive indices to the player00-bound layer — every bomb effect visual
+   silently culled). DAT_004c6d30: 5→37, 6→38, 12→44.
+4. **Gauge denominator fix**: be30 param_4 (player+0xfe4, 200/150/200/250)
+   not the duration — ±trunc(26000/param_4)/frame (0x44c81b).
+5. **ANM interp channels now run on a monotonic tick** (exe
+   interpCurrentTimers semantics): op5 loops / interrupts resetting the
+   script clock no longer freeze armed tweens. One TH07 test
+   (eff05b bullet-time overlay) was updated to the true gradual-growth
+   semantics; TH07 replay:verify stays 6/6 PASS.
+
+Verified: check/build clean, 399/400 tests (1 pre-existing skip),
+replay:verify 6/6 PASS, replay:verify:th08 still STAGE 1 DIVERGED with the
+same phantom-death residual but a closer end state (score 615305 vs the
+pre-change 356160 against native 7376015 — the impact re-arm frees shot
+slots 30f after hit, matching the exe, which shifts kills earlier).
+Declaration probe (repo harness, batched advances): portrait sweep visible
+(fresh→hold, region texture 97%), the rotated band 96% textured during
+hold and released by 165f, the name present through the bomb and removed
+after the end interrupt; standard checkpoints f120/f800 unchanged (play
+8%/9% texture, side/lower in band). NOTE for probe authors: hand-rolled
+static servers that mislabel .wav MIME starve the audio pipeline and the
+HUD never draws (white sidebar) — always use scripts/lib/browser-harness
+startStaticServer; and advance() in small per-frame batches can catch the
+desync backbuffer mid-present (batch ≥30).
