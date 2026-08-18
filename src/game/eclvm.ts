@@ -4429,15 +4429,22 @@ export class StageRuntime {
     if (!proto) return 4;
     const s = proto[0];
     const h = this.th08BulletBaseHeight(type);
-    if (h > 32) return 24;
+    // The fnstsw parity chains at 0x43331d/0x433387 decode to inclusive
+    // tiers on the VM's +0x30 sprite-size field (the same field FUN_0042fea0
+    // compares against the 16/48 .rdata thresholds): v<=8 -> 4 (cat 5);
+    // 8<v<=16 -> rice-family scripts {2,4,5,6,106,107,108,111,112} = 4,
+    // DEFAULT 12.0 (cat 3); 16<v<=48 -> {8,113,114,115} = 5, {9,109,110}
+    // = 8, default 10; v>48 -> 24 (cat 0). Only types 1 and 3 (16px
+    // non-rice sprites) differ from the old table (6 -> 12).
+    if (h > 48) return 24;
     if (h > 16) {
       if (s === 8 || s === 113 || s === 114 || s === 115) return 5;
       if (s === 9 || s === 109 || s === 110) return 8;
       return 10;
     }
     if (h > 8) {
-      if (s === 2 || s === 4 || s === 5 || s === 6 || s === 107 || s === 108 || s === 111 || s === 112) return 4;
-      return 6;
+      if (s === 2 || s === 4 || s === 5 || s === 6 || s === 106 || s === 107 || s === 108 || s === 111 || s === 112) return 4;
+      return 12;
     }
     return 4;
   }
