@@ -1,9 +1,16 @@
 node_modules
 dist/
 reference/
-# Local-only replay evidence (third-party recordings). The only committed
-# fixture is tests/replays/th7_udFe25.rpy.
+# Local-only replay evidence (third-party recordings). The committed fixture
+# is tests/replays/th8_udLy01.rpy (TH08 Stage-1 convergence oracle).
 replay/
+
+# Local scratch/probe space and runtime state
+tmp/
+.zcode/
+backup/
+score.dat
+th08.cfg
 
 playwright-report/
 test-results/
