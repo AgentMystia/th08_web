@@ -25,12 +25,24 @@ the legacy TH07 text below as parent-engine history, not as format authority:
 ### TH08 vertical-slice checkpoint (2026-08-15)
 
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
-Border Team, dialogue, HUD, and the replay harness are all live. The
-dispatch key is `character === 'reimuYukari'`; the TH07 engine path
-(MenuFlow, CherrySystem, TH07_DATA stage tables, PLAYER_SPRITE_BASE shots)
-is retained verbatim for every other character, keeping the TH07 sim
-suite, golden digest, and `replay:verify` green as the shared-engine
-regression net.
+Border Team, dialogue, HUD, and the replay harness are all live.
+
+**2026-08-19 full TH08-ification (commits 4855d94..605d359): the TH07 path
+is REMOVED.** The engine is single-path: `runState` (Th08RunState) is
+unconditional in StageScene, Border Team is the only character, formats are
+TH08-native only (T8RP rpy / ECL v8 / ANM v3 / SHT 56-byte / MSG XOR-0x77),
+and eclvm's TH07-numbered cases exist only as TH08_OP_REMAP targets (the
+keep-set is the remap's value set — computed mechanically, do not "clean
+up" cases without re-deriving it). Deleted: cherry.ts, TH07 dialogue
+runner, T7RP replay playback, th07-data.ts (1.17MB), the TH07 bomb
+machines (player-bombs.ts keeps only the shared attack-slot BombEngine),
+all 46 th07-* tests + the golden digest + th7_udFe25.rpy, 142 TH07 asset
+files, the TH07 scripts/CI/verify/pages tooling, and `__TH07_TEST__` (now
+`__TH08_TEST__`). The convergence fixture th8_udLy01.rpy is committed at
+tests/replays/ so CI can gate on `replay:verify:th08`. The regression net
+is now the th08-* + engine-* tests plus the TH08 verifier; the old
+parent-engine body below §0 remains as historical archive (its TH07
+workflow mandates are superseded by this overlay).
 
 2026-08-17 decompile-fidelity pass (commits 9a5e7d3/86dc560/3737b2e):
 the TH08 timeline v2 dispatch now mirrors FUN_0042a8a0 case-for-case
