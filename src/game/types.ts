@@ -644,6 +644,12 @@ export interface Th08EclState {
   autoFireDeadline: number;
   // Next ctx.time the auto-fire is due (armed = deadline + arming time).
   autoFireNext: number;
+  // Enemy position at the ECL loop head (the +0x2d88 sync at 0x418520,
+  // refreshed before every dispatch). The auto-fire re-execution (bullet
+  // manager phase, after the enemy's movement) rebuilds its template origin
+  // from THIS pre-movement snapshot, not the live post-move position.
+  loopHeadX: number;
+  loopHeadY: number;
   // Bullet-template fire origin x/y (+0x2dd0/+0x2dd4, vars 10079/10080).
   fireOriginX: number;
   fireOriginY: number;

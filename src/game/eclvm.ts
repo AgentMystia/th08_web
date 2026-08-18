@@ -953,6 +953,8 @@ export class StageRuntime {
         fireRankCount2Low: 0,
         fireRankCount2High: 0,
         capturedFire: null,
+        loopHeadX: 0,
+        loopHeadY: 0,
         autoFireDeadline: 0,
         autoFireNext: 0,
         fireOriginX: 0,
@@ -1252,6 +1254,13 @@ export class StageRuntime {
   tickEnemyCore(game: GameHost, e: Enemy, allocatorCore = false): void {
     this.anmRng = game.rng;
     const s = e.ecl;
+    // The +0x2d88 loop-head position sync (0x418520): refreshed before every
+    // dispatch, pre-movement. The auto-fire re-execution fires from THIS
+    // snapshot even though it runs after the enemy's movement for the tick.
+    if (s.th08) {
+      s.th08.loopHeadX = e.x;
+      s.th08.loopHeadY = e.y;
+    }
     // dispatchEcl owns LAB_0040f6d1's interrupt/periodic preamble. Native
     // CALL and RETURN both jump back to that label, so the op144 timer may
     // advance multiple times inside one enemy-core invocation.
@@ -2567,7 +2576,13 @@ export class StageRuntime {
       aimMode: mode - 96
     };
     s.bulletProps = props;
-    this.spawnBullets(game, e, props);
+    // FUN_00422720's template position is vec3add(+0x2d88, +0x2db8): the
+    // loop-head snapshot plus the muzzle offset — NOT the live post-move
+    // enemy position (this re-execution runs after the enemy's movement).
+    this.spawnBullets(game, e, props, {
+      x: Math.fround(t.loopHeadX + s.shootOffset.x),
+      y: Math.fround(t.loopHeadY + s.shootOffset.y)
+    });
   }
 
   private updateAutoShoot(game: GameHost, e: Enemy): void {
@@ -3986,7 +4001,13 @@ export class StageRuntime {
           // 21/22/23 trio runs 10/15/30, the 24 family 30/30/30, the bubble
           // family's script 27 runs 24.
           spawnDuration = !hasSpawnState ? 0 : this.th08FlashDuration(p.sprite, flags);
-          spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
+          // BulletManager::OnUpdate states 2/3/4 integrate at vel * 1/2,
+          // 1/4, 1/8 (immediates 0x40000000/0x40200000/0x40400000 @
+          // 0x43177e-0x4317a5) — TH07's 1/2, 1/2.5, 1/3 do NOT carry over.
+          // Stage 1's dominant wave family (flags 680516 -> state 3) was
+          // creeping at 0.4v instead of 0.25v, leaving every such bullet a
+          // constant speed-proportional lead — the 7 phantom contacts.
+          spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 4 : flags & 8 ? 1 / 8 : 1;
         } else {
           spawnDuration = !hasSpawnState ? 0
             : p.sprite === 10 ? 24

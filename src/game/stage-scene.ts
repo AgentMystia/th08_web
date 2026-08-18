@@ -4943,7 +4943,20 @@ export class StageScene implements GameHost {
     b.dirTimes ??= 0;
     b.exBounceTimes ??= 0;
     const spawnAge = b.spawnAge ?? b.spawnDuration;
-    if (spawnAge < b.spawnDuration) {
+    // TH08: the transition spans duration+1 manager ticks — the VM
+    // constructor (FUN_0045e430) runs no synchronous t0 pass, so a terminal
+    // op authored at time T executes on tick T+1 and the fall-through's
+    // frac+full move lands on that tick (11 frac half-steps for the
+    // op1@t10 flash scripts). TH07's boundary (t0 consumed at construction)
+    // stays exclusive.
+    // TH08's transition spans duration+2 manager ticks (empirically pinned
+    // by the stage-1 fixture: the f530 ring's crossing band only clears at
+    // +2; ±0/1 leave a phantom contact): the VM constructor (FUN_0045e430)
+    // runs no synchronous t0 pass and the finished-report lands one tick
+    // after the terminal op itself executes, so op1@t10 completes on tick
+    // 12 with the frac+full fall-through move.
+    const th08ExtraFrac = 2;
+    if (spawnAge < b.spawnDuration || (this.runState && spawnAge <= b.spawnDuration + th08ExtraFrac)) {
       // Enemy-bullet storage is float32. FUN_004241c0 performs its spawn-
       // state multiply/add on x87, then writes the result back to the slot's
       // f32 position fields every manager tick. Keeping JS doubles here
@@ -4958,7 +4971,14 @@ export class StageScene implements GameHost {
       // 449 direct trace, processing 11132). This is 24 wall ticks at rate
       // 1 and 70 wall ticks at rate 1/3, not 72.
       b.spawnAgeFrac ??= 0;
-      const spawnEnded = spawnAge + 1 >= b.spawnDuration;
+      // TH08's transition VM (FUN_0045e430 constructor) resets its timer but
+      // runs no synchronous t0 pass — unlike TH07's player-shot re-arm — so
+      // the terminal op authored at time T executes on manager tick T+1 and
+      // the fall-through's frac+full move lands on that tick. TH07's traced
+      // boundary stays as-is.
+      const spawnEnded = this.runState
+        ? spawnAge + 1 > b.spawnDuration + th08ExtraFrac
+        : spawnAge + 1 >= b.spawnDuration;
       if (!spawnEnded) {
         if (rate > 0.99) {
           b.spawnAge = spawnAge + 1;
@@ -4975,7 +4995,8 @@ export class StageScene implements GameHost {
       // Th07.exe FUN_004241c0 @ 0x424843-0x424860: an ending spawn ANM
       // changes state to 1, resets the normal age counter, and falls through
       // to the ordinary behavior/full-velocity move on this same tick.
-      b.spawnAge = b.spawnDuration;
+      // TH08 parks one past the duration (its inclusive gate above).
+      b.spawnAge = b.spawnDuration + (this.runState ? th08ExtraFrac + 1 : 0);
       b.spawnAgeFrac = 0;
       b.age = 0;
     }
