@@ -470,6 +470,9 @@ export class StageScene implements GameHost {
   // white playfield quad while nonzero (FUN_0044d2c0). NOT the deathbomb
   // window — the window itself has no white flash in the native.
   private th08DeathWhiteFrames = 0;
+  // The night-time intro plate (times.anm script 0) arms on the first
+  // stage-frame tick, after the stage-entry run state is in place.
+  private th08IntroTimeArmed = false;
   // Focus aura (FUN_00425870(0x16) on focus-in, interrupt 1 out): the
   // follow-actor + handle pair so the aura tracks the player.
   private th08AuraActor: { x: number; y: number; angle: number; state: number } | null = null;
@@ -566,13 +569,13 @@ export class StageScene implements GameHost {
         }
       });
     });
-    // Stage-intro title: stdNtxt.anm scripts 0-4 are the full vanilla
+    // Stage-intro title: stdNtxt.anm scripts 0-3 are the full vanilla
     // presentation with positions/slides/fades baked in, in 640x480 SCREEN
     // coordinates (the playfield sits at +32,+16 like the original):
     // script0 = stage crest (128x128, add-blend), 1 = vertical JP title
-    // (rotated pi/2, drifts right), 2 = "Stage N", 3 = subtitle strip,
-    // 4 = vertical BGM label rising along the right edge. All finish and
-    // self-remove by ~frame 460.
+    // (rotated pi/2, drifts right), 2 = "Stage N", 3 = subtitle strip; the
+    // vertical BGM label rises separately via the dialogue BGM runner. All
+    // finish and self-remove by ~frame 460.
     const introEntry = this.stdTxtAnm.entries[0];
     this.stageIntroRunners = (introEntry?.scriptIds ?? []).map(
       (id) =>
@@ -2087,6 +2090,27 @@ export class StageScene implements GameHost {
       this.cancelLasers(false);
     }
     this.stageFrame++;
+    // The night-time plate (times.anm) joins the intro runners on the first
+    // tick, once the stage-entry run state (clockTime, T8RP +0x22) has been
+    // restored: the native intro shows the current 时刻 below the title
+    // (userdemo-t22: 子の刻 pm11:00 for stage 1). times.anm script 0 is the
+    // intro template (256,268, fades at t=240); its t0 setSprite(0)
+    // composes with the sprite index offset, so the slot selects the plate
+    // (0=子の刻, 1=子の二つ, …, 12=夜明け).
+    if (this.stageFrame === 1 && !this.th08IntroTimeArmed) {
+      this.th08IntroTimeArmed = true;
+      const timesAnm = this.assets.anms.times;
+      if (timesAnm?.hasScriptInEntry(0, 0)) {
+        const timesEntry = timesAnm.entries[0];
+        const slot = Math.min(Math.max(this.runState?.clockTime ?? 0, 0), 12);
+        this.stageIntroRunners.push(
+          new AnmRunner(timesAnm, 0, {
+            entryIndex: 0,
+            spriteIndexOffset: timesEntry.spriteBase + slot
+          })
+        );
+      }
+    }
     for (const runner of this.stageIntroRunners) {
       if (!runner.removed) runner.update(this.slowRate);
     }
