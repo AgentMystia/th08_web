@@ -981,3 +981,53 @@ main（保留全部 274 提交历史），push 触发 CI → Pages
 收敛状态不变：f3301 首发散 + 级联，两候选（rank-lerp 窗口表
 ins_111/112/113、减速段 f32 积分次序）见上条（九）；本条目后附
 best-effort 静态推进的结论（若有）。
+
+## 2026-08-19（十一）——发布收尾：收敛回归定位与回退、rank-lerp 全链取证
+
+**移动引擎回归（已修复）**:CI advisory replay 的 A/B 归因证明 24 文件
+锁定 pass 的 FUN_00422c40 移动重构（updateMovementController + ins_63-74
++ 变量 10069+ 映射整体替换）让首发散从 f3301 回退到 f998（f880 生成、
+sub-3 弹；匹配帧 trace:f950 双方 87 vs 0 活弹、世界在 f850 前分岔，
+玩家路径逐位一致）。处置：**只回退移动面**（mover + ins_64-74 恢复
+b161dbf 行为；ins_68/69 恢复 no-op），锁定 pass 其余全部保留（raw
+dispatch、T8RP 面、trace 事件、变量映射）；types.ts 补回 moveAux。
+回退后 advisory 输出 **精确恢复 f3301**（ownerId 5746/sub 15/f3055
+生成/speed 1.5/age 235，与条目九逐字段一致）。重构本体存档于
+999b644，5 个按新引擎行为撰写的测试以 skip+指针停放（mode-1/mode-3
+mover、ins_66 mode-2、ins_67 折叠、开场波 FIRE 签名基线）。
+
+**spawn creep 误读（已修复）**:0x431240 的 (½,¼,⅛) 读法是位模式误读。
+状态跳转表 @0x432156:state2→0x43176e(k=0x40000000=2.0f)、state3→
+0x431880(k=0x40200000=2.5f)、state4→0x431991(k=0x40400000=3.0f)、
+死亡 state5→0x431aa2(k=2.0f);FUN_0040c7d0 = pos += vel·(1.0f/k)，
+1.0f @0x4b4338。正确因子 (½,0.4,⅓)。AGENTS §0 对应条目已更正。
+
+**rank-lerp 全链取证（静态边界已到）**:
+- 应用端 0x422a77-0x422b10:speed1 += lerp(lo,hi)、下限 0.3f(0x4b48d0)
+  钳制;speed2 += lerp/2.0f(0x4b42ec)。端口公式/钳制/除数全部 exe 一致。
+- lerp 本体 FUN_00422b80:`lo + (hi−lo)·rank/[0x4b42cc]`,rank 以整数
+  从 manager(0x160f508)+0x3de2c 加载(fildl)——与端口 game.rank 同源
+  假设成立。
+- **op 113 全语义**(handler @0x41db0b,跳转表 entry[112]):复合开火
+  配置——arg0≥0 → sfx(+0x3024)+flags 0x200(端口已实现 ✓);掩码位
+  1/2 → fireRankSpeedLow/High(+0x2dec/+0x2df0 浮点写入);位 4/8/0x10
+  → count1/2 lo/hi u16(+0x2df4..0x2dfa)。**Stage-1 ECL 零使用**
+  (reference/ECL8/ecldata1.ecl.ecs 无 ins_113)——端口恒用默认窗口对
+  Stage-1 无损。
+- 双初值:±0.5(FUN_00415c80,调用点 0x415514[sub 入口族]/0x42b5fc/
+  0x42bc17/0x42da6e) vs ±0.15(0x42a1b3,整池清零级初始化 0x429e00,
+  同时写 sfx 默认 7)。早期几千帧收敛证明普通路径生效的是 ±0.5;
+  ±0.15 存活条件未解。
+- f3301 所需修正 ≈ +0.0625 速度差(HANDOFF 九:s1 1.8438 vs 1.78125),
+  对应 ±0.5@rank18 或等价组合——**需要 native 在 f3054 的 rank 运行时
+  值**,静态无法定夺。与"减速段 f32 积分次序"并列为剩余两候选。
+
+下一会话:(1) 用 research 分支 × advisory replay 逐 op 二分 999b644 的
+移动重构(本 pass 已验证该方法:research/pre-wip-verify 分支 +
+workflow_dispatch);(2) 解 ±0.15 窗口的存活路径(0x429e00 的调用者
+0x42a265/0x42c5a7 上下文);(3) 修好后删掉 eclvm 的移动面回退与 5 个
+skip,重放开场波基线。
+
+CI 状态:core(browser 前置)/browser/replay(advisory,f3301)/pages 全绿
+于 https://github.com/AgentMystia/th08_web/actions;Demo =
+https://agentmystia.github.io/th08_web/。
