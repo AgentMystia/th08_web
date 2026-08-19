@@ -92,6 +92,32 @@ test('bomb side reads the FORM byte, not the raw focus key', () => {
   assert.equal(p.th08BombType, 0, 'cast inside the stability window uses the OLD side');
 });
 
+test('deathbomb inverts the side AND adds 2 (all.c:37720-37742)', () => {
+  // Unfocused cast (form human, base 0): the deathbomb runs table[3] — the
+  // side-inverted 永夜四重結界 — and costs two bombs when stocked.
+  const p = new Player('reimuYukari', anms);
+  p.bombs = 3;
+  p.hitState = true;
+  assert.ok(p.tryBomb());
+  assert.equal(p.th08BombType, 3, 'unfocused deathbomb = (1 - 0) + 2');
+  assert.equal(p.bombs, 1, 'deathbomb costs 2 when stocked');
+  assert.equal(p.hitState, false, 'deathbomb rescue clears the hit state');
+  // Focused cast (form youkai, base 1): table[2] — 夢想封印　瞬.
+  const q = new Player('reimuYukari', anms);
+  q.bombs = 3;
+  for (let i = 0; i < 8; i++) q.update(inputOf(['focus']), 1);
+  assert.equal(q.th08Form, 1);
+  q.hitState = true;
+  assert.ok(q.tryBomb());
+  assert.equal(q.th08BombType, 2, 'focused deathbomb = (1 - 1) + 2');
+  // A one-bomb stock pays only one.
+  const r = new Player('reimuYukari', anms);
+  r.bombs = 1;
+  r.hitState = true;
+  assert.ok(r.tryBomb());
+  assert.equal(r.bombs, 0);
+});
+
 // ---------------------------------------------------------------------------
 // ECL familiar marking + FIRE bridge + form-rank gate
 

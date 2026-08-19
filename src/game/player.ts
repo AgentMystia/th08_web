@@ -621,17 +621,16 @@ export class Player {
     // the squish (meter 0), the materialize (zeroed each frame) and past the
     // end of the deathbomb window.
     if (this.bombs <= 0 || this.bombTimer > 0 || this.bombCooldown > 0 || this.deathbombMeter <= 0) return false;
-    // TH08 bomb machine (0x44c650/0x44c71b-0x44c75f): bombType = the FORM
-    // byte (FUN_0040bc40 reads player+5 — the focus key latched through
-    // the 7-frame stability gate, so a bomb cast inside that window uses
-    // the OLD side); a deathbomb (cast from the hit state) INVERTS the
-    // side before adding 2 — focused-cast runs table[2] (0x40c910),
-    // unfocused-cast runs table[3] (0x410fe0). A deathbomb consumes TWO
-    // bombs when the stock has them (FUN_00439883(-2)), one when it does
-    // not.
+    // TH08 bomb machine (0x44c650, all.c:37720-37742): type = player+3 (the
+    // FORM byte — the focus key latched through the 7-frame stability gate,
+    // so a bomb cast inside that window uses the OLD side); a deathbomb
+    // (player+4, cast from the hit state) computes 1 - type and then ADDS 2
+    // — focused-cast runs table[2] (0x40c910), unfocused-cast table[3]
+    // (0x410fe0). A deathbomb consumes TWO bombs when the stock has them
+    // (FUN_00439883(-2)), one when it does not.
     const deathbomb = this.hitState;
     const base = this.th08Form;
-    this.th08BombType = (deathbomb ? 1 - base : base) as 0 | 1 | 2 | 3;
+    this.th08BombType = (deathbomb ? 3 - base : base) as 0 | 1 | 2 | 3;
     this.bombs -= deathbomb ? Math.min(this.bombs, 2) : 1;
     this.hitState = false; // deathbomb rescue
     this.deathbombMeter = Math.min(Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6);
