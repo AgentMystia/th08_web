@@ -1,9 +1,7 @@
 import type { StageScene } from './stage-scene';
 
 // Rich simulation-state snapshot shared by the browser test hook
-// (window.__TH07_TEST__.snapshot()) and the headless replay harness
-// (--dump-frame forensics). Shape is load-bearing: scripts/dev-shot.mjs and
-// the probe family depend on it — extend, don't rename.
+// (window.__TH08_TEST__.snapshot()) and the headless replay harness.
 export function stageSnapshot(scene: StageScene): Record<string, unknown> {
   return {
     scene: 'stage',
@@ -12,7 +10,7 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
     frame: scene.frame,
     stageFrame: scene.stageFrame,
     difficulty: scene.difficulty,
-    character: scene.playerObj.character,
+    team: scene.playerObj.team,
     score: scene.score,
     hiScore: scene.hiScore,
     enemies: scene.enemies.length,
@@ -88,28 +86,30 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
       focusHeld: scene.playerObj.focusHeld,
       invuln: scene.playerObj.invulnFrames,
       bombInvuln: scene.playerObj.bombInvuln,
-      // Compat view of the old one-shot countdown: remaining window frames
-      // while in the hit state, -1 otherwise.
-      deathTimer: scene.playerObj.hitState ? scene.playerObj.deathbombMeter : -1,
       deathbombMeter: scene.playerObj.deathbombMeter,
       hitState: scene.playerObj.hitState,
       dyingFrame: scene.playerObj.dyingFrame,
       materializeFrame: scene.playerObj.materializeFrame,
       alive: scene.playerObj.alive
     },
-    // PLAN.md Phase 0: COMBAT-001 evidence — this frame's ReimuA homing
-    // target (enemy id) and the total settled damage applied this frame.
-    homingTarget: scene.homingTargetId,
     settledDamage: scene.settledDamageThisFrame,
     bomb: { timer: scene.playerObj.bombTimer },
     graze: scene.graze,
     pointItems: scene.pointItems,
+    th08: {
+      youkaiGauge: scene.runState.youkaiGauge,
+      clockTime: scene.runState.clockTime,
+      currentTimeOrbs: scene.runState.currentTimeOrbs,
+      totalTimeOrbs: scene.runState.totalTimeOrbs,
+      pointItemValue: scene.runState.pointItemValue,
+      pointItemExtends: scene.runState.pointItemExtends,
+      nextPointItemExtendThreshold: scene.runState.nextPointItemExtendThreshold
+    },
     spellsCaptured: scene.runState?.spellcardsCaptured ?? 0,
     playerBullets: scene.playerBullets.length,
     playerBulletDump: scene.playerBullets.slice(0, 8).map((b) => ({
       x: Math.round(b.x),
       y: Math.round(b.y),
-      shotType: b.shotType,
       rect: [b.rect.x, b.rect.y, b.rect.w, b.rect.h],
       img: b.rect.imageKey,
       vx: Number(b.vx.toFixed(2)),

@@ -1,7 +1,7 @@
 import type { Button, InputFrame } from './input';
 import { RPY_BITS } from '../formats/rpy';
 
-// Decodes recorded T7RP input words into the InputFrame shape the scenes
+// Decodes recorded T8RP v6 input words into the InputFrame shape the scenes
 // consume. The recorded word is the exe's per-frame DirectInput mask, so the
 // mapping mirrors KEY_MAP's physical-key overlaps (Z = shoot+confirm,
 // X = bomb+back) — feeding a replay must be indistinguishable from a human

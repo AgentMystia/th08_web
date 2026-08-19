@@ -13,6 +13,14 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
 const errors = attachPageDiagnostics(page);
 await page.goto(`${server.baseUrl}/index.html?test=1&paused=1${query ? '&' + query : ''}`);
 await page.waitForFunction(() => window.__TH08_TEST__?.ready, null, { timeout: 20000 });
+const probeParams = new URLSearchParams(query);
+await page.evaluate(({ lives, invuln }) => {
+  if (lives != null) window.__TH08_TEST__.setLives(Number(lives));
+  if (invuln != null) window.__TH08_TEST__.setInvuln(Number(invuln));
+}, {
+  lives: probeParams.get('lives'),
+  invuln: probeParams.get('invuln')
+});
 const keyArgs = held ? held.split(',') : [];
 const heldKeys = keyArgs.filter((k) => !k.startsWith('+'));
 const pressKeys = keyArgs.filter((k) => k.startsWith('+')).map((k) => k.slice(1));
@@ -33,8 +41,7 @@ console.log(JSON.stringify({
   score: snap.score,
   boss: snap.bossActive,
   spell: snap.spellName,
-  cherry: snap.cherry,
-  th08: snap.th08 ?? null,
+  th08: snap.th08,
   player: snap.player,
   bgm
 }));

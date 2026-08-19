@@ -31,6 +31,7 @@ export function makeStubAudio() {
     preloadSfx() {},
     preloadBgm() {},
     playBgm() {},
+    stopBgm() {},
     fadeOutBgm() {},
     sfx() {}
   };

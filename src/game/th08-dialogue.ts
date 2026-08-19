@@ -81,6 +81,11 @@ export type Th08DialogueEvent =
       to: Th08DialogueSide;
     }
   | { type: 'sound'; id: 12 }
+  // GuiImpl::RunMsg cases 7/8 (Th08.exe v1.00d @ 0x4341f8/0x4342ac):
+  // switch the stage-local music slot, then expose the authored boss
+  // introduction caption carried by the MSG instruction itself.
+  | { type: 'music-change'; slot: number }
+  | { type: 'boss-intro-line'; color: number; line: number; text: string }
   | { type: 'game-mode'; side: Th08DialogueSide }
   | { type: 'restart'; instructionIndex: 0 }
   // op6: the ECL resume ticket. RunMsg increments msg+0x22d78, which releases
@@ -373,6 +378,25 @@ export class Th08DialogueMachine {
         case 6:
           // RunMsg case 6: msg+0x22d78 += 1 — the ECL resume ticket.
           events.push({ type: 'resume-ticket' });
+          break;
+
+        case 7:
+          // Negative stops the current stream; 0/1 select the two songs in
+          // the stage's STD header (stage theme / boss theme).
+          events.push({ type: 'music-change', slot: args[0] ?? -1 });
+          break;
+
+        case 8:
+          // The native GUI typesets this payload into its dedicated boss
+          // introduction VM and arms text.anm script 1. Keep the decoded
+          // payload in the event; rendering remains a host responsibility.
+          events.push({
+            type: 'boss-intro-line',
+            color: args[0] ?? 0,
+            line: args[1] ?? 0,
+            text: instruction.text ?? ''
+          });
+          this.waitCounter = 0;
           break;
 
         case 22: {

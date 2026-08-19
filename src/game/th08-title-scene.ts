@@ -3,7 +3,7 @@ import { SCREEN_W, SCREEN_H, type Renderer } from '../gfx/renderer';
 import type { InputFrame } from '../core/input';
 import type { GameAssets } from './assets';
 import type { AudioBus } from '../audio/audio';
-import type { CharacterId } from './player';
+import type { Th08TeamId } from './player';
 import {
   Th08MenuModel, TH08_INPUT_BITS, TH08_TITLE_ITEMS, TH08_DIFFICULTY_NAMES,
   TH08_TEAM_NAMES, type Th08MenuEvent
@@ -90,7 +90,7 @@ export class Th08MenuFlow {
   constructor(
     private assets: GameAssets,
     private audio: AudioBus,
-    private onStart: (difficulty: number, character: CharacterId) => void,
+    private onStart: (difficulty: number, team: Th08TeamId) => void,
     initialTitleCursor = 0
   ) {
     const anm = this.anm;
@@ -363,7 +363,6 @@ export class Th08MenuFlow {
         return {
           scene: 'character',
           cursor: this.model.cursor,
-          character: TH08_TEAM_NAMES[this.model.cursor],
           team: TH08_TEAM_NAMES[this.model.cursor],
           transitioning
         };

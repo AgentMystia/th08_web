@@ -182,3 +182,24 @@ test('op22 writes ownership side to game mode and restarts message index', () =>
   assert.equal(replay[0].slot, 2);
   assert.equal(replay[0].script, 9);
 });
+
+test('ops 7 and 8 expose the native BGM switch and boss introduction payload', () => {
+  const machine = new Th08DialogueMachine([
+    { time: 0, op: 8, args: [2, 0], text: 'Darkness writhing light insect' },
+    { time: 0, op: 7, args: [1] },
+    { time: 1, op: 7, args: [-1] },
+    { time: 2, op: 0 }
+  ]);
+
+  assert.deepEqual(machine.update(), [
+    {
+      type: 'boss-intro-line',
+      color: 2,
+      line: 0,
+      text: 'Darkness writhing light insect'
+    },
+    { type: 'music-change', slot: 1 }
+  ]);
+  assert.deepEqual(machine.update(), [{ type: 'music-change', slot: -1 }]);
+  assert.deepEqual(machine.update(), [{ type: 'done' }]);
+});

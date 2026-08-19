@@ -1,10 +1,30 @@
 import type { Rng } from '../core/rng';
 import type { Anm, AnmRunner } from '../formats/anm';
 
+// Optional verifier-only event stream. Production hosts leave the sink
+// undefined, so collecting convergence evidence cannot affect simulation.
+// `data` deliberately contains only scalar values so JSONL traces remain
+// stable and can be compared with traces captured from Th08.exe.
+export interface ReplayTraceEvent {
+  kind:
+    | 'timeline' | 'enemy-spawn' | 'enemy-kill' | 'ecl' | 'fire'
+    | 'bullet-spawn' | 'bullet-contact' | 'graze' | 'item-spawn'
+    | 'item-collect' | 'rank' | 'frame' | 'rng';
+  frame: number;
+  replayFrame?: number;
+  enemyId?: number;
+  enemySlot?: number;
+  sub?: number;
+  clock?: number;
+  opcode?: number;
+  bulletSlot?: number;
+  data?: Record<string, number | string | boolean | null>;
+}
+
+export type ReplayTraceSink = (event: ReplayTraceEvent) => void;
+
 export type ItemType =
-  | 'power' | 'point' | 'bigPower' | 'bomb' | 'fullPower' | 'life'
-  | 'cherry' | 'bigCherry' | 'pointBullet' | 'case9Cherry'
-  // TH08 ItemType enum names (ItemManager.hpp); the TH08 path spawns these.
+  | 'point' | 'bomb'
   | 'powerSmall' | 'powerBig' | 'powerFull' | 'extend' | 'pointStar'
   | 'time' | 'pointSmall' | 'unknown9' | 'time2';
 
@@ -217,17 +237,16 @@ export interface GameHost {
   stageNumber?: number;
   rank: number;
   // ECL var 10028 (Th07.exe DAT_00625627): character*2 + shotType (0=ReimuA
-  // … 5=SakuyaB).
+  // TH08 Border Team selector (0 for this vertical slice).
   shotIndex?: number;
   frame: number;
   id: number;
   player: { x: number; y: number };
   enemies: Enemy[];
   enemyBullets: EnemyBullet[];
-  // Th07.exe DAT_0099fa60 / bullet manager +0x37a128. FUN_004241c0
-  // recounts live fixed slots at manager entry, before it updates or culls
-  // them; enemy FIRE runs earlier in the next scheduler pass and therefore
-  // reads the previous manager-entry snapshot rather than the current pool.
+  // The bullet manager recounts fixed live slots at manager entry, before
+  // updating or culling them. Enemy FIRE therefore reads the previous
+  // manager-entry snapshot rather than the current dense array.
   // Lightweight VM-test hosts may omit it; the allocator still enforces the
   // physical 1024-slot limit.
   enemyBulletManagerEntryCount?: number;
@@ -236,6 +255,9 @@ export interface GameHost {
   power: number;
   score: number;
   timeStopped?: boolean;
+  // Test-only replay convergence seam. Runtime code emits events only when
+  // a verifier installs this optional callback.
+  traceReplayEvent?(event: ReplayTraceEvent): void;
   // Native DAT_004ca4d8, sampled for the current scheduler pass. Stage 7/8
   // boss cores use it to suppress every player-shot/attack/body collision
   // during spell ids >= 118, with a one-core-tick release tail.
@@ -246,8 +268,7 @@ export interface GameHost {
   // fractionally; collision always runs at wall clock.
   slowRate?: number;
   setSlowRate?(rate: number): void;
-  // Th07.exe FUN_00418020/FUN_00418130 write interrupt 2/1 to the first
-  // two global spell-background ANM VMs (+0x1c6 at 0x0133e1ce/0x0133e41a).
+  // Bullet-time visual state for the global spell-background ANM VMs.
   setBulletTimeVisual?(active: boolean): void;
   addScore(v: number): void;
   spawnItem(type: ItemType, x: number, y: number, options?: { state?: number; vx?: number; vy?: number; tweenTarget?: { tx: number; ty: number } }): void;
@@ -267,47 +288,36 @@ export interface GameHost {
   playSfx(id: number): void;
   // TH08 form byte (exe player+5 via FUN_0040bc40): 0 human / 1 youkai.
   // Familiar spawning, the per-tick side sync, and the ECL form-rank gate
-  // read it live. Absent on TH07/minimal hosts.
-    /** Player position as of the START of this frame — the enemy FIRE aim
-   *  mirror. TH08 runs its calc chain in DESCENDING priority (bullets 14 ->\   *  enemies 11 -> player 9; RegisterChain pushes 0x44c2ef:9, 0x42c5d7:0xb,
-   *  0x4311f0:0xe), so the enemy pass aims at where the player ended the
-   *  PREVIOUS frame. */
+  // read it live. Minimal test hosts may omit it.
+  /** Player position as of the start of this frame. TH08 runs its calc
+   * chain in descending priority (bullets 14, enemies 11, player 9), so
+   * enemy FIRE aims at where the player ended the previous frame. */
   playerPosAtFrameStart?: { x: number; y: number };
-th08PlayerForm?(): 0 | 1;
+  th08PlayerForm?(): 0 | 1;
   // TH08 op 184's receiver is the GLOBAL side mirror (singleton 0x4ea670
   // dword bit 11, `mov ecx,0x4ea670` @ 0x41e7da) — not the running enemy.
   th08SetSideMirror?(value: 0 | 1): void;
   startDialogue?(index: number): void;
   isDialogueActive?(): boolean;
   consumeDialogueResume?(): boolean;
-  startBossSpell?(spellId: number, arg0: number, name: string): void;
-  // Returns whether the phase-end field sweep applies — Th07.exe
-  // FUN_0040f340 runs it only when the spell did NOT time out
-  // (DAT_012f40a8 == 1; timeouts bump it to 2 and fade the field
-  // itemlessly at all.c:13831).
+  startBossSpell?(spellId: number, bonus: number, decayPerSecond: number, name: string): void;
+  // Returns whether the TH08 phase-end field sweep applies. Timeouts fade
+  // the field without the scored sweep.
   endBossSpell?(opts?: { fromBossDeath?: boolean }): boolean;
   voidSpellCapture?(): void;
   setBossPresent?(present: boolean, enemy: Enemy | null): void;
   setBossLifeCount?(count: number): void;
-  dropPointItems?(e: Enemy, count: number): void;
-  awardSpellValue?(value: number): void;
   spawnEnemyDeathEffect?(e: Enemy, deathMode?: number): void;
-  // FUN_00422ea0(1): every live enemy bullet, plus samples along each
-  // non-immune live laser, becomes an auto-collecting small cherry item
-  // (type 6 — the constructor-set cancel type at +0x37a160,
-  // FUN_00421a40) with no immediate score popup. Runs at op80, spell
-  // declare (op90) and the full-power crossing.
+  // Every live enemy bullet, plus samples along each non-immune laser,
+  // becomes auto-collecting TH08 time items without an immediate popup.
   cancelBulletsToItems(): void;
-  // Floating score/cherry number popup (spec-popups.md): value < 0 draws
-  // the single sentinel glyph; color is D3D ARGB. The shared popup updater
-  // moves entries upward and retires them after 60 rate-scaled frames.
+  // Floating score popup; color is D3D ARGB.
   spawnScorePopup?(value: number, x: number, y: number, color: number): void;
   // Frames remaining of the exe's post-field-clear laser-spawn suppression
   // (gamestate+0x37a12c, set to 10 by every FUN_00422ea0 call; op-82/83
   // fires are gated on it unless the laser is bomb-immune, all.c:15737).
   postBombLaserCounter?: number;
-  // ECL op 160 = FUN_0042dc6f(arg): cherry + cherryPlus gain.
-  // Bullet-effect id 20: hardcoded BGM cue (Yuyuko phase 2, th07_13b).
+  // Bullet-effect BGM cue.
   playBgmTrack?(name: string): void;
   // Bullet-effect id 19 (FUN_00418ee0): three-second BGM fade-out.
   fadeBgm?(seconds: number): void;
@@ -324,9 +334,7 @@ th08PlayerForm?(): 0 | 1;
   // spell end, boss nonspell death).
   sweepBulletsToItems(): number;
   configureAmbience?(op: number, args: number[]): void;
-  // Boss timer-callback fired with the ECL "timeout is normal" flag unset
-  // (exe flags +0x2e2a bit6 == 0): cherry -25% (FUN_0041e6b0's
-  // floor10(cherry*0.25) penalty) — applies to nonspell timeouts too.
+  // Boss timer callback with the ECL "timeout is normal" flag unset.
   onBossPhaseTimeout?(): void;
   unpauseStd(label: number): void;
   // Native fixed-pool registration hooks. StageScene implements these with
@@ -549,7 +557,6 @@ export interface EclState {
   bossLifeCount: number;
   lasers: (EnemyLaser | null)[];
   laserStore: number;
-  interrupts: number[];
   disableCallStack: boolean;
   invisible: boolean;
   // Test-only: last game frame this enemy emitted bullets (LIFE-001 traces).
@@ -612,6 +619,36 @@ export interface EclState {
 // TH08 layout documented in eclvm.ts so the existing call-frame save/restore
 // machinery covers them; enemy-scope locals and the TH08-only systems live
 // here. All offsets are from the Th08.exe Enemy object (stride 0x53d0).
+export interface Th08MovementController {
+  // FUN_00422c40 selects the native controller from flags bits 12-13.
+  mode: 0 | 1 | 2 | 3;
+  // Mode-2 polynomial selector from flags bits 14-16.
+  ease: number;
+  // ZunTimer at enemy+0x2ddc and its authored limit at +0x2de8.
+  timerPrevious: number;
+  timerFraction: number;
+  timerCurrent: number;
+  timerTotal: number;
+  // Mode 1 polar motion (+0x2d94/+0x2d98/+0x2da8/+0x2dac).
+  angle: number;
+  angularVelocity: number;
+  speed: number;
+  acceleration: number;
+  // Mode 3 polar offset (+0x2d9c/+0x2da0/+0x2db0/+0x2db4).
+  orbitAngle: number;
+  orbitAngularVelocity: number;
+  orbitSpeed: number;
+  orbitAcceleration: number;
+  // Mode 2 displacement / mode 3 anchor (+0x2dc4..cc/+0x2dd0..d8).
+  displacement: { x: number; y: number; z: number };
+  origin: { x: number; y: number; z: number };
+  // Vars 10085-10087, enemy+0x2d64/+0x2d68/+0x2d6c. The native loop adds
+  // this visual/controller offset to the ECL position before publishing
+  // vars 10042-10044. Stage 1's Sub32 reads x/y while building its cubic
+  // boss-movement control points, so an unmapped-literal fallback is fatal.
+  positionOffset: { x: number; y: number; z: number };
+}
+
 export interface Th08EclState {
   // Vars 10008-10015 (enemy+0x2ca8) / 10024-10031 (enemy+0x2cc8).
   enemyInts: Int32Array;
@@ -627,8 +664,8 @@ export interface Th08EclState {
   pendingDynCall: number;
   // +0x2cf0[i]: dynamic call-target table (ins_126 stores, ins_125 jumps).
   dynCallTable: Int32Array;
-  // +0x2de8: movement-interp duration/anm id slot written by the move ops.
-  moveAux: number;
+  // TH08-native enemy movement controller (FUN_00422c40).
+  movement: Th08MovementController;
   // +0x2dec/+0x2df0 fire rank-lerp speed bounds (defaults ±0.5,
   // FUN_00415c80) and +0x2df4/+0x2df6/+0x2df8/+0x2dfa count bounds.
   fireRankSpeedLow: number;
@@ -653,9 +690,6 @@ export interface Th08EclState {
   // from THIS pre-movement snapshot, not the live post-move position.
   loopHeadX: number;
   loopHeadY: number;
-  // Bullet-template fire origin x/y (+0x2dd0/+0x2dd4, vars 10079/10080).
-  fireOriginX: number;
-  fireOriginY: number;
   // +0x3313: transform ("intangible") type byte; -1 = none.
   transformType: number;
   // +0x3308/+0x330c: ins_144 death-drop pair (extra children count etc.).

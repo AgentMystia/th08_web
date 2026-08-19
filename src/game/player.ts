@@ -5,25 +5,12 @@ import { clamp } from '../core/util';
 import type { InputFrame } from '../core/input';
 
 // TH08 (Imperishable Night) player: the Border Team is the single
-// supported character. Movement speeds, hitbox, item radii, PoC line, and
+// supported team. Movement speeds, hitbox, item radii, PoC line, and
 // the per-power shooter tables all come from the embedded ply00a/ply00as
 // .sht data; the bomb is the TH08 declaration machine (tryBomb latches the
 // type, StageScene applies duration/invuln from the v1.00d tables).
 
-// The Border Team is the only constructible character. The three TH07 ids
-// below stay in the union ONLY because stage-scene.ts (not owned by this
-// cleanup) still compares against them in its bomb clear-fade guards; they
-// have no CHARACTERS row and can never select other data.
-export type CharacterId = 'reimuYukari' | 'reimuA' | 'marisaB' | 'sakuyaB';
-
-// TH07's MarisaB-only shot-allocation gate (Th07.exe FUN_0043a820 @
-// 0x43a850-0x43a86b) is deleted along with the TH07 characters: TH08
-// allocates player shots normally while a bomb is active. Kept as an
-// export because stage-scene.ts (read-only here) still routes its fire
-// gate through it.
-export function playerShotAllocationAllowed(_character: CharacterId, _bombActive: boolean): boolean {
-  return true;
-}
+export type Th08TeamId = 'reimuYukari';
 
 // TH08 Border Team: human reads ply00a, focused Yukari reads ply00as.
 // The deathbomb window is read from the .sht data (deathbombWindow, int32
@@ -36,7 +23,7 @@ export const CHARACTERS = {
 } as const;
 
 export interface PlayerBullet {
-  // Stable slot in Th07.exe's 96-entry player-shot pool. Each firing pass
+  // Stable slot in Th08.exe's 96-entry player-shot pool. Each firing pass
   // scans from slot 0, so slots freed by movement are reusable immediately.
   poolSlot: number;
   x: number;
@@ -46,25 +33,19 @@ export interface PlayerBullet {
   angle: number;
   speed: number;
   damage: number;
-  shotType: number;
-  // ShtShot.funcs[0], the spawn-time behavior selector: 4 = aim at an enemy
-  // at spawn (SakuyaA focused); 5 = SakuyaB orbit-angle bank. TH08 Border
-  // Team: 1 = aim at the cached target at spawn (FUN_00450240).
+  // ShtShot.funcs[0], the spawn-time behavior selector. Border Team uses
+  // 1 to aim at the cached target at spawn (FUN_00450240).
   behaviorFunc: number;
   // ShtShot.funcs[1], the per-tick behavior selector (TH08 uses it: 1 = the
-  // seeking option tick FUN_00450320). Always 0 on the TH07 shot tables.
+  // seeking option tick FUN_00450320).
   tickFunc: number;
   hitboxW: number;
   hitboxH: number;
   sfxId: number; // from ShtShot.sfxId; playback not wired up (stage-scene.ts uses a fixed fire sound instead)
   age: number;
   state: 'fired' | 'collided';
-  hitAge: number;
-  // Per-shot ANM VM (Th07.exe: SHT `sprite` is a global ANM script id at
-  // player base 1024; FUN_0043a290 ticks the embedded VM each frame and the
-  // bullet dies when its script ends). Scripts carry the vanilla alpha/
-  // scale/spin/auto-rotate; the impact switch re-arms the VM with script
-  // sprite+0x20 (FUN_0043a980 @ 0x43aa8c: slot+0x1d8 += 0x20).
+  // Per-shot ANM VM. TH08 ticks the embedded VM each frame and re-arms it
+  // to the adjacent impact script when the shot settles.
   runner: AnmRunner;
   impactScript: number;
   rect: { x: number; y: number; w: number; h: number; imageKey: string };
@@ -72,22 +53,6 @@ export interface PlayerBullet {
   // TH08 dialogue drift (FUN_004413e0): shot flagged harmless with velocity
   // (0, -0.5) while a conversation plays; never restored — expires offscreen.
   driftHarmless?: boolean;
-  // Which option fired this shot (0 = player) and the record's own x offset —
-  // MarisaB's persistent lasers (types 4/5) re-anchor to these every frame.
-  orb: number;
-  anchorX: number;
-  // Per-frame vertical sprite stretch for the beam types (exe writes the VM
-  // scaleY directly: optionY/14 resp. (playerY+64)/14 — sprite 70 is 14px).
-  scaleYOverride?: number;
-  // Type 5 beam-history ring: the physical ring is always 16 entries, while
-  // historyDepth caches the spawning SHT record's interval and limits both
-  // helper collision boxes and alpha-faded ghost draws.
-  history?: { x: number; y: number }[];
-  historyDepth?: number;
-  // Beam release-fade request (exe slot+0x1c6): the ANM VM only consumes the
-  // interrupt while parked at its waitInt checkpoint, so the request re-tries
-  // each frame until delivered (spec-marisab-beams.md §0.4).
-  fadePending?: boolean;
 }
 
 // Option (orb) offsets relative to the player; fire origins for orb shots.
@@ -140,7 +105,7 @@ const DEATH_SQUISH_FRAMES = 30;
 export class Player {
   x = SPAWN_X;
   y = SPAWN_Y;
-  readonly character: CharacterId;
+  readonly team: Th08TeamId;
   readonly unfocused: Sht;
   readonly focused: Sht;
   readonly anm: Anm;
@@ -148,13 +113,6 @@ export class Player {
   // Frames elapsed since the last focus-state toggle, saturating at
   // GLIDE_FRAMES once the orb glide has settled; see orbOffset().
   private focusGlideFrame = GLIDE_FRAMES;
-  // TH07 SakuyaB's option-orbit accumulator. The orbit STEER is deleted
-  // with the TH07 characters; the field itself stays parked at its -PI/2
-  // rest value because stage-scene.ts (read-only here) still reads it in
-  // its behavior-func-5 (SakuyaB orbit-bank) spawn branch, which no
-  // Border Team SHT record can ever select (ply00a/ply00as funcs[0] are
-  // only 0/1).
-  orbitAngle = -Math.PI / 2;
   shooting = false;
   // -1 while not shooting so that the first held frame lands on fireFrame 0
   // (see update()): a shot with delay 0 must fire on the very press frame,
@@ -165,12 +123,6 @@ export class Player {
   // only runs the shooter table when the integer phase changes.
   private prevFireFrame = -999;
   bullets: PlayerBullet[] = [];
-  // TH07 MarisaB's persistent-laser slot tracker. The laser SPAWNING is
-  // deleted with the TH07 characters (no ply00a record has funcs[0] 2/3, so
-  // the array can never be populated); the field itself stays because
-  // stage-scene.ts (read-only here) still iterates it in its beam tick and
-  // bullet-reject paths.
-  laserSlots: ({ bullet: PlayerBullet; timer: number; fading: boolean; shot: ShtShot } | null)[] = [null, null, null];
   lives = 2;
   bombs = 3;
   power = 0;
@@ -256,16 +208,14 @@ export class Player {
   runner: AnmRunner;
   private poseState: 'idle' | 'left' | 'right' = 'idle';
 
-  constructor(character: CharacterId, anms: Record<string, Anm>) {
-    // `character` is vestigial: the Border Team is the single character, so
-    // its ply00a/ply00as data loads regardless of the id passed in.
-    this.character = character;
+  constructor(team: Th08TeamId, anms: Record<string, Anm>) {
+    this.team = team;
     const spec = CHARACTERS;
     const sht = TH08_DATA.sht as Record<string, string>;
     this.unfocused = new Sht(sht[spec.shtBase]);
     this.focused = new Sht(sht[`${spec.shtBase}s`]);
     this.anm = anms[spec.anmKey];
-    this.bombs = Math.trunc(this.unfocused.bombs);
+    this.bombs = Math.trunc(this.unfocused.bombsPerLife);
     // Exe Player::Init (0x43f320) seeds the deathbomb meter from the SHT.
     this.deathbombMeter = Math.trunc(this.unfocused.deathbombWindow);
     this.runner = new AnmRunner(this.anm, 0);
@@ -613,7 +563,6 @@ export class Player {
       angle: shot.angle,
       speed: shot.speed,
       damage: shot.damage,
-      shotType: shot.shotType,
       behaviorFunc: shot.funcs[0],
       tickFunc: shot.funcs[1],
       hitboxW: shot.hitboxW,
@@ -621,11 +570,8 @@ export class Player {
       sfxId: shot.sfxId,
       age: 0,
       state: 'fired',
-      hitAge: 0,
       runner,
       impactScript,
-      orb: shot.orb,
-      anchorX: shot.x,
       rect: rect
         ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h, imageKey: rect.imageKey }
         : { x: 0, y: 0, w: 0, h: 0, imageKey: '' }
@@ -702,7 +648,7 @@ export class Player {
     // state-1 -> state-3 handoff in update().
     this.deathbombMeter = 0;
     this.lives--;
-    this.bombs = Math.trunc(this.unfocused.bombs);
+    this.bombs = Math.trunc(this.unfocused.bombsPerLife);
     // Power loss happens at the MISS itself, before the drops spawn
     // (StageScene#onPlayerDeath, exe FUN_0043dca0) — not here.
     // Respawn (fcn.0043dca0 at the death-clock lapse): teleport to the spawn

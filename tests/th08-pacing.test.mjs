@@ -217,3 +217,41 @@ test('state-2 transition creeps at vel/2 for duration+2 ticks, then the frac+ful
   assert.equal(xAfter(1), 103.5, 'tick 13 (age 12 = D+2): frac + full fall-through');
   assert.equal(xAfter(1), 104.5, 'tick 14: full velocity only');
 });
+
+test('TH08 spawn states 2/3/4 use native half, quarter, and eighth creep factors', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 1, null, 1);
+  scene.mode = 'test';
+  const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 100, y: 100, life: 1000 });
+  shooter.ecl.shootOffset = { x: 0, y: 0 };
+  for (const [flags, expected] of [[2, 0.5], [4, 0.25], [8, 0.125]]) {
+    scene.runtime.spawnBullets(scene, shooter, {
+      sprite: 2, offset: 2, count1: 1, count2: 1,
+      speed1: 1, speed2: 1, angle1: 0, angle2: 0,
+      flags, sfx: 0, exSlots: [], aimMode: 3
+    });
+    assert.equal(scene.enemyBullets.at(-1).spawnMoveScale, expected, `flags ${flags}`);
+  }
+});
+
+test('retained TH08 midboss death callbacks settle exactly once', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 1, null, 1);
+  scene.mode = 'test';
+  scene.playerObj.power = 128;
+  scene.playerObj.lives = 99;
+  scene.playerObj.invulnFrames = 16000;
+  const kills = [];
+  scene.traceReplayEvent = (event) => {
+    if (event.kind === 'enemy-kill' && event.sub === 15) kills.push(event);
+  };
+  const shooting = { held: new Set(['shoot']), pressed: new Set() };
+  for (let frame = 0; frame < 4740; frame++) scene.update(shooting);
+
+  assert.equal(kills.length, 1, 'mode-2 midboss actor must not re-enter death settlement');
+  assert.equal(scene.runtime.lifecycleLog.filter((event) =>
+    event.ev === 'kill' && event.sub === 15).length, 1);
+  assert.equal(scene.bossActive, null, 'authored Sub18 exit unregisters the midboss');
+});

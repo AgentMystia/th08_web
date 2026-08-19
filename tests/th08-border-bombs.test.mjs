@@ -30,6 +30,9 @@ function makeHost(enemies = [], targetPos = null) {
     clearBullets(x, y, radius) {
       log.clears.push({ x, y, radius });
     },
+    randomFloat() {
+      return 0.5;
+    },
     effectVm(script, x, y, scale, color) {
       log.effects.push({ script, x, y, scale, color });
     },
@@ -61,14 +64,14 @@ test('type 0 cast spawns the sixteen-orb ladder at -pi + i*pi/8', () => {
   bomb.cast(host, 192, 200);
   // Sixteen orb VMs on script 0x13 (0x40c010's FUN_004069f0 calls).
   assert.equal(host.log.orbs.filter(o => o.script === 0x13).length, 16);
-  // Cast-frame bullet clear + red flash (effect 12 → archive script 44,
+  // Cast-frame r96 clear + red flash (effect 12 → archive script 44,
   // DAT_004c6d30) + cast sfx.
-  assert.ok(host.log.clears.some(c => c.radius === 200));
+  assert.ok(host.log.clears.some(c => c.radius === 96));
   assert.ok(host.log.effects.some(e => e.script === 44));
   assert.ok(host.log.sfx.some(s => s.id === 0x0d));
 });
 
-test('type 0 orbs seek the primary cache with the /4 clamped recurrence', () => {
+test('type 0 orbs seek the primary cache with the /8 clamped recurrence', () => {
   const bomb = new Th08BorderBomb(0, 192, 200);
   const host = makeHost([], { x: 192, y: 40 });
   bomb.cast(host, 192, 200);
@@ -87,8 +90,11 @@ test('type 0 releases the spiral at frame 40 and bursts on settled aura', () => 
   for (let i = 0; i < 40; i++) bomb.tick(host, 192, 200, true);
   assert.equal(bomb.orbAt(0).state, 1, 'still seeking before frame 40');
   bomb.tick(host, 192, 200, true); // 41st callback: counter 40, the release
-  // Orb 0's speed resets to 8 and the same tick's spiral branch already
-  // grows it by 3.2 (the phase-B recurrence runs every frame).
+  const released = bomb.orbAt(0);
+  // The release callback lands at radius 8 using native x=sin/y=cos, then
+  // grows the radius to 11.2 for the next callback. No stale seek velocity
+  // is added after the polar placement.
+  assert.ok(Math.abs(Math.hypot(released.x - 192, released.y - 200) - 8) < 0.001);
   assert.equal(bomb.orbAt(0).speed, Math.fround(Math.fround(8) + Math.fround(3.2)));
   // An aura settling >= 200 damage bursts the orb with the 500 damage slot.
   const burstHost = makeHost([{ x: 192, y: 200 }]);
@@ -116,6 +122,20 @@ test('type 2 deathbomb parks orbs at speed 0 and bursts them staggered', () => {
   assert.ok(orb0 === null || orb0.state === 2);
 });
 
+test('type 2 polar motion stores position before applying the next radius increment', () => {
+  const bomb = new Th08BorderBomb(2, 192, 300);
+  const host = makeHost();
+  bomb.cast(host, 192, 300);
+  for (let i = 0; i < 41; i++) bomb.tick(host, 192, 300, true);
+  const at40 = bomb.orbAt(0);
+  assert.deepEqual({ x: at40.x, y: at40.y }, { x: 192, y: 300 }, 'frame 40 still uses radius 0');
+  assert.equal(at40.speed, Math.fround(2.4), 'frame 40 arms the next radius');
+  bomb.tick(host, 192, 300, true);
+  const at41 = bomb.orbAt(0);
+  assert.ok(Math.abs(Math.hypot(at41.x - 192, at41.y - 300) - Math.fround(2.4)) < 0.001);
+  assert.ok(at41.x > 192, 'native x=sin(angle) convention rotates orb 0 to the right here');
+});
+
 test('type 2 bombardments land their orb VM at the TARGET, not the player', () => {
   // 0x5241-0x5276: every 20 frames past 40 the bombardment slot (16 then
   // 17) fires at the primary target with VM 0x14 — the 20-frame 4x flash
@@ -136,6 +156,21 @@ test('type 2 bombardments land their orb VM at the TARGET, not the player', () =
   assert.ok(!host.log.orbs.some(o => o.index < 16 && o.script === 0x14), 'ring orbs keep script 0x13');
 });
 
+test('type 2 no-target bombardment uses two shared-RNG draws over the native field', () => {
+  const bomb = new Th08BorderBomb(2, 192, 300);
+  const host = makeHost();
+  const draws = [0.25, 0.75];
+  host.randomFloat = () => draws.shift();
+  bomb.cast(host, 192, 300);
+  for (let i = 0; i < 41; i++) bomb.tick(host, 192, 300, true);
+  const shot = host.log.orbs.find(o => o.index >= 16);
+  assert.ok(shot, 'first no-target bombardment spawned at frame 40');
+  assert.deepEqual({ x: shot.x, y: shot.y }, { x: 112, y: 320 });
+  assert.deepEqual(draws, [], 'exactly two gameplay RNG draws consumed');
+  const scripts = host.log.effects.slice(-2).map(effect => effect.script);
+  assert.deepEqual(scripts, [0x56, 0x57], 'native effect ids 0x31/0x37 mapped to archive scripts');
+});
+
 test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () => {
   for (const type of [1, 3]) {
     const bomb = new Th08BorderBomb(type, 192, 200);
@@ -145,7 +180,9 @@ test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () 
     for (let i = 0; i < 31; i++) bomb.tick(host, 192, 200, true);
     // The wave rings ride the etama effect layer by archive script index.
     const effectScripts = host.log.effects.map(e => e.script);
+    assert.ok(effectScripts.includes(type === 1 ? 0x58 : 0x5c), 'mapped cast effect');
     for (const s of waveScripts) assert.ok(effectScripts.includes(s), `wave ${s.toString(16)} for type ${type}`);
+    assert.ok(!effectScripts.includes(type === 1 ? 0x24 : 0x25), 'raw effect id is not an archive script');
     // The field aura follows the player at r100 with damage 70.
     assert.ok(host.log.slots.some(s2 => s2.radius === 100 && s2.damage === 70));
   }

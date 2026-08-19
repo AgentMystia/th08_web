@@ -6,8 +6,7 @@ import { BinaryView } from './bin';
 // decompressed sizes in the decrypted raw header, and starts the LZSS
 // stream after its two fixed pointer tables at +0x68. The raw header plus
 // decompressed ReplayData form the complete image; all stage and slowdown
-// table pointers are image-relative. (The TH07 "T7RP" container and its
-// per-frame AUX event stream are deleted with the TH07 engine path.)
+// table pointers are image-relative.
 
 const TH08_MAGIC = 0x50523854; // "T8RP"
 const TH08_RAW_HEADER_SIZE = 0x68;
@@ -35,38 +34,21 @@ export const RPY_BITS = {
 export interface RpyStage {
   stage: number; // 1-based table index: 1..6 = stages, 7+ = Extra/final
   offset: number; // absolute image offset of this stage's metadata block
-  // TH08 exposes its full stage snapshot under these names. The
-  // compatibility fields below retain TH07's cherry/rank spelling for
-  // callers that were written against T7RP.
-  score: number;
+  scoreAtEnd: number; // +0x00 u32
+  pointItems: number; // +0x04 u32
+  graze: number; // +0x08 u32
   pointItemExtends: number;
   nextPointItemExtendThreshold: number;
   pointItemValue: number;
   youkaiGauge: number;
   rank: number;
-  character: number;
+  team: number;
   clockTime: number;
-  // Stage-entry snapshot (+ scoreAtEnd). rngSeed (+0x1a) is injected into
-  // the live RNG at playback start.
-  scoreAtEnd: number; // +0x00 u32 — score at this stage's END; the last
-  // stage's equals the file's global score.
-  pointItems: number; // +0x04 u32
-  cherry: number; // +0x08 u32 (TH08: mirrors youkaiGauge for compat)
-  cherryMax: number; // +0x0C u32 (TH08: always 0)
-  cherryPlus: number; // +0x10 u32 (TH08: always 0)
-  graze: number; // +0x08 u32 in the TH08 layout (see parseTh08Stage)
-  extendLevel: number; // mirrors pointItemExtends
-  extendThreshold: number; // mirrors nextPointItemExtendThreshold
   rngSeed: number; // +0x1a u16
   power: number; // +0x1c u8
   lives: number; // +0x1d u8
   bombs: number; // +0x1e u8
-  rankByte: number; // +0x1f u8 (rank stays constant within a stage)
-  powerItemCountForScore: number; // always 0 in TH08 stage blocks
-  spellsCaptured: number; // always 0 in TH08 stage blocks
   inputs: Uint16Array; // per-frame input word (one u16 per frame)
-  inputHigh: Uint16Array; // high word of wide replay input records (always empty in v6)
-  auxFlags: Uint16Array; // TH07-era aux column (always empty in v6)
   // One playback-observed-FPS byte per 30 input frames from the matching
   // slowdown table block. The raw trailer has one leading recorder byte;
   // native playback reads pointer+1 before advancing, so this array
@@ -75,16 +57,13 @@ export interface RpyStage {
   slowdown: Uint8Array;
 }
 
-// TH07-era primary-character table, kept because the TH08 `character`
-// getter (below) still maps the T8RP shotType onto it for logging.
-export const RPY_CHARACTERS = ['reimuA', 'reimuB', 'marisaA', 'marisaB', 'sakuyaA', 'sakuyaB'] as const;
-export const RPY_TH08_CHARACTERS = [
+export const RPY_TH08_TEAMS = [
   'reimuYukari', 'marisaAlice', 'sakuyaRemilia', 'yuyukoYoumu'
 ] as const;
 
 export class Rpy {
   version!: number;
-  shotByte!: number; // raw TH08 ReplayData shotType
+  shotType!: number; // raw TH08 ReplayData shot/team selector
   difficulty!: number; // 0=Easy .. 3=Lunatic, 4=Extra
   date!: string; // "MM/DD"
   name!: string;
@@ -102,18 +81,10 @@ export class Rpy {
     this.parseTh08(raw);
   }
 
-  // TH07-compatible primary-character selection for logging (the engine's
-  // character enum predates TH08 teams). `shotByte` remains the
-  // authoritative raw TH08 ReplayData shotType; scripts/replay-verify-th08.mjs
-  // prints this getter's value.
-  get character(): (typeof RPY_CHARACTERS)[number] {
-    return RPY_CHARACTERS[(this.shotByte & 3) === 3 ? 0 : this.shotByte * 2];
-  }
-
-  get th08Character(): (typeof RPY_TH08_CHARACTERS)[number] {
-    const c = RPY_TH08_CHARACTERS[this.shotByte];
-    if (!c) throw new Error(`T8RP shotType ${this.shotByte} out of range`);
-    return c;
+  get team(): (typeof RPY_TH08_TEAMS)[number] {
+    const team = RPY_TH08_TEAMS[this.shotType];
+    if (!team) throw new Error(`T8RP shotType ${this.shotType} out of range`);
+    return team;
   }
 
   private parseTh08(raw: BinaryView): void {
@@ -148,7 +119,7 @@ export class Rpy {
     const v = this.image = new BinaryView(image);
 
     const body = TH08_RAW_HEADER_SIZE;
-    this.shotByte = v.u8(body + 0x02);
+    this.shotType = v.u8(body + 0x02);
     this.difficulty = v.u8(body + 0x03);
     if (this.difficulty > 4) throw new Error(`T8RP difficulty ${this.difficulty} is out of range`);
     this.date = v.cstring(body + 0x04);
@@ -195,15 +166,14 @@ export class Rpy {
     // cursor at block+0x24 (all.c:40991). The stride-6 feed FUN_004526c0 is
     // selected only for pre-v6 replay images (all.c:40683-40685). Frame
     // counts cross-validate against the slowdown trailer: one bucket byte
-    // per 30 frames + a 1-byte lead (stage 1: 10510 records -> 351 buckets,
+    // per 30 frames + a 1-byte lead (stage 1: 10504 records -> 351 buckets,
     // 352-byte trailer region).
     const frames = Math.floor((end - offset - TH08_SUBHEADER_SIZE) / 2);
     const inputs = new Uint16Array(frames);
     for (let f = 0; f < frames; f++) {
       inputs[f] = v.u16(offset + TH08_SUBHEADER_SIZE + f * 2);
     }
-    const inputHigh = new Uint16Array(0);
-    const score = v.u32(offset);
+    const scoreAtEnd = v.u32(offset);
     const pointItems = v.u32(offset + 0x04);
     const graze = v.u32(offset + 0x08);
     const pointItemExtends = v.u32(offset + 0x0c);
@@ -214,7 +184,7 @@ export class Rpy {
     return {
       stage,
       offset,
-      score,
+      scoreAtEnd,
       pointItems,
       graze,
       pointItemExtends,
@@ -226,27 +196,15 @@ export class Rpy {
       lives: v.u8(offset + 0x1d),
       bombs: v.u8(offset + 0x1e),
       rank: v.u8(offset + 0x1f),
-      character: v.u8(offset + 0x20),
+      team: v.u8(offset + 0x20),
       clockTime: v.u8(offset + 0x22),
-      scoreAtEnd: score,
-      cherry: youkaiGauge,
-      cherryMax: 0,
-      cherryPlus: 0,
-      extendLevel: pointItemExtends,
-      extendThreshold: nextPointItemExtendThreshold,
-      rankByte: v.u8(offset + 0x1f),
-      powerItemCountForScore: 0,
-      spellsCaptured: 0,
       inputs,
-      inputHigh,
-      auxFlags: new Uint16Array(0),
       slowdown: new Uint8Array(0)
     };
   }
 }
 
-// The TH06-era bitstream LZSS ZUN reuses across pak-family formats
-// (Th07.exe FUN_00454e50, all.c:42203): 0x2000-byte zero-initialized window
+// T8RP's bitstream LZSS decoder uses a 0x2000-byte zero-initialized window
 // with the write cursor starting at 1, MSB-first bits, control bit 1 =
 // literal (8 bits), 0 = match (13-bit absolute window position, 0 terminates;
 // 4-bit length-3). Matches copy from the absolute position wrapping &0x1FFF,

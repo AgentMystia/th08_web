@@ -5,8 +5,8 @@
  * the whole bomb, selected by bombType from the five-entry table copied to
  * player+0x1000 by Player::AddedCallback (rdata 0x4c7ad0, team block 0):
  *
- *   type 0 = 0x40c010  unfocused "Reimu" bomb   (16 seeking orbs + spiral, 260f)
- *   type 1 = 0x410c40  focused  "Yukari" bomb   (r100 field + 3 waves,     200f)
+ *   type 0 = 0x40c010  unfocused "Reimu" bomb   (16 seeking orbs + spiral, 200f)
+ *   type 1 = 0x410c40  focused  "Yukari" bomb   (r100 field + 3 waves,     150f)
  *   type 2 = 0x40c910  focused-cast deathbomb   (16 charging orbs, staggered
  *                                                bursts, target bombardment)
  *   type 3 = 0x410fe0  unfocused-cast deathbomb (r100 field, stronger waves, 300f)
@@ -37,6 +37,8 @@ export interface Th08BombHost {
   addAttackSlot(x: number, y: number, radius: number, damage: number): number;
   /** Clear enemy bullets inside the circle (FUN_0044df00 pools / 0x40be30). */
   clearBullets(x: number, y: number, radius: number): void;
+  /** Shared gameplay RNG float used by the no-target deathbomb fallback. */
+  randomFloat(): number;
   /** Effect VM request (FUN_00425430(script, pos, scale, color)). */
   effectVm(script: number, x: number, y: number, scale: number, color: number): void;
   /**
@@ -134,8 +136,6 @@ export class Th08BorderBomb {
   /** The shared cast helper 0x40be30 + each callback's cast-frame block. */
   cast(host: Th08BombHost, x: number, y: number): void {
     this.castOrigin = { x: F32(x), y: F32(y) };
-    // 0x40be30: screen bullet clear (0x415d60/0x4413e0 family) at cast.
-    host.clearBullets(x, y, 200);
     host.playSfx(0x0d, 0);
     if (this.type === 0 || this.type === 2) {
       // FUN_00425430(0xc = effect 12): DAT_004c6d30[12] → archive script 44.
@@ -156,7 +156,10 @@ export class Th08BorderBomb {
           dead: false
         });
         angle = F32(angle + PI_OVER_8);
-        // The r64 aura (dmg 200, kind 2) + r128 clear pool entry per orb.
+        // FUN_0044df00's cast pool is r96; the r64 damage aura is the
+        // separate FUN_0044e040 allocation. All sixteen pools overlap at
+        // cast, but fixed-pool identity remains per orb in the executable.
+        host.clearBullets(x, y, 96);
         host.addAttackSlot(x, y, 64, ORB_AURA_DAMAGE);
       }
       return;
@@ -165,8 +168,12 @@ export class Th08BorderBomb {
     const first = this.type === 1 ? 0x28 : 100; // dmg-slot arg (dword +0x24)
     host.addAttackSlot(x, y, 100, 70); // 0x4e040 field slot (kind 5)
     host.addAttackSlot(x, y, 100, first); // 0x4df00 pool entry
+    host.clearBullets(x, y, 100);
     // First wave VM 0x24/0x25 at angle 0x3f490fdb.
-    host.effectVm(this.type === 1 ? 0x24 : 0x25, x, y, 4, 0xffffffff);
+    // Effect ids 0x24/0x25 map through DAT_004c6d30 to archive scripts
+    // 0x58/0x5c. Those scripts deliberately use etama3's tall blue/red
+    // boundary texture; the raw ids point at unrelated archive scripts.
+    host.effectVm(this.type === 1 ? 0x58 : 0x5c, x, y, 4, 0xffffffff);
   }
 
   /**
@@ -222,11 +229,14 @@ export class Th08BorderBomb {
           // The r128 clear entry tracks each orb every seek frame.
           host.clearBullets(orb.x, orb.y, 128);
         } else {
-          // Phase B spiral: angle wobble by parity, radius grows 3.2/frame.
+          // Phase B spiral (all.c:5022-5035): TH08's polar convention is
+          // x=sin(angle), y=cos(angle). Position uses the CURRENT radius,
+          // then the radius grows for the next callback. This branch does
+          // not receive the seek phase's trailing velocity integration.
           orb.angle = normalizeAngle(orb.angle, (i & 1) === 0 ? SPIN_EVEN : SPIN_ODD);
+          orb.x = F32(this.castOrigin.x + Math.sin(orb.angle) * orb.speed);
+          orb.y = F32(this.castOrigin.y + Math.cos(orb.angle) * orb.speed);
           orb.speed = F32(orb.speed + SPIRAL_GROW);
-          orb.x = F32(this.castOrigin.x + Math.cos(orb.angle) * orb.speed);
-          orb.y = F32(this.castOrigin.y + Math.sin(orb.angle) * orb.speed);
         }
       } else if (orb.state === 2) {
         orb.burstAge++;
@@ -239,8 +249,10 @@ export class Th08BorderBomb {
         continue;
       }
       if (orb.state === 1) {
-        orb.x = F32(orb.x + orb.vx);
-        orb.y = F32(orb.y + orb.vy);
+        if (t < CHARGE_RELEASE_FRAME) {
+          orb.x = F32(orb.x + orb.vx);
+          orb.y = F32(orb.y + orb.vy);
+        }
         // Aura settles >= 200 damage (slot +0x30 vs +0x34): the aura's
         // per-frame addAttackSlot feeds auraDamage.
         orb.auraDamage += host.addAttackSlot(orb.x, orb.y, 64, ORB_AURA_DAMAGE);
@@ -259,11 +271,14 @@ export class Th08BorderBomb {
       if (orb.dead) continue;
       if (orb.state === 1) {
         orb.angle = normalizeAngle(orb.angle, (i & 1) === 0 ? SPIN_EVEN : SPIN_ODD);
+        // all.c:5198-5209: the deathbomb uses the same x=sin/y=cos polar
+        // convention. Acceleration is written AFTER this frame's position,
+        // so frame 40 remains parked and frame 41 uses the first increment.
+        orb.x = F32(orb.anchorX + Math.sin(orb.angle) * orb.speed);
+        orb.y = F32(orb.anchorY + Math.cos(orb.angle) * orb.speed);
         if (t >= CHARGE_RELEASE_FRAME) {
           orb.speed = F32(orb.speed + ((i & 1) === 0 ? CHARGE_ACCEL_EVEN : CHARGE_ACCEL_ODD));
         }
-        orb.x = F32(orb.anchorX + Math.cos(orb.angle) * orb.speed);
-        orb.y = F32(orb.anchorY + Math.sin(orb.angle) * orb.speed);
         // Staggered forced burst at duration-0x28-i (220-i).
         if (t >= this.duration - 0x28 - i) {
           this.burstOrb(host, orb, BURST_DAMAGE_DEATHBOMB);
@@ -279,8 +294,10 @@ export class Th08BorderBomb {
       // (index 16+) lands on the primary target (or a random screen point
       // when unset): VM 0x14, r64 dmg 400 kind 2 + effect VMs 0x31/0x37.
       const fallback = host.targetPos ?? {
-        x: F32(320 + Math.random() * 64 + 32),
-        y: F32(384 + Math.random() * 64 + 32)
+        // FUN_0040d390(320/384) + 32: two draws from the shared game RNG,
+        // not Math.random and not the old bottom-right 64px corner box.
+        x: F32(host.randomFloat() * 320 + 32),
+        y: F32(host.randomFloat() * 384 + 32)
       };
       // FUN_004069f0(slot16+n, 0x14): the bombardment's own orb VM (the
       // 20-frame 4x flash family), plus effects 0x31/0x37 and the r64
@@ -288,8 +305,9 @@ export class Th08BorderBomb {
       // The 0x40c910 latch writes literal 1 after each spawn: slot 16 for
       // the first bombardment, then slot 17 for every following one.
       host.orbVm(16 + (this.bombardments > 0 ? 1 : 0), 0x14, fallback.x, fallback.y);
-      host.effectVm(0x31, fallback.x, fallback.y, 1, 0);
-      host.effectVm(0x37, fallback.x, fallback.y, 1, 0);
+      // Effect ids 0x31/0x37 map to archive scripts 0x56/0x57.
+      host.effectVm(0x56, fallback.x, fallback.y, 1, 0);
+      host.effectVm(0x57, fallback.x, fallback.y, 1, 0);
       host.addAttackSlot(fallback.x, fallback.y, 64, 400);
       host.playSfx(0x0f, fallback.x);
       this.bombardments++;
@@ -310,9 +328,11 @@ export class Th08BorderBomb {
       if (t === w.at) {
         host.addAttackSlot(playerX, playerY, 100, 70);
         host.addAttackSlot(playerX, playerY, 100, this.type === 1 ? 0x28 : 100);
-        host.effectVm(this.type === 1 ? 0x24 : 0x25, playerX, playerY, 5, 0xffffffff);
+        host.clearBullets(playerX, playerY, 100);
         // The wave rings are etama VMs (archive scripts 0x59-0x5f), not
-        // player00 orb art.
+        // player00 orb art. Native creates effect id 0x24/0x25 and replaces
+        // that same VM's base 0x58/0x5c script immediately; spawning both
+        // left an unrelated base effect behind in the port.
         host.effectVm(w.script, playerX, playerY, 1, 0xffffffff);
       }
     }

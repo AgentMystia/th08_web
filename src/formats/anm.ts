@@ -771,17 +771,6 @@ export class AnmRunner {
         // flight script end the bullet, so this only suppresses the warning.
         this.hitAnimationType = v.i32(a);
         break;
-      case 80: { // timed hold: arm a frame counter from a float arg
-        // Th07.exe (v1.00b) FUN_0044aa20 case 0x50: the argument is read as a
-        // float and the hold persists while its int truncation stays > 0.
-        // The game's single use (stg4bg2 script 0, arg 2^-14) truncates to 0
-        // and never holds — implemented faithfully for any argument anyway.
-        const duration = Math.trunc(this.getVal(v.f32(a)));
-        if (duration <= 0) break;
-        this.waiting = true;
-        this.waitTimeout = this.frame + duration;
-        break;
-      }
       default:
         // Skip unknown ops (the encoding is length-prefixed, so the stream
         // stays in sync) — a throw here escapes the rAF tick and freezes the

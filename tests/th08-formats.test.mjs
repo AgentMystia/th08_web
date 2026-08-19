@@ -92,7 +92,7 @@ test('TH08 STD stage1 keeps the object/face/script layout intact', { skip: !hasS
 
 test('TH08 MSG decodes control args and XOR-0x77 Shift-JIS text', { skip: !hasSamples }, () => {
   const msg = new Msg(sample('msg1a.dat'));
-  assert.equal(msg.isTh08, true);
+  assert.equal('isTh08' in msg, false);
   assert.equal(msg.messages.length, 2);
   const instrs = msg.messages[0];
 
@@ -112,23 +112,31 @@ test('TH08 SHT decodes the 56-byte header, records, unknowns, and callbacks', { 
   const unfocused = new Sht(sample('ply00a.sht'));
   const focused = new Sht(sample('ply00as.sht'));
   for (const sht of [unfocused, focused]) {
-    assert.equal(sht.isTh08, true);
+    assert.equal('isTh08' in sht, false);
+    assert.equal('cherryLossOnDeath' in sht, false);
+    assert.equal('bombs' in sht, false);
     assert.deepEqual(sht.levels.map((level) => level.power), [8, 24, 48, 80, 128, 999]);
     assert.deepEqual(
-      [sht.bombPerLife, sht.hitbox, sht.grazebox, sht.autocollectSpeed, sht.itemRadius, sht.pocLineY],
+      [sht.bombsPerLife, sht.hitbox, sht.grazebox, sht.autocollectSpeed, sht.itemRadius, sht.pocLineY],
       [3, 1.649999976158142, 2.799999952316284, 10, 24, 128]
     );
     assert.deepEqual(
-      [sht.unknownOld0, sht.unknownOld1, sht.unknownOld2],
+      [sht.deathbombWindow, sht.headerUnknown32, sht.headerUnknown52],
       [18, 8000, 0.8999999761581421]
     );
   }
   assert.deepEqual(unfocused.levels.map((level) => level.shots.length), [1, 3, 3, 5, 5, 7]);
   assert.deepEqual(focused.levels.map((level) => level.shots.length), [2, 2, 3, 4, 5, 7]);
+  for (const sht of [unfocused, focused]) {
+    const records = sht.levels.flatMap((level) => level.shots);
+    assert.deepEqual([...new Set(records.map((shot) => shot.shotType))], [0]);
+    assert.ok(records.every((shot) => shot.funcs[0] === 0 || shot.funcs[0] === 1));
+    assert.ok(records.every((shot) => shot.funcs[1] === 0 || shot.funcs[1] === 1));
+  }
 
   const shot = unfocused.levels[0].shots[0];
   assert.deepEqual(
-    ['interval', 'delay', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'unknownOldSht0', 'orb']
+    ['interval', 'delay', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'unknown30', 'orb']
       .map((key) => shot[key]),
     [5, 0, 0, 0, 18, 48, -1.5707963705062866, 16, 48, -50, 0]
   );
@@ -136,19 +144,19 @@ test('TH08 SHT decodes the 56-byte header, records, unknowns, and callbacks', { 
 
   const angled = unfocused.levels[1].shots[1];
   assert.deepEqual(
-    ['interval', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'orb', 'unknownOldSht1', 'sprite']
+    ['interval', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'orb', 'unknown33', 'sprite']
       .map((key) => angled[key]),
     [15, 0, 0, 18, 18, -2.094395160675049, 10, 14, 0, 0, 2]
   );
-  assert.equal(angled.unknownOldSht2, 1);
+  assert.equal(angled.unknown34, 1);
   assert.deepEqual(angled.funcs, [0, 1, 0, 0]);
 });
 
-test('TH08 T8RP decrypts, decompresses, and exposes wide stage records', { skip: !hasSamples }, () => {
+test('TH08 T8RP decrypts, decompresses, and exposes native stage records', { skip: !hasSamples }, () => {
   const rpy = new Rpy(readFileSync(REPLAY));
   assert.equal(rpy.version, 6);
-  assert.equal(rpy.shotByte, 0);
-  assert.equal(rpy.th08Character, 'reimuYukari');
+  assert.equal(rpy.shotType, 0);
+  assert.equal(rpy.team, 'reimuYukari');
   assert.equal(rpy.difficulty, 3);
   assert.equal(rpy.date, '11/11');
   assert.equal(rpy.name, 'Laggy');
@@ -157,6 +165,9 @@ test('TH08 T8RP decrypts, decompresses, and exposes wide stage records', { skip:
   assert.equal(rpy.image.u32(0x20), 0x134);
   assert.equal(rpy.image.u32(0x44), 0x32e32);
   const stage = rpy.stages[0];
+  for (const removed of ['score', 'cherryMax', 'cherryPlus', 'rankByte', 'inputHigh', 'auxFlags']) {
+    assert.equal(removed in stage, false, `RpyStage must not expose ${removed}`);
+  }
   assert.equal(stage.stage, 1);
   assert.equal(stage.offset, 0x134);
   assert.equal(stage.rngSeed, 0x8fbe);
@@ -164,10 +175,9 @@ test('TH08 T8RP decrypts, decompresses, and exposes wide stage records', { skip:
   // frame records for stage 1 (cross-validated by the 352-byte slowdown
   // trailer: 1 lead byte + ceil(10504/30) = 351 bucket bytes).
   assert.equal(stage.inputs.length, 10504);
-  assert.equal(stage.inputHigh.length, 0);
   assert.equal(stage.clockTime, 0);
   assert.deepEqual(
-    ['score', 'pointItems', 'graze', 'pointItemExtends', 'nextPointItemExtendThreshold', 'pointItemValue', 'youkaiGauge', 'power', 'lives', 'bombs', 'rank', 'character']
+    ['scoreAtEnd', 'pointItems', 'graze', 'pointItemExtends', 'nextPointItemExtendThreshold', 'pointItemValue', 'youkaiGauge', 'power', 'lives', 'bombs', 'rank', 'team']
       .map((key) => stage[key]),
     [0x708c8f, 0, 0, 0, 100, 300000, 0, 0, 6, 3, 8, 0]
   );

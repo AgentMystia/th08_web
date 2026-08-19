@@ -53,8 +53,7 @@ test('every stripped TH08 ANM resolves its shipped texture', () => {
 test('Border Team SHTs preserve both focus roles and native movement fields', () => {
   for (const key of ['ply00a', 'ply00as']) {
     const sht = new Sht(Buffer.from(TH08_DATA.sht[key], 'base64'));
-    assert.equal(sht.isTh08, true);
-    assert.equal(sht.bombPerLife, 3);
+    assert.equal(sht.bombsPerLife, 3);
     assert.equal(sht.hitbox, Math.fround(1.65));
     assert.equal(sht.speed, 4);
     assert.equal(sht.focusedSpeed, 2);

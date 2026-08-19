@@ -2,15 +2,13 @@ import { BinaryView } from './bin';
 
 // TH08 MSG dialogue format: u32 message count, u32 offsets[count], then
 // per message a stream of {u16 time, u8 op, u8 argLength, args…} until op 0.
-// TH07 stage-dialogue ops 0-14 carry over (0 end, 1/2 portrait enter (side,
+// Ops 0-14 cover the base dialogue controls (0 end, 1/2 portrait enter (side,
 // anm script), 3 text line (color?, lineIndex, shift-jis text), 4 wait,
 // 5 face expression (side, variant), 6 ecl-resume ticket, 7 music change,
 // 8 boss intro line, 9 stage-result snapshot, 10 post-transition stop, 11
 // stage transition, 12 BGM fadeout, 13 text-skippability flag, 14 screen
-// fade); TH08 adds control ops 15-22. Text payloads (including op 16) are
-// XOR-0x77-encoded Shift-JIS. (TH07's plaintext payload branch is deleted
-// with the TH07 engine path; `isTh08` remains a constant-true field for
-// callers that branch on it.)
+// fade); ops 15-22 extend them with TH08 controls. Text payloads (including
+// op 16) are XOR-0x77-encoded Shift-JIS.
 
 export interface MsgInstr {
   time: number;
@@ -31,7 +29,6 @@ export interface MsgInstr {
 
 export class Msg {
   readonly view: BinaryView;
-  readonly isTh08 = true;
   readonly messages: MsgInstr[][] = [];
 
   constructor(source: string | Uint8Array) {

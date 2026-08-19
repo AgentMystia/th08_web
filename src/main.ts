@@ -6,7 +6,7 @@ import { AudioBus } from './audio/audio';
 import { loadAssets } from './game/assets';
 import { StageScene } from './game/stage-scene';
 import { Th08MenuFlow } from './game/th08-title-scene';
-import type { CharacterId } from './game/player';
+import type { Th08TeamId } from './game/player';
 import { stageBgmTracks } from './game/bgm';
 import { stageSnapshot } from './game/snapshot';
 
@@ -135,23 +135,19 @@ async function boot(): Promise<void> {
   //
   function startStage(
     difficulty: number,
-    character: CharacterId,
+    team: Th08TeamId,
     stageNumber = 1,
     carry: import('./game/stage-scene').RunCarry | null = null,
     practice = false
   ): StageScene {
-    const s = new StageScene(assets, audio, difficulty, character, stageNumber, carry);
+    const s = new StageScene(assets, audio, difficulty, team, stageNumber, carry);
     s.setLatencyObservationEnabled(latencyEnabled);
     // Headless probes (?test=1 without ?menu=1) keep the scene alive forever;
     // real play gets the arcade flow: continue screen + return to title.
     // Practice (exe DAT_00625628 bit0): one stage, no continues, straight
     // back to the title on clear or game over.
     s.mode = practice ? 'practice' : useMenu || testArcade ? 'arcade' : 'test';
-    // Practice starts with 8 lives (Th07.exe FUN_0042cf2f @ all.c:19718-19720,
-    // CONFIRMED), and any stage other than 1 starts at FULL power — the
-    // stage-entry tail sets power to _DAT_0048eb84 = 128.0 when the run's
-    // practice flag (stats+0x93d8 bit 0) is set and the stage isn't 1
-    // (all.c:19856-19859). Stage-1 practice keeps the normal power-0 start.
+    // Test-only practice controls are retained for the Stage-1 probes.
     if (practice) {
       s.playerObj.lives = 8;
       if (stageNumber !== 1) s.playerObj.power = 128;
@@ -170,33 +166,28 @@ async function boot(): Promise<void> {
     // story from stage 1, practice/test from the current stage.
     s.onRetryRun = () => {
       sessionHiScore = Math.max(sessionHiScore, s.hiScore);
-      startStage(difficulty, character, s.mode === 'arcade' ? 1 : stageNumber, null, practice);
+      startStage(difficulty, team, s.mode === 'arcade' ? 1 : stageNumber, null, practice);
     };
-    // Stage clear tally advanced -> tear down and enter the next stage with
-    // the run state carried over (score/lives/bombs/power/graze/cherry).
+    // The delivered vertical slice ends after Stage 1; return to the native
+    // title flow instead of constructing unavailable later-stage data.
     s.onStageComplete = (c) => {
       sessionHiScore = Math.max(sessionHiScore, c.hiScore);
-      startStage(difficulty, character, stageNumber + 1, c);
+      stage = null;
+      menu = createMenu();
+      audio.preloadBgm(['th08_01']);
+      audio.playBgm('th08_01');
     };
     stage = s;
     menu = null;
     const [stageTrack, bossTrack] = stageBgmTracks(stageNumber);
     audio.preloadBgm([stageTrack, bossTrack]);
-    // Main-route transitions have an entire stage of lead time to decode the
-    // next pair, matching the native game's ready-before-play behavior.
-    if (stageNumber < 6) audio.preloadBgm([...stageBgmTracks(stageNumber + 1)]);
     audio.playBgm(stageTrack);
     return s;
   }
 
-  // Menu-initiated runs: difficulty 4 = Extra -> stage 7, 5 = Phantasm ->
-  // stage 8; main difficulties start at stage 1. Practice carries its own
-  // chosen stage.
-  // TH08 menu start: difficulty 0-3, Border Team, stage 1. (The TH07 menu's
-  // practice/extra option mapping went away with MenuFlow; the TH08 slice's
-  // title only enables Game Start.)
-  const startFromMenu = (difficulty: number, character: CharacterId) =>
-    startStage(difficulty, character, 1);
+  // TH08 menu start: difficulty 0-3, Border Team, Stage 1.
+  const startFromMenu = (difficulty: number, team: Th08TeamId) =>
+    startStage(difficulty, team, 1);
 
   function createMenu(): Th08MenuFlow {
     return new Th08MenuFlow(assets, audio, startFromMenu);
@@ -207,15 +198,12 @@ async function boot(): Promise<void> {
     audio.preloadBgm(['th08_01']);
     audio.playBgm('th08_01');
   } else {
-    // ?difficulty=0..5 (4 = Extra, 5 = Phantasm), ?stage=1..8 for probes.
-    // Default shot is the TH08 Border Team: the browser ships only the TH08
-    // asset bundle, so a TH07 character id cannot resolve its player ANM
-    // here (the TH07 engine path stays exercised by the node test harness,
-    // whose stub assets still provide the TH07 ANMs).
-    const difficulty = Math.min(5, Math.max(0, Number(params.get('difficulty') ?? 1)));
-    const character = (params.get('shot') ?? 'reimuYukari') as CharacterId;
-    const stageNumber = Math.min(8, Math.max(1, Number(params.get('stage') ?? 1)));
-    const s = startStage(difficulty, character, stageNumber);
+    // Direct probe boot is limited to the delivered Stage-1 Border Team
+    // slice; the menu follows the same restriction.
+    const difficulty = Math.min(3, Math.max(0, Number(params.get('difficulty') ?? 1)));
+    const team: Th08TeamId = 'reimuYukari';
+    const stageNumber = 1;
+    const s = startStage(difficulty, team, stageNumber);
     // Test-only override so scripts/dev-shot.mjs can snapshot a shot pattern
     // at an arbitrary power bracket without needing to grind for it in-game.
     if (params.has('power')) s.playerObj.power = Number(params.get('power'));
@@ -232,7 +220,7 @@ async function boot(): Promise<void> {
   let simHalted = false;
   let drawHalted = false;
   const reportFatal = (phase: string, err: unknown): void => {
-    console.error(`[th07] ${phase} halted by uncaught error`, err);
+    console.error(`[th08] ${phase} halted by uncaught error`, err);
     setTimeout(() => {
       throw err instanceof Error ? err : new Error(String(err));
     });
@@ -364,7 +352,7 @@ async function boot(): Promise<void> {
         if (!stage) return;
         // Deterministic grid fill through the real spawn path (1100 cap
         // applies); types cycle so the draw path sees mixed art.
-        const types = ['power', 'point', 'bigPower', 'cherry', 'bigCherry'] as const;
+        const types = ['powerSmall', 'point', 'powerBig', 'time', 'pointSmall'] as const;
         for (let i = 0; i < n; i++) {
           stage.spawnItem(types[i % types.length], 16 + (i * 7) % 352, 16 + (i * 13) % 400);
         }
@@ -379,7 +367,7 @@ async function boot(): Promise<void> {
       },
       clearEnemyBullets: () => { if (stage) stage.enemyBullets.length = 0; },
       // Test-only: force the life count so probes can reach and observe
-      // late-stage content (boss spells, the Supernatural Border) that a
+      // late-stage content and boss spells that a
       // no-dodge headless run would otherwise die before reaching. Same
       // spirit as setPower above.
       setLives: (n: number) => { if (stage) stage.playerObj.lives = n; },

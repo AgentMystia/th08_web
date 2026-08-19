@@ -1,21 +1,16 @@
 import { BinaryView } from './bin';
 
-// TH08 SHT player-data format (one file per team/focus-state; the TH07
-// 52-byte layout is deleted with the TH07 engine path).
+// TH08 SHT player-data format (one file per team/focus-state).
 //
-// Layout validated against the TH08 files ply00a/ply00as and the TH07
-// struct definition in Priw8's sht-webedit tool (js/struct/struct_07.js,
-// https://github.com/Priw8/sht-webedit) — TH08 keeps that family with a
-// 56-byte main header and 56-byte shooter records. This is NOT the TH06
-// layout (that game has no .sht at all).
+// Layout validated against the TH08 files ply00a/ply00as and Th08.exe
+// v1.00d: a 56-byte main header and 56-byte shooter records.
 //
 // 56-byte header: i16 unknown, i16 levelCount, f32 bombsPerLife,
 // i32 deathbombWindow, then 8 floats: hitbox, grazebox, autocollectSpeed,
 // itemRadius, pocLineY, speed, focusedSpeed, diagSpeed, diagFocusedSpeed
 // (hitbox/grazebox/speeds are FULL widths and px/frame; 1.65 is Reimu's
 // FULL hitbox — the exe halves it at the point of use, so 0.825 is the
-// half-width). TH08 drops TH07's cherryLossOnDeath float (the field reads
-// 0) and exposes two header unknowns (u32 @ +0x20, f32 @ +0x34). Then
+// half-width). Two header fields remain unnamed (u32 @ +0x20, f32 @ +0x34). Then
 // levelCount × {u32 offset, u32 powerThreshold} at +0x38, each pointing at
 // a 56-byte shooter record:
 //   u16 interval, u16 delay, 6×f32 (x, y, hitboxW, hitboxH, angle, speed),
@@ -39,10 +34,10 @@ export interface ShtShot {
   speed: number;
   damage: number;
   orb: number; // 0 = player, 1 = left option, 2 = right option
-  unknownOldSht0: number;
+  unknown30: number;
   shotType: number;
-  unknownOldSht1: number;
-  unknownOldSht2: number;
+  unknown33: number;
+  unknown34: number;
   sprite: number; // player-anm script id (the spawner adds 10: FUN_0044fb70)
   sfxId: number; // sound effect id to play on fire, -1 = none (not yet wired to playback)
   funcs: [number, number, number, number]; // behavior function indices (see header comment)
@@ -61,45 +56,39 @@ const TABLE_OFFSET = 56;
 const RECORD_SIZE = 56;
 
 export class Sht {
-  readonly isTh08 = true;
-  readonly unknownHead: number;
-  readonly bombPerLife: number;
-  readonly unknownOld0: number;
-  readonly bombs: number;
+  readonly headerUnknown0: number;
+  readonly bombsPerLife: number;
   readonly deathbombWindow: number;
   readonly hitbox: number;
   readonly grazebox: number;
   readonly autocollectSpeed: number;
   readonly itemRadius: number;
-  // TH07's cherryLossOnDeath float has no TH08 counterpart; kept at 0 for
-  // callers written against the shared field list.
-  readonly cherryLossOnDeath = 0;
   readonly pocLineY: number;
   readonly speed: number;
   readonly focusedSpeed: number;
   readonly diagSpeed: number;
   readonly diagFocusedSpeed: number;
-  readonly unknownOld1: number;
-  readonly unknownOld2: number;
+  readonly headerUnknown32: number;
+  readonly headerUnknown52: number;
   readonly levels: ShtLevel[] = [];
 
   constructor(source: string | Uint8Array) {
     const v = new BinaryView(source);
     const levelCount = v.i16(2);
-    this.unknownHead = v.i16(0);
-    this.bombPerLife = this.bombs = v.f32(4);
-    this.unknownOld0 = this.deathbombWindow = v.i32(8);
+    this.headerUnknown0 = v.i16(0);
+    this.bombsPerLife = v.f32(4);
+    this.deathbombWindow = v.i32(8);
     this.hitbox = v.f32(12);
     this.grazebox = v.f32(16);
     this.autocollectSpeed = v.f32(20);
     this.itemRadius = v.f32(24);
     this.pocLineY = v.f32(28);
-    this.unknownOld1 = v.u32(32);
+    this.headerUnknown32 = v.u32(32);
     this.speed = v.f32(36);
     this.focusedSpeed = v.f32(40);
     this.diagSpeed = v.f32(44);
     this.diagFocusedSpeed = v.f32(48);
-    this.unknownOld2 = v.f32(52);
+    this.headerUnknown52 = v.f32(52);
     for (let i = 0; i < levelCount; i++) {
       const offset = v.u32(TABLE_OFFSET + i * 8);
       const power = v.u32(TABLE_OFFSET + i * 8 + 4);
@@ -118,10 +107,10 @@ export class Sht {
           angle: v.f32(o + 20),
           speed: v.f32(o + 24),
           damage: v.i16(o + 28),
-          unknownOldSht0: v.i16(o + 30),
+          unknown30: v.i16(o + 30),
           orb: v.u8(o + 32),
-          unknownOldSht1: v.u8(o + 33),
-          unknownOldSht2: v.i16(o + 34),
+          unknown33: v.u8(o + 33),
+          unknown34: v.i16(o + 34),
           shotType: v.u8(o + 33),
           sprite: v.i16(o + 36),
           sfxId: v.i16(o + 38),
