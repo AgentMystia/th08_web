@@ -940,20 +940,24 @@ TH08-slice additions (2026-08-20 convergence pass, inline comments at the sites)
   0.55) dim quad over the playfield behind the declaration VMs.
 - The f997 (stage 1) / f1168 (stage 2) earliest replay divergences are a
   standing residual: our auto-fire-family volley trajectories run ~2-4
-  flight-frames too far along vs native (replay-probe proven). Eliminated
-  this pass against the binary: kill-box formula (0x44a230 AABB), hit
-  sizes (rice 4.0, player hitbox 1.65/2), creep factors (½/0.4/⅓ from the
-  state jump table), the transition+2 parity, the origin backup ×4
-  (0x42fc4c), the template origin (loop-head +0x2d88), ins_105/106
-  deadline/phase mechanics incl. the u32%draw, the ring's clock-30 volley
-  timing (no timeline holds before t=900), and rank (min 8 on Lunatic —
-  cannot push the native behind us). What remains needs a native per-frame
-  slot trace; breakpoint tracing is not viable on this host (see §0's
-  2026-08-20 entry). Interactive native captures of the stage-tally card
-  were likewise abandoned: synthetic xdotool input destabilizes the wine
-  game within ~60s (repeated mid-run crashes), so the tally's night-clock
-  plates are built from the decompiled VM structure (times.anm scripts
-  1/2) rather than a captured layout.
+  flight-frames too far along vs native. Two replay probes: player shifted
+  8px down at f986-991 survives; player shifted EXACTLY 2px down at f996
+  (our sim then kills at f999 instead of f998, proving the probe's
+  sensitivity) also survives in the native — so the native bullet is
+  genuinely ≥2px behind ours (a trajectory/origin offset, not a hitbox
+  issue). Eliminated against the binary: kill-box formula (0x44a230),
+  hit sizes (rice 4.0, player 1.65/2), creep factors (½/0.4/⅓), the
+  transition+2 parity, the origin backup ×4 (0x42fc4c), the template
+  origin (loop-head +0x2d88), ins_105/106 deadline/phase incl. u32%draw,
+  the clock-30 volley timing (no timeline holds before t=900), and rank
+  (min 8 on Lunatic). Remaining candidates are sub-pixel template-origin
+  differences (e.g. the firing enemy's Y at the volley) that only a native
+  per-frame slot trace can pin; breakpoint tracing is not viable on this
+  host (see §0's 2026-08-20 entry). Interactive native captures of the
+  tally card were likewise abandoned: synthetic xdotool input
+  destabilizes the wine game within ~60s (repeated mid-run crashes), so
+  the tally's night-clock plates are built from the decompiled VM
+  structure (times.anm scripts 1/2) rather than a captured layout.
 
 TH08-slice additions (2026-08-18 second presentation pass, inline comments at the sites):
 - FUN_0045d660's second argument tunes playback FREQUENCY (the consumer's
