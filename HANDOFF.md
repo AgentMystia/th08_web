@@ -1031,3 +1031,23 @@ skip,重放开场波基线。
 CI 状态:core(browser 前置)/browser/replay(advisory,f3301)/pages 全绿
 于 https://github.com/AgentMystia/th08_web/actions;Demo =
 https://agentmystia.github.io/th08_web/。
+
+## 2026-08-19（十二）——更正（十一）的取舍：原生移动引擎恢复上线
+
+**用户实测否决了移动面回退**:旧引擎的 ins_66 是 no-op("保持时间轴
+生成位置"),而时间轴把 sub1/sub3(大蝴蝶族)生成在 **y=−32 屏幕外**,
+原作正是靠 ins_65/66 的 armed 移动让它们飞进场。回退版里这批敌人
+永远停在屏幕外开火、且可被玩家弹打到——可见的游戏性缺陷。
+replay 的 f3301/f998 只是模拟保真度指标,不能压过用户可见行为。
+
+处置:恢复 db058a0 的原生移动引擎(FUN_00422c40 mover + ins_63-74
+native 消费者 + 变量 10069+ 映射);5 个停放测试全部恢复;moveAux
+从 types 移除。**(十一)的"只回退移动面"结论作废**,其 A/B 方法与
+creep/rank-lerp 取证仍然有效。当前 advisory 发散回到 **f998**
+(f880 生成、sub-3 弹、速 1.1125;世界在 f850 前分岔,rngDraws +120)。
+
+下一会话收敛入口不变,但对象改为 **WIP 引擎内部**:逐 tick 对照
+native(重点 ins_66 armed 消费者的 bit-18/mirror/timer-frac 三候选,
+以及 f880 附近 sub-3 齐射的 rank-lerp 窗口)——用 research 分支 ×
+advisory replay 的并行二分,收敛到 ≥f3301 后再把新旧两套对齐结论
+合并。

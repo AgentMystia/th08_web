@@ -52,8 +52,8 @@ RNG 残差）。CI 以 advisory（非阻塞）方式运行它，输出当前
 
 - **范围**：垂直切片 = Stage 1 + Border Team。无后续关卡/其他队伍/Lunatic
   以外的完整回归。
-- **Replay 收敛**：Stage 1 在 ~f3301 处发散（首个幻影弹着，其余为级联），
-  根因候选与完整分析记录在 `HANDOFF.md`。 playable 路径本身（弹幕、对话、
+- **Replay 收敛**：Stage 1 在 ~f998 处发散（首个幻影弹着，其余为级联），
+  根因候选与完整分析记录在 `HANDOFF.md`。playable 路径本身（弹幕、对话、
   HUD、炸弹）由 th08-* 回归测试与 CI 浏览器启动检查守护。
 - 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序等）。
 

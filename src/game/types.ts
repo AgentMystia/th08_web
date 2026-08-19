@@ -720,9 +720,6 @@ export interface Th08EclState {
   markerActor: { x: number; y: number; angle: number; state: number } | null;
   // +0x3340..+0x334c: player clamp rect (ins_75), armed by flags bit 19.
   clampRect: { x1: number; y1: number; x2: number; y2: number } | null;
-  // ins_72/73/74's first arg (enemy+0x2d9c aux dword); the b161dbf-era
-  // mover ignores it, kept for the parked native-movement rework (999b644).
-  moveAux: number;
   // +0x3350: squared suppress-fire radius (ins_85's op writes f*f).
   suppressRadiusSq: number;
   // +0x332f: manager-list id (0/2 human/youkai, 1 neutral).
