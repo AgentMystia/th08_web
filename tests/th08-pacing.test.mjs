@@ -218,14 +218,19 @@ test('state-2 transition creeps at vel/2 for duration+2 ticks, then the frac+ful
   assert.equal(xAfter(1), 104.5, 'tick 14: full velocity only');
 });
 
-test('TH08 spawn states 2/3/4 use native half, quarter, and eighth creep factors', async () => {
+test('TH08 spawn states 2/3/4 creep at vel*(1/2, 1/2.5, 1/3)', async () => {
   const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
   const mod = await loadEngine();
   const scene = new mod.StageScene(makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 1, null, 1);
   scene.mode = 'test';
   const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 100, y: 100, life: 1000 });
   shooter.ecl.shootOffset = { x: 0, y: 0 };
-  for (const [flags, expected] of [[2, 0.5], [4, 0.25], [8, 0.125]]) {
+  // Th08.exe OnUpdate state jump table @ 0x432156: state 2 -> 0x43176e
+  // (k=2.0f), state 3 -> 0x431880 (k=2.5f), state 4 -> 0x431991 (k=3.0f);
+  // FUN_0040c7d0 integrates pos += vel*(1.0f/k) with the 1.0f at 0x4b4338.
+  // The earlier (1/2, 1/4, 1/8) reading was a bit-pattern misparse
+  // (4.0f = 0x40800000, 8.0f = 0x41000000).
+  for (const [flags, expected] of [[2, 0.5], [4, 0.4], [8, 1 / 3]]) {
     scene.runtime.spawnBullets(scene, shooter, {
       sprite: 2, offset: 2, count1: 1, count2: 1,
       speed1: 1, speed2: 1, angle1: 0, angle2: 0,

@@ -844,6 +844,7 @@ export class StageRuntime {
         markerHandle: null,
         markerActor: null,
         clampRect: null,
+        moveAux: 0,
         suppressRadiusSq: 0,
         managerList: 0,
         spellBonus: 0,
@@ -1071,86 +1072,65 @@ export class StageRuntime {
   }
 
   private updateMovementController(e: Enemy, rate: number): void {
+    // Movement behavior reverted to the f3301-converged s.moveMode mover
+    // (b161dbf): the FUN_00422c40-native mover shipped in the lockdown pass
+    // regressed the replay convergence (first unexpected hit f3301 -> f998;
+    // A/B runs 32247997449 vs 32248180397). The native-movement rework is
+    // parked at commit 999b644 with its ins_63-74 consumers.
     const s = e.ecl;
-    const native = s.th08?.movement;
-    if (!native || native.mode === 0) return;
-    const rateF32 = Math.fround(rate);
-
-    // FUN_00422c40 mode 1: integrate the polar heading/speed, derive the
-    // manager velocity, then count down an optional ZunTimer.
-    if (native.mode === 1) {
-      native.angle = normalizeNativeAngleF32(
-        native.angle,
-        Math.fround(rateF32 * Math.fround(native.angularVelocity))
-      );
-      native.speed = Math.fround(
-        Math.fround(rateF32 * Math.fround(native.acceleration)) + Math.fround(native.speed)
-      );
-      s.axisSpeed = {
-        x: Math.fround(Math.cos(native.angle) * native.speed),
-        y: Math.fround(Math.sin(native.angle) * native.speed),
-        z: 0
-      };
-      native.angle = s.heading = s.angle = Math.fround(native.angle);
-      s.speed = native.speed;
-      s.angularVelocity = native.angularVelocity;
-      s.acceleration = native.acceleration;
-      if (native.timerTotal > 0) {
-        this.subtractTh08MovementTimer(native, rateF32);
-        if (native.timerCurrent <= 0) this.setTh08MovementMode(s, 0);
-      }
-      return;
-    }
-
-    // Mode 2 is a tracking delta: target = origin + displacement*ease(t),
-    // then velocity = target-current. Both the target math and each stored
-    // component round to f32. Mirrored enemies negate the controller delta;
-    // the manager integrator negates it again when applying it.
-    if (native.mode === 2) {
-      this.subtractTh08MovementTimer(native, rateF32);
-      const elapsed = native.timerCurrent + native.timerFraction;
-      const progress = Math.fround(Math.max(0, 1 - elapsed / Math.max(1, native.timerTotal)));
-      const eased = applyEclEaseNativeF32(progress, native.ease);
-      const tx = Math.fround(Math.fround(native.displacement.x * eased) + native.origin.x);
-      const ty = Math.fround(Math.fround(native.displacement.y * eased) + native.origin.y);
-      const tz = Math.fround(Math.fround(native.displacement.z * eased) + native.origin.z);
+    if (s.moveMode === 2 && s.interp) {
+      const m = s.interp;
+      m.left = Math.max(0, m.left - 1);
+      const progress = Math.fround(clamp(
+        1 - m.left / Math.max(1, m.duration),
+        0,
+        1
+      ));
+      const t = applyEclEaseNativeF32(progress, s.interpKind);
+      const tx = Math.fround(Math.fround(t * Math.fround(m.delta.x)) + Math.fround(m.start.x));
+      const ty = Math.fround(Math.fround(t * Math.fround(m.delta.y)) + Math.fround(m.start.y));
+      const tz = Math.fround(Math.fround(t * Math.fround(m.delta.z)) + Math.fround(m.start.z));
       let vx = Math.fround(tx - Math.fround(e.x));
       const vy = Math.fround(ty - Math.fround(e.y));
       const vz = Math.fround(tz - Math.fround(e.z));
       if (s.mirrored) vx = Math.fround(-vx);
       s.axisSpeed = { x: vx, y: vy, z: vz };
-      native.angle = s.heading = s.angle = Math.fround(Math.atan2(vy, vx));
-      if (native.timerCurrent <= 0) {
-        e.x = Math.fround(native.origin.x + native.displacement.x);
-        e.y = Math.fround(native.origin.y + native.displacement.y);
-        e.z = Math.fround(native.origin.z + native.displacement.z);
+      s.heading = Math.fround(Math.atan2(vy, vx));
+      if (m.left <= 0) {
+        e.x = Math.fround(Math.fround(m.start.x) + Math.fround(m.delta.x));
+        e.y = Math.fround(Math.fround(m.start.y) + Math.fround(m.delta.y));
+        e.z = Math.fround(Math.fround(m.start.z) + Math.fround(m.delta.z));
         s.axisSpeed = { x: 0, y: 0, z: 0 };
-        this.setTh08MovementMode(s, 0);
+        s.moveMode = 0;
+        s.interp = null;
       }
-      return;
-    }
-
-    // Mode 3 follows a polar offset around a fixed origin. Unlike mode 2,
-    // FUN_00422c40 does not pre-flip its X delta; the manager's mirror bit
-    // remains the sole screen-space inversion.
-    native.orbitAngle = normalizeNativeAngleF32(
-      native.orbitAngle,
-      Math.fround(rateF32 * Math.fround(native.orbitAngularVelocity))
-    );
-    native.orbitSpeed = Math.fround(
-      Math.fround(rateF32 * Math.fround(native.orbitAcceleration)) + Math.fround(native.orbitSpeed)
-    );
-    const ox = Math.fround(Math.cos(native.orbitAngle) * native.orbitSpeed);
-    const oy = Math.fround(Math.sin(native.orbitAngle) * native.orbitSpeed);
-    s.axisSpeed = {
-      x: Math.fround(Math.fround(ox + native.origin.x) - Math.fround(e.x)),
-      y: Math.fround(Math.fround(oy + native.origin.y) - Math.fround(e.y)),
-      z: 0
-    };
-    native.angle = s.heading = s.angle = Math.fround(Math.atan2(s.axisSpeed.y, s.axisSpeed.x));
-    if (native.timerTotal > 0) {
-      this.subtractTh08MovementTimer(native, rateF32);
-      if (native.timerCurrent <= 0) this.setTh08MovementMode(s, 0);
+    } else if (s.moveMode === 3) {
+      const rateF32 = Math.fround(rate);
+      const angleDelta = Math.fround(Math.fround(s.orbitAngularVelocity) * rateF32);
+      s.orbitAngle = normalizeNativeAngleF32(s.orbitAngle, angleDelta);
+      s.orbitSpeed = Math.fround(
+        Math.fround(s.orbitAcceleration) * rateF32 + Math.fround(s.orbitSpeed)
+      );
+      const orbitX = Math.fround(Math.cos(s.orbitAngle) * s.orbitSpeed);
+      const orbitY = Math.fround(Math.sin(s.orbitAngle) * s.orbitSpeed);
+      s.axisSpeed.x = Math.fround(orbitX + Math.fround(s.orbitTarget.x) - Math.fround(e.x));
+      s.axisSpeed.y = Math.fround(orbitY + Math.fround(s.orbitTarget.y) - Math.fround(e.y));
+      s.heading = Math.fround(Math.atan2(s.axisSpeed.y, s.axisSpeed.x));
+      if (s.orbitDuration > 0 && (s.orbitLeft -= 1) < 1) s.moveMode = 0;
+    } else if (s.moveMode === 1) {
+      const rateF32 = Math.fround(rate);
+      s.angle = normalizeNativeAngleF32(
+        s.angle,
+        Math.fround(rateF32 * Math.fround(s.angularVelocity))
+      );
+      s.speed = Math.fround(rateF32 * Math.fround(s.acceleration) + Math.fround(s.speed));
+      s.axisSpeed = {
+        x: Math.fround(Math.cos(s.angle) * s.speed),
+        y: Math.fround(Math.sin(s.angle) * s.speed),
+        z: 0
+      };
+      s.heading = s.angle;
+      if (s.orbitDuration > 0 && (s.orbitLeft -= 1) < 1) s.moveMode = 0;
     }
   }
 
@@ -3399,8 +3379,13 @@ export class StageRuntime {
         this.applyTh08PlayerClamp(game);
         return null;
       }
+      // ins_63-74 below are the f3301-converged b161dbf bodies: the
+      // FUN_00422c40-native consumers shipped in the lockdown pass regressed
+      // the replay convergence (first unexpected hit f3301 -> f998) and are
+      // parked at commit 999b644. ins_68/69 were no-ops in that build — they
+      // fall through to the warn-once default here.
       case 64: { // interpolate position to (x, y) over `duration` frames,
-        // easing `mode` (FUN_00420f40 -> FUN_00422c40 mode 2)
+        // easing `mode` (enemy movement mode 2/3; flags 0x2000 family)
         const duration = gi(0);
         const mode = gi(4);
         const tx = gf(8);
@@ -3409,154 +3394,91 @@ export class StageRuntime {
           e.x = tx;
           e.y = ty;
           e.z = 0;
-          this.setTh08MovementMode(s, 0);
+          s.orbitTarget = { x: tx, y: ty, z: 0 };
+          s.moveMode = 0;
         } else {
-          // The displacement is relative to the render-position snapshot
-          // (+0x2d88), while the interpolation origin copies +0x2d34.
-          this.armTh08InterpolatedMotion(
-            s,
-            e,
+          s.orbitTarget = { x: e.x, y: e.y, z: e.z };
+          s.interp = {
+            start: { x: e.x, y: e.y, z: e.z },
+            delta: { x: Math.fround(tx - e.x), y: Math.fround(ty - e.y), z: Math.fround(-e.z) },
             duration,
-            mode,
-            Math.fround(tx - t.loopHeadX),
-            Math.fround(ty - t.loopHeadY),
-            Math.fround(-e.z),
-            true
-          );
+            left: duration
+          };
+          s.interpKind = mode;
+          s.moveMode = 2;
+          s.axisSpeed = { x: 0, y: 0, z: 0 };
         }
         return null;
       }
       case 65: {
-        // ins_65 arms FUN_00422c40 mode 1 and clears its stop timer.
-        this.armTh08PolarMotion(s, gf(0), gf(4), 0);
+        // ins_65, dispatcher label 0x40 (all.c:11509-11528): writes the
+        // var-readable motion bookkeeping — angle to +0x2d94 (var 10069),
+        // speed to +0x2da8 — sets flags bit 12 (0x1000), clears the stop
+        // timer, and that is ALL: a full .text scan finds NO reader of
+        // +0x2d94/+0x2da8 outside the var accessors (0x41f9b0/0x42067f), so
+        // this op does not itself move the enemy (the TH07 mover consumed
+        // those fields; TH08 motion goes through the armed 0x2000 state and
+        // the interpolation ops).
+        s.heading = normalizeNativeAngleF32(gf(0));
         return null;
       }
       case 66: {
-        // ins_66: duration<1 is the mode-1 form; otherwise FUN_00420d10
-        // stores a duration-scaled displacement consumed by mode 2.
-        const duration = gi(0);
-        const ease = gi(4);
-        const angle = normalizeNativeAngleF32(gf(8));
-        const speed = gf(12);
-        if (duration < 1) {
-          this.armTh08PolarMotion(s, angle, speed, 0);
-        } else {
-          const dx = Math.fround(Math.cos(angle) * speed * duration);
-          const dy = Math.fround(Math.sin(angle) * speed * duration);
-          this.armTh08InterpolatedMotion(s, e, duration, ease, dx, dy, 0, true, true);
-        }
+        // ins_66, dispatcher label 0x41 (all.c:11530-11562). arg0 < 1 is the
+        // plain label-0x40 bookkeeping write. arg0 >= 1 is FUN_00420d10's
+        // armed state: velocity dir(arg2)·speed(arg3)·arg0 into +0x2dc4
+        // (var 10063/10064), origin snapshot into +0x2dd0 (var 10058-60),
+        // stop timer +0x2de8 = arg0 with the ZunTimer at +0x2ddc armed, and
+        // flags 0x2000 | spriteOffset<<14. The per-tick consumer of the
+        // armed state is NOT yet recovered (linear dir·speed·arg0-ticks and
+        // an instant total-vector jump were both tested and produced
+        // earlier/equal phantom contacts); until it is pinned, this branch
+        // arms nothing and the enemy keeps its timeline spawn position.
         return null;
       }
-      case 67: { // random inward move, folded at the op-75 rect margins
-        const duration = gi(0);
-        const ease = gi(4);
-        const speed = gf(8);
-        let angle = e.x <= game.player.x
-          ? Math.fround(Math.fround(game.rng.f() * NATIVE_HALF_PI_F32) - NATIVE_QUARTER_PI_F32)
-          : normalizeNativeAngleF32(
-              Math.fround(game.rng.f() * NATIVE_HALF_PI_F32),
-              2.356194496154785
-            );
-        const rect = t.clampRect ?? { x1: 0, y1: 0, x2: 0, y2: 0 };
-        // FUN_00422020 repeatedly passes enemy+0x2d34 through the identity
-        // accessor FUN_0040b460 before these four comparisons. Only the
-        // initial left/right random fan compares against the player-X global;
-        // the margin folds are based on the ENEMY position inside its armed
-        // rect. Using the player position here drove Wriggle upward whenever
-        // Reimu stayed below the boss arena, eventually culling the boss.
-        if (e.x < rect.x1 + 96) {
-          if (angle <= NATIVE_HALF_PI_F32) {
-            if (angle < -NATIVE_HALF_PI_F32) angle = Math.fround(-NATIVE_PI_F32 - angle);
-          } else {
-            angle = Math.fround(NATIVE_PI_F32 - angle);
-          }
+      case 67: { // aimed move clamped into the op-75 rect (FUN_00422020)
+        // Angle fold: aim at the player, clamp against +0x3340..+0x334c with
+        // pi/2pi mirrors. Exact fold constants not data-extracted; clamp to
+        // the rect's x span via atan2 of the clamped target point.
+        let tx = game.player.x;
+        let ty = game.player.y;
+        if (t.clampRect) {
+          tx = Math.min(Math.max(tx, t.clampRect.x1), t.clampRect.x2);
+          ty = Math.min(Math.max(ty, t.clampRect.y1), t.clampRect.y2);
         }
-        if (rect.x2 - 96 < e.x) {
-          if (NATIVE_HALF_PI_F32 <= angle || angle < 0) {
-            if (-NATIVE_HALF_PI_F32 < angle && angle < 0) {
-              angle = Math.fround(-NATIVE_PI_F32 - angle);
-            }
-          } else {
-            // This branch reads the pre-existing +0x2d94 field in the exe.
-            angle = Math.fround(NATIVE_PI_F32 - t.movement.angle);
-          }
-        }
-        if (e.y < rect.y1 + 48 && angle < 0) angle = Math.fround(-angle);
-        if (rect.y2 - 48 < e.y && angle > 0) angle = Math.fround(-angle);
-        if (duration < 1) this.armTh08PolarMotion(s, angle, speed, 0);
-        else {
-          const dx = Math.fround(Math.cos(angle) * speed * duration);
-          const dy = Math.fround(Math.sin(angle) * speed * duration);
-          // FUN_004222b0 does not apply FUN_00420d10's bit-18 pre-flip.
-          this.armTh08InterpolatedMotion(s, e, duration, ease, dx, dy, 0, false, true);
-        }
-        return null;
-      }
-      case 68: { // adjust an armed motion to aim-at-player + offset
-        const angle = normalizeNativeAngleF32(
-          nativeAngleTowardPlayer(game.player.x, game.player.y, e.x, e.y),
-          gf(0)
-        );
-        t.movement.angle = s.angle = s.heading = angle;
-        t.movement.speed = s.speed = Math.fround(gf(4));
-        return null;
-      }
-      case 69: { // aimed mode-1 form / curved mode-2 form
-        const duration = gi(0);
-        const ease = gi(4);
-        const offset = gf(8);
-        const speed = gf(12);
-        if (duration < 1) {
-          const angle = normalizeNativeAngleF32(
-            nativeAngleTowardPlayer(game.player.x, game.player.y, e.x, e.y),
-            offset
-          );
-          this.armTh08PolarMotion(s, angle, speed, duration);
-        } else {
-          // The executable's >=1 branch calls FUN_00420d10 and therefore
-          // treats arg2 as an absolute angle, despite the aimed short form.
-          const angle = normalizeNativeAngleF32(offset);
-          const dx = Math.fround(Math.cos(angle) * speed * duration);
-          const dy = Math.fround(Math.sin(angle) * speed * duration);
-          this.armTh08InterpolatedMotion(s, e, duration, ease, dx, dy, 0, true, true);
-        }
+        s.angle = normalizeNativeAngleF32(Math.atan2(ty - e.y, tx - e.x));
+        s.heading = s.angle;
+        s.speed = gf(4);
+        s.moveMode = 1;
         return null;
       }
       case 70:
-        t.movement.angularVelocity = s.angularVelocity = Math.fround(gf(0));
-        this.setTh08MovementMode(s, 1);
+        s.angularVelocity = gf(0);
+        s.moveMode = 1;
         return null;
       case 71:
-        t.movement.acceleration = s.acceleration = Math.fround(gf(0));
-        this.setTh08MovementMode(s, 1);
+        s.acceleration = gf(0);
+        s.moveMode = 1;
         return null;
       case 72: { // motion3 (anm, f1..f6): movement accel x/y + speeds
-        const m = t.movement;
-        this.resetTh08MovementTimer(s, gi(0));
-        m.origin = { x: Math.fround(gf(4)), y: Math.fround(gf(8)), z: 0 };
-        m.orbitAngle = Math.fround(gf(12));
-        m.orbitAngularVelocity = Math.fround(gf(16));
-        m.orbitSpeed = Math.fround(gf(20));
-        m.orbitAcceleration = Math.fround(gf(24));
-        this.setTh08MovementMode(s, 3);
+        // (enemy+0x2dd0/+0x2dd4 accel, +0x2d9c/+0x2da0/+0x2db0/+0x2db4)
+        t.moveAux = gi(0);
+        s.axisSpeed = { x: gf(4), y: gf(8), z: 0 };
+        s.orbitSpeed = gf(12);
+        s.orbitAcceleration = gf(16);
+        s.moveMode = 1;
         return null;
       }
       case 73: { // motionPos: accel from own position snapshot
-        const m = t.movement;
-        this.resetTh08MovementTimer(s, gi(0));
-        m.origin = { x: Math.fround(e.x), y: Math.fround(e.y), z: Math.fround(e.z) };
-        m.orbitAngle = Math.fround(gf(4));
-        m.orbitAngularVelocity = Math.fround(gf(8));
-        m.orbitSpeed = 0;
-        m.orbitAcceleration = Math.fround(gf(12));
-        this.setTh08MovementMode(s, 3);
+        t.moveAux = gi(0);
+        s.axisSpeed = { x: gf(4), y: gf(8), z: 0 };
+        s.orbitSpeed = gf(12);
+        s.moveMode = 1;
         return null;
       }
       case 74: // speed34 (anm, s3, s4)
-        this.resetTh08MovementTimer(s, gi(0));
-        t.movement.orbitAngularVelocity = Math.fround(gf(4));
-        t.movement.orbitAcceleration = Math.fround(gf(8));
-        this.setTh08MovementMode(s, 3);
+        t.moveAux = gi(0);
+        s.orbitAcceleration = gf(4);
+        s.moveMode = 1;
         return null;
       case 75: // player clamp rect on (flags bit 19)
         t.clampRect = { x1: gf(0), y1: gf(4), x2: gf(8), y2: gf(12) };

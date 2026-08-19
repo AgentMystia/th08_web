@@ -594,7 +594,7 @@ test('TH08 raw conditional jump: ins_51 (float >=) guards a call', () => {
   assert.equal(Math.trunc(enemy.ecl.vars[0]), 1);
 });
 
-test('FUN_00422c40 mode 1 integrates polar angle, speed, and its stop timer', () => {
+test('FUN_00422c40 mode 1 integrates polar angle, speed, and its stop timer', { skip: 'movement rework parked at 999b644: reverted for the f3301 release convergence; restore with the rework' }, () => {
   const runtime = makeRuntime([[
     instruction(1, 65, [f32(0), f32(1)]),
     instruction(1, 70, [f32(0.1)]),
@@ -610,7 +610,7 @@ test('FUN_00422c40 mode 1 integrates polar angle, speed, and its stop timer', ()
   assert.ok(Math.abs(enemy.x - Math.fround(100 + Math.cos(Math.fround(0.1)) * 1.5)) < 1e-5);
 });
 
-test('ins_66 mode 2 follows the native duration/ease target and mirror double-flip', () => {
+test('ins_66 mode 2 follows the native duration/ease target and mirror double-flip', { skip: 'movement rework parked at 999b644: reverted for the f3301 release convergence; restore with the rework' }, () => {
   const runtime = makeRuntime([[
     instruction(1, 66, [i32(4), i32(0), f32(0), f32(2)]),
     instruction(20, 1)
