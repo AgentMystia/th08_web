@@ -273,7 +273,7 @@ test('TH08 stage 1 boots and spawns waves through the real timeline', () => {
   assert.ok(trace.some((event) => event.kind === 'ecl'));
 });
 
-test('TH08 Stage-1 opening mob waves retain the authored Lunatic spawn and FIRE signature', () => {
+test('TH08 Stage-1 opening mob waves retain the authored Lunatic spawn and FIRE signature', { skip: 'baseline captured on the parked movement rework (999b644); re-baseline against the restored engine before unskipping' }, () => {
   const runtime = new StageRuntime(TH08_DATA.stages[1], {
     etama, enemy: enemyAnm, effect: effectAnm
   });
@@ -630,7 +630,7 @@ test('ins_66 mode 2 follows the native duration/ease target and mirror double-fl
   assert.deepEqual(enemy.ecl.axisSpeed, { x: 0, y: 0, z: 0 });
 });
 
-test('FUN_00422c40 mode 3 tracks a polar offset around its captured origin', () => {
+test('FUN_00422c40 mode 3 tracks a polar offset around its captured origin', { skip: 'movement rework parked at 999b644: reverted for the f3301 release convergence; restore with the rework' }, () => {
   const runtime = makeRuntime([[
     instruction(1, 73, [i32(4), f32(0), f32(Math.PI / 2), f32(1)]),
     instruction(20, 1)
@@ -646,7 +646,7 @@ test('FUN_00422c40 mode 3 tracks a polar offset around its captured origin', () 
   assert.ok(Math.abs(enemy.y - 100) < 1e-4);
 });
 
-test('ins_67 folds a random upward exit away from the armed top margin', () => {
+test('ins_67 folds a random upward exit away from the armed top margin', { skip: 'movement rework parked at 999b644: reverted for the f3301 release convergence; restore with the rework' }, () => {
   const runtime = makeRuntime([[
     instruction(1, 75, [f32(0), f32(0), f32(384), f32(448)]),
     instruction(1, 67, [i32(4), i32(0), f32(1)]),
