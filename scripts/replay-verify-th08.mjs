@@ -64,7 +64,16 @@ if (!existsSync(REPLAY)) {
 
 const mod = await loadEngine();
 const rpy = new mod.Rpy(readFileSync(REPLAY));
-const stage = rpy.stages[0];
+// --stage N (default 1): replay stage N of the fixture and compare the end
+// state against stage N+1's recorded entry snapshot.
+const stageNumber = Math.max(1, Number(optionValue('--stage') ?? 1) | 0);
+const stageIndex = rpy.stages.findIndex((s) => s.stage === stageNumber);
+if (stageIndex < 0) {
+  console.error(`replay has no stage ${stageNumber} block (present: ${rpy.stages.map((s) => s.stage).join(', ')})`);
+  process.exit(2);
+}
+const stage = rpy.stages[stageIndex];
+const entryScore = stageIndex > 0 ? rpy.stages[stageIndex - 1].scoreAtEnd : 0;
 console.log(`TH08 replay verifier: ${REPLAY}`);
 console.log(`shotType ${rpy.shotType} (${rpy.team}) difficulty ${rpy.difficulty} stage ${stage.stage} frames ${stage.inputs.length} rngSeed 0x${stage.rngSeed.toString(16)}`);
 if (rpy.shotType !== 0 || rpy.difficulty !== 3) {
@@ -77,7 +86,7 @@ const scene = new mod.StageScene(
   makeStubAudio(),
   rpy.difficulty,
   rpy.team,
-  1,
+  stageNumber,
   null,
   stage.rngSeed
 );
@@ -87,15 +96,18 @@ const scene = new mod.StageScene(
 scene.mode = diagnostic ? 'test' : 'replay';
 
 // Minimal native T8RP stage-entry restore: score/graze/lives/bombs/power
-// plus the TH08 run-state fields.
+// plus the TH08 run-state fields. The entry score is the PREVIOUS stage's
+// recorded end score (stage 1 starts fresh at 0); addScore routes through
+// runState, so both fields must be restored.
 // The recorded stage-entry rank (T8RP +0x25): the run's neutral point.
 scene.rank = stage.rank;
-scene.score = 0; // stage 1 of the recording starts fresh
+scene.score = entryScore;
 scene.graze = stage.graze;
 scene.playerObj.lives = stage.lives;
 scene.playerObj.bombs = stage.bombs;
 scene.playerObj.power = stage.power;
 if (scene.runState) {
+  scene.runState.score = entryScore;
   scene.runState.pointItemValue = stage.pointItemValue;
   scene.runState.youkaiGauge = stage.youkaiGauge;
   scene.runState.clockTime = stage.clockTime;
@@ -268,18 +280,21 @@ for (let f = 0; f < frames; f++) {
 console.log(`replay frames visited: ${currentFrame + 1}/${frames}`);
 console.log(`spawns: ${spawnFrames.length} (first at f${spawnFrames[0] ?? '-'}, last at f${spawnFrames.at(-1) ?? '-'})`);
 console.log(`kills: ${killFrames.length} (first at f${killFrames[0] ?? '-'})`);
-console.log(`final rng seed: ${scene.rng.seed} (draws ${rngDraws}, bootstrap ${rngBootstrapDraws}; stage-2 entry seed 0x${rpy.stages[1].rngSeed.toString(16)} = target)`);
+const next = rpy.stages[stageIndex + 1] ?? null;
+console.log(`final rng seed: ${scene.rng.seed} (draws ${rngDraws}, bootstrap ${rngBootstrapDraws}${next ? `; stage-${next.stage} entry seed 0x${next.rngSeed.toString(16)} = target` : ''})`);
 console.log(`end: score=${scene.score} graze=${scene.graze} enemies=${scene.enemies.length} bullets=${scene.enemyBullets.length} player=(${scene.playerObj.x},${scene.playerObj.y}) lives=${scene.playerObj.lives} bombs=${scene.playerObj.bombs}`);
 if (scene.runState) {
   console.log(`th08 runState: gauge=${scene.runState.youkaiGauge} clock=${scene.runState.clockTime} orbs=${scene.runState.currentTimeOrbs}/${scene.runState.totalTimeOrbs} pointValue=${scene.runState.pointItemValue} extends=${scene.runState.pointItemExtends}`);
 }
 
-// End-of-stage state vs the recorded stage-2 entry snapshot (the original
-// engine's own ground truth for what stage 1 must produce). Every field is
-// an integral of the whole run — matching them forces near-total
+// End-of-stage state vs the recorded next-stage entry snapshot (the original
+// engine's own ground truth for what this stage must produce). Every field
+// is an integral of the whole run — matching them forces near-total
 // convergence. PASS requires all fields exact plus the RNG residue.
-const next = rpy.stages[1];
-const checks = [
+if (!next) {
+  console.log(`end-of-stage: last recorded stage — no next-stage snapshot to compare`);
+}
+const checks = !next ? [] : [
   ['score', scene.score, stage.scoreAtEnd],
   ['power', scene.playerObj.power, next.power],
   ['lives', scene.playerObj.lives, next.lives],
@@ -287,7 +302,7 @@ const checks = [
   ['graze', scene.graze, next.graze],
   ['pointItems', scene.pointItems, next.pointItems]
 ];
-if (scene.runState) {
+if (next && scene.runState) {
   checks.push(
     ['youkaiGauge', scene.runState.youkaiGauge, next.youkaiGauge],
     ['clockTime', scene.runState.clockTime, next.clockTime],
@@ -299,7 +314,7 @@ if (scene.runState) {
 // RNG residue: the original's total stage-1 draw budget (mod 65536) is the
 // distance from the stage-1 seed to the stage-2 seed.
 let rngBudget = -1;
-{
+if (next) {
   let s = stage.rngSeed;
   for (let i = 0; i < 65536; i++) {
     const a = ((s ^ 0x9630) - 0x6553) & 0xffff;
@@ -307,21 +322,23 @@ let rngBudget = -1;
     if (s === next.rngSeed) { rngBudget = i + 1; break; }
   }
 }
-const rngMatch = rngBudget >= 0 && rngDraws % 65536 === rngBudget % 65536;
+const rngMatch = !next || (rngBudget >= 0 && rngDraws % 65536 === rngBudget % 65536);
 const ranAllFrames = !stoppedEarly;
 let allPass = rngMatch && ranAllFrames && scene.hitLog.length === 0;
-if (ranAllFrames) {
-  console.log('end-of-stage vs native stage-2 entry:');
+if (ranAllFrames && next) {
+  console.log(`end-of-stage vs native stage-${next.stage} entry:`);
   for (const [name, ours, native] of checks) {
     const ok = ours === native;
     if (!ok) allPass = false;
     console.log(`  ${name}: ours=${ours} native=${native} ${ok ? 'exact' : 'DIFF'}`);
   }
   console.log(`  rng: ours=${rngDraws} native≡${rngBudget} (mod 65536) ${rngMatch ? 'exact' : 'DIFF'}`);
+} else if (!stoppedEarly) {
+  console.log('end-of-stage: no next-stage snapshot (RNG residue not applicable)');
 } else {
-  console.log('end-of-stage vs native stage-2 entry: NOT REACHED (formal replay stopped at first committed hit)');
+  console.log(`end-of-stage vs native stage-${next?.stage ?? '?'} entry: NOT REACHED (formal replay stopped at first committed hit)`);
 }
-console.log(allPass ? 'STAGE 1 PASS' : 'STAGE 1 DIVERGED');
+console.log(allPass ? `STAGE ${stageNumber} PASS` : `STAGE ${stageNumber} DIVERGED`);
 if (scene.hitLog.length > 0) {
   console.log(`unexpected player hits: ${scene.hitLog.length}`);
   for (const hit of scene.hitLog) console.log(' ', JSON.stringify(hit));

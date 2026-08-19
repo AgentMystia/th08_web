@@ -695,6 +695,9 @@ export interface Th08EclState {
   // +0x3308/+0x330c: ins_144 death-drop pair (extra children count etc.).
   deathDropA: number;
   deathDropB: number;
+  // ins_152's stage-interp template write (exe case 0x98; data uses zeros
+  // only, no modeled consumer in the port).
+  stageInterpTemplate: number;
   // +0x3310/+0x3311/+0x3312: ins_138 death/drop effect id bytes.
   deathEffectId: number;
   dropEffectId: number;

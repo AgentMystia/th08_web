@@ -834,6 +834,7 @@ export class StageRuntime {
         transformType: -1,
         deathDropA: 0,
         deathDropB: 0,
+        stageInterpTemplate: 0,
         deathEffectId: 0,
         dropEffectId: 0,
         deathByte2: 0,
@@ -3108,6 +3109,20 @@ export class StageRuntime {
       case 10098: return 10098;
       case 10092: return s.itemDrop;
       case 10093: return e.score;
+      case 10096: {
+        // exe 0x2770 (all.c:14123-14138): the chain-keeper's live child
+        // count — FUN_0041f000 selects enemies with no master link whose +8
+        // child chain is nonempty, FUN_0041fd40 counts its +8 hops; children
+        // (master link set) read 0. The chain links only familiar spawns
+        // (ops 90-93), so count live familiar children of this enemy.
+        let count = 0;
+        if (game.enemies) {
+          for (const child of game.enemies) {
+            if (!child.dead && child.ecl.th08?.familiar && child.ecl.parent === e) count++;
+          }
+        }
+        return count;
+      }
     }
     if (id >= VAR_BASE && id < VAR_BASE + 100) {
       warnOnce(`r8-${id}`, `TH08 read of unmapped variable ${id}`);
@@ -3938,6 +3953,33 @@ export class StageRuntime {
         // run state when the host provides the hook.
         const value = (gi(0) & 1) as 0 | 1;
         game.th08SetSideMirror?.(value);
+        return null;
+      }
+      case 145: {
+        // ins_145(n) = ZunTimer::Add(n) on the context's instruction clock
+        // (exe case 0x91, asm 0x41d5df-0x41d5eb: FUN_0041fdf0(ctx+4, n) =
+        // FUN_00447295). Stage 2+ uses it (107x, all ins_145(1)) to nudge
+        // the clock one tick ahead inside dense fire rows.
+        const n = gi(0);
+        const rate = game.slowRate ?? 1;
+        if (rate > 0.99) {
+          ctx.time += n;
+        } else {
+          ctx.timeFrac += n * rate;
+          while (ctx.timeFrac >= 1) {
+            ctx.time++;
+            ctx.timeFrac -= 1;
+          }
+        }
+        return null;
+      }
+      case 152: {
+        // ins_152 = the stage-interp template reset (exe case 0x98, asm
+        // 0x41ddae-0x41ddd1): enemy+0x337c = (i16)enemy+0x2cee and
+        // SetCurrent(0) on the enemy+0x2e14 timer. Every shipped use passes
+        // all-zero args (34x); the template fields have no modeled consumer
+        // in the port (approximation: recorded, not executed).
+        t.stageInterpTemplate = gi(0);
         return null;
       }
       default:
