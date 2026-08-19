@@ -985,9 +985,11 @@ export class StageRuntime {
       s.ctx = sub.ctx;
       s.vars = sub.vars;
       let ended = false;
+      let waited = false;
       for (let guard = 0; guard < 64; guard++) {
         if (s.ctx.waitTimer > 0) {
           s.ctx.waitTimer -= rate;
+          waited = true;
           break;
         }
         const instrs = this.ecl.sub(s.ctx.subId);
@@ -997,7 +999,16 @@ export class StageRuntime {
           break;
         }
         if (s.ctx.time !== instr.time) break;
-        if (instr.rankMask & (1 << game.difficulty)) {
+        // Same all.c:10801 gate as the main dispatch: the ins_135
+        // sub-contexts are fetched by the SAME round-robin loop
+        // (LAB_0041ebd3), so a familiar's sub-context rows must also carry
+        // the current form bit (Wriggle's Sub42 volley rows: 0x3f =
+        // human-form only, 0x5f = youkai-form only).
+        let rankGate = 1 << game.difficulty;
+        if (e.ecl.th08?.familiar && game.th08PlayerForm) {
+          rankGate |= game.th08PlayerForm() === 1 ? 0x40 : 0x20;
+        }
+        if ((instr.rankMask & rankGate) === rankGate) {
           const prevExecuting = this.executingEnemy;
           this.executingEnemy = e;
           const action = this.execute(game, e, instr);
@@ -1013,7 +1024,9 @@ export class StageRuntime {
       if (ended) {
         sub.ctx.index = 0;
         sub.ctx.time = 0;
-      } else {
+      } else if (!waited) {
+        // The instruction clock freezes while the ins_2 wait timer runs
+        // (the native pass head Subtracts it once, canceling the tail tick).
         this.advanceEclClock(s, rate);
       }
     }
@@ -3207,13 +3220,17 @@ export class StageRuntime {
       }
       case 3: return null; // no case 2 in the exe switch: dead opcode (spec §op3)
       case 2:
-        // ins_2(n) = ZunTimer::SetCurrent on the SUB's own clock (exe case 1,
-        // all.c:10808-10816: current = n, fraction and the -999 previous
-        // sentinel cleared). The data uses it to re-base the clock (e.g.
-        // ins_2([10000])); the == fetch gate then skips or waits to reach
-        // later instruction times exactly like the native loop.
-        ctx.time = gi(0);
-        ctx.timeFrac = 0;
+        // ins_2(n) = the TH08 ECL WAIT. Exe case 1 (asm 0x418662-0x418678)
+        // SetCurrents the context's SECOND ZunTimer at ctx+0x90 — and the
+        // per-instruction pass head (asm 0x418557-0x418598) gates dispatch on
+        // that timer: while its current > 0, each frame Subtracts it once AND
+        // Subtracts the ctx+4 instruction clock once (canceling the pass-tail
+        // tick, so the instruction clock freezes) and skips the fetch. The
+        // 2026-08-17 "SetCurrent on the sub clock" reading was wrong (it
+        // killed every ins_2 wait loop — Wriggle's Sub42 familiar volley
+        // cycle — after its first pass). waitTimer return-false already
+        // freezes the clock, matching the net-zero subtract.
+        ctx.waitTimer = gi(0);
         return null;
       case 160:
         // ins_160(n) = ZunTimer::SetCurrent on the ECL-MANAGER timer at

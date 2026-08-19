@@ -285,3 +285,72 @@ test('TH08 sfx ids resolve to the exe bank table (0x4c8040 over 0x4c81b0)', () =
   assert.deepEqual(TH08_SFX_SLOTS[39][0], 'se_opshow', 'familiar materialize');
   assert.deepEqual(TH08_SFX_SLOTS[40][0], 'se_ophide', 'familiar etherealize');
 });
+
+// ---------------------------------------------------------------------------
+// ins_2 = the TH08 ECL wait (ctx+0x90 timer), not a clock SetCurrent
+// Evidence: Th08.exe asm 0x418662-0x418678 (case 1 SetCurrents ctx+0x90) and
+// the per-instruction pass head 0x418557-0x418598 (while the wait timer is
+// positive, decrement it AND the instruction clock, skip the fetch).
+
+test('ins_2 blocks the context for N frames and freezes its clock', () => {
+  // sub0: fire one bullet at t0, wait 3, then a marker var write (also t0).
+  const runtime = makeRuntime([
+    [
+      instruction(0, 79, [i32(16)]),
+      instruction(0, 96, [i32(1), i32(1), i32(1), i32(1), f32(1.0), f32(1.0), f32(0.0), f32(0.5), i32(512)]),
+      instruction(0, 2, [i32(3)]),
+      instruction(0, 7, [varId(10016.0), f32(77.0)]),
+      instruction(200, 1, [])
+    ]
+  ]);
+  const game = makeHost(0);
+  const e = runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 120, life: 100 });
+  // Spawn tick: the fire ran, the post-wait write has not.
+  assert.equal(game.enemyBullets.length, 1, 't0 fire spawned');
+  assert.equal(e.ecl.vars[8], 0, 'post-wait row not reached at spawn');
+  const clocks = [];
+  for (let i = 0; i < 6; i++) {
+    game.frame = i;
+    runtime.tickEnemyCore(game, e);
+    runtime.integrateEnemyPosition(e, 1);
+    clocks.push(e.ecl.ctx.time);
+  }
+  assert.deepEqual(clocks, [0, 0, 1, 2, 3, 4], 'clock frozen during the wait, resumes after');
+  assert.equal(e.ecl.vars[8], 77, 'post-wait row ran 3 frames after the wait');
+});
+
+test('ins_135 sub-context obeys the form gate and the ins_2 volley cycle (real Sub43/Sub42)', () => {
+  const run = (form, frames) => {
+    const stage = TH08_DATA.stages[1];
+    const runtime = new StageRuntime(stage, { etama: etamaAnm, enemy: enemyAnm, effect: etamaAnm });
+    const game = makeHost(form);
+    const e = runtime.spawnEclEnemy(game, {
+      subId: 43, x: 192, y: 120, life: 100, th08Familiar: true
+    });
+    const volleys = [];
+    let last = 0;
+    for (let i = 0; i < frames; i++) {
+      game.frame = i;
+      if (!e.dead) {
+        runtime.tickEnemyCore(game, e);
+        runtime.integrateEnemyPosition(e, 1);
+      }
+      if (game.enemyBullets.length !== last) {
+        volleys.push([i, game.enemyBullets.length - last]);
+        last = game.enemyBullets.length;
+      }
+    }
+    return volleys;
+  };
+  // Lunatic rank 16: Sub42's 0x3f (human) rows spawn 5 each, the 0x5f
+  // (youkai) row spawns [10001]=2. Human form fires the two 0x3f rows on a
+  // 20-frame cycle; youkai form fires only the single 0x5f row every 40.
+  const human = run(0, 130);
+  assert.deepEqual(human.map((v) => v[1]), [5, 5, 5, 5, 5, 5, 5], 'human: 0x3f rows only');
+  assert.ok(human.every((v, i) => v[0] === i * 20 - (i === 0 ? 0 : 1) || v[0] === i * 20),
+    `human: ~20-frame cadence, got ${human.map((v) => v[0])}`);
+  const youkai = run(1, 130);
+  assert.deepEqual(youkai.map((v) => v[1]), [2, 2, 2, 2], 'youkai: 0x5f row only');
+  assert.ok(youkai.every((v, i) => v[0] <= i * 40 && v[0] >= i * 40 - 1),
+    `youkai: ~40-frame cadence, got ${youkai.map((v) => v[0])}`);
+});
