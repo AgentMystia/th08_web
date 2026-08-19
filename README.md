@@ -1,12 +1,29 @@
 # TH08 Web — Imperishable Night (vertical slice)
 
+**在线 Demo / Play:** <https://agentmystia.github.io/th08_web/>
+
 《东方永夜抄 ～ Imperishable Night》(TH08) 的浏览器 TypeScript 移植，原作数据驱动：
 嵌入的 ECL/ANM/STD/MSG/SHT 二进制由真实解析器与 VM 执行。当前交付物是
 **Stage 1 + Reimu/Yukari Border Team + 原版标题/菜单/UI**，并与 T8RP replay
 （`tests/replays/th8_udLy01.rpy`，Lunatic）做 Stage 1 收敛对齐。
 
 权威行为/格式文档见 `AGENTS.md`（§0 是 TH08 覆盖层）。本仓库已完全 TH08 化：
-TH07 母工程的路径、数据与测试已在垂直切片分支中移除。
+TH07 母工程的路径、数据与测试已在垂直切片分支中移除（姊妹工程
+[th07_web](https://github.com/AgentMystia/th07_web) 单独发布）。
+
+## 操作 / Controls
+
+| 按键 | 作用 |
+|---|---|
+| 方向键 | 移动（低速移动时缩小判定点显示） |
+| Z / Enter | 射击（确认） |
+| X | 灵击/炸弹（返回） |
+| Shift | 低速移动（Border Team 切换人间/妖怪形态） |
+| Ctrl | 对话快进 |
+| Esc | 暂停（返回） |
+
+标题 → 难度 → 队伍（Border Team）→ Stage 1。
+`?test=1&difficulty=0..3&menu=1` 等探测参数见 `AGENTS.md §5`。
 
 ## 运行 / Run
 
@@ -15,9 +32,6 @@ npm install
 npm run build        # esbuild → dist/th08.js
 npx serve .          # 或任意静态服务器打开 index.html
 ```
-
-- 标题 → 难度 → 队伍（Border Team）→ Stage 1。
-- `?test=1&difficulty=0..3&menu=1` 等探测参数见 `AGENTS.md §5`。
 
 ## 验证 / Verification
 
@@ -31,7 +45,17 @@ npm run verify:full  # + 像素抽查 + Pages 打包 + 静态启动
 
 `replay:verify:th08` 是收敛验收：把录像逐帧灌入产品 StageScene，与原生
 stage-2 入场快照逐字段对比（score/power/lives/graze/pointItems/gauge/clock/
-RNG 残差）。当前状态见 `HANDOFF.md` 末条。
+RNG 残差）。CI 以 advisory（非阻塞）方式运行它，输出当前
+`EARLIEST DIVERGENCE` 作为收敛反馈通道。
+
+## 已知差距 / Known gaps
+
+- **范围**：垂直切片 = Stage 1 + Border Team。无后续关卡/其他队伍/Lunatic
+  以外的完整回归。
+- **Replay 收敛**：Stage 1 在 ~f3301 处发散（首个幻影弹着，其余为级联），
+  根因候选与完整分析记录在 `HANDOFF.md`。 playable 路径本身（弹幕、对话、
+  HUD、炸弹）由 th08-* 回归测试与 CI 浏览器启动检查守护。
+- 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序等）。
 
 ## 资产生成 / Regenerating embedded data
 

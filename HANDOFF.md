@@ -2,18 +2,22 @@
 
 ## State
 
-Branch `th08-vertical-slice`. TH08 Stage 1 is playable end to end through the
-original data: title menu → difficulty → Border Team → Stage 1 with dialogue,
-HUD, ECL-driven waves, spell cards, bombs, and the Wriggle boss fight.
+Standalone repo `AgentMystia/th08_web` (main = the vertical-slice branch;
+CI deploys Pages). TH08 Stage 1 is playable end to end through the original
+data: title menu → difficulty → Border Team → Stage 1 with dialogue, HUD,
+ECL-driven waves, spell cards, bombs, and the Wriggle boss fight.
 
-All gates green: `npm run check`, `npm run build`, `npm test` (392),
-`npm run replay:verify` (TH07 6/6 PASS), clean `dev-shot` boot.
+Gates: `npm run check`, `npm run build`, `npm test`, clean `dev-shot` boot,
+plus the CI jobs in `.github/workflows/deploy.yml` (core / browser / replay
+advisory → pages). Current status lives in Actions:
+https://github.com/AgentMystia/th08_web/actions
 
 ## The convergence picture (honest)
 
-`npm run replay:verify:th08` replays `replay/th8_udLy01.rpy` stage 1
-(Border Team Lunatic, 5245 frames) through the production StageScene.
-Current divergence from the recorded stage-2 entry snapshot:
+`npm run replay:verify:th08` replays `tests/replays/th8_udLy01.rpy` stage 1
+(Border Team Lunatic, 10504 frames) through the production StageScene.
+Divergence from the recorded stage-2 entry snapshot (2026-08-15 snapshot;
+see the latest dated entry at the bottom for the current numbers):
 
 | field | ours | native (stage-2 entry) |
 |---|---|---|
@@ -942,3 +946,38 @@ colTerm=−0.5·a2 ✓),s1=1.8438(rank-lerp 后),EX f1=1.5/interval=70;
 方法:对第 6 组 col-1 弹做解析路径(63.6px 减速段 + 165 tick·1.5),
 在 ±0.03 速度/±0.004 rad 的参数网格上扫,找使 f3301-3304 全清的
 参数组合,再回溯到 lo/hi 或积分次序。
+
+## 2026-08-19（十）——独立发布 pass：静态 QA、advisory CI、Pages 上线
+
+发布前静态审查（三个只读探查代理 + 人工复核）结论：**TH08 化是真实的，
+无 TH07 活路径**。资产面（assets/th08-img 71 图 / audio 3 / sfx 39）、
+bundle（dist/th08.js）、index.html 品牌、存储（无 localStorage，无
+同源撞键风险）、运行时网络（仅本地资产 fetch）全部干净。修复清单：
+
+- `src/game/eclvm.ts` effect-20：删除活的 `playBgmTrack('th07_13b')`
+  Yuyuko 残留（Stage 1 数据不可达；TH08 原生行为未恢复 → flagged no-op）。
+- `th07-latency-*` performance marks → `th08-latency-*`（latency.ts 与
+  latency-probe.mjs 同步改，两侧必须一致）。
+- 过时注释 ×2（audio.ts `__TH07_TEST__`、deploy-pages.mjs `dist/th07.js`）。
+- favicon：复用 etama5.png（黑色圆月光球，已随 Pages 发布，无新素材）。
+- package.json 补 description/homepage/repository/bugs。
+- 公开前扫描：tracked 文件无密钥、无绝对宿主路径。
+- 本地 24 文件 WIP（TH08 收尾锁定：eclvm 原生 dispatch、T8RP 字段面、
+  ReplayTraceSink verifier）静态自洽后落盘（TH08_OP_REMAP 仅剩
+  tests/.build 陈旧缓存；rpy 改名消费方全同步；cherry 全是注释）。
+
+CI（deploy.yml）：新增 `replay` job 以 **continue-on-error** 跑
+`replay:verify:th08`（advisory；输出 EARLIEST DIVERGENCE 作为收敛反馈
+通道；收敛后去掉 continue-on-error 转正为 gate），pages 的 needs 含
+core/browser/replay。README 补 Demo 链接/操作表/已知差距；AGENTS §0
+标注独立仓库与 CI 形态。
+
+发布：`AgentMystia/th08_web` 公开仓库，th08-vertical-slice 原样成为
+main（保留全部 274 提交历史），push 触发 CI → Pages
+（https://agentmystia.github.io/th08_web/）。本次会话宿主约束：
+**本地零执行**（无 node/npm 验证、无浏览器、无 wine），全部动态验证
+由 CI 承担——本地修改后推送，以 CI 结果为唯一动态 oracle。
+
+收敛状态不变：f3301 首发散 + 级联，两候选（rank-lerp 窗口表
+ins_111/112/113、减速段 f32 积分次序）见上条（九）；本条目后附
+best-effort 静态推进的结论（若有）。

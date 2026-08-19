@@ -48,9 +48,33 @@ jobs:
       - run: npm run prepare-pages
       - run: node scripts/browser-boot.mjs dist/pages 300
 
+  # Stage-1 replay convergence oracle. ADVISORY ONLY: the run is known to
+  # diverge (first unexpected player hit ~f3301; root-cause candidates are
+  # tracked in HANDOFF.md). continue-on-error keeps CI green while the
+  # EARLIEST DIVERGENCE output stays visible as the convergence feedback
+  # channel. Promote to a gate (drop continue-on-error) once it passes.
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: tests/.build/cache
+          key: ${{ runner.os }}-node22-testbuild-replay-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-node22-testbuild-replay-${{ hashFiles('package-lock.json') }}-
+      - run: npm ci
+      - name: replay convergence (advisory — known Stage-1 divergence, see HANDOFF.md)
+        continue-on-error: true
+        run: npm run replay:verify:th08
+
   pages:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, browser]
+    needs: [core, browser, replay]
     runs-on: ubuntu-latest
     permissions:
       contents: read

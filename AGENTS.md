@@ -2,6 +2,16 @@
 
 ## 0. TH08 fork overlay (authoritative while this branch exists)
 
+**2026-08-19: this repository is now the standalone project
+`AgentMystia/th08_web`** (the vertical-slice branch IS main; the TH07
+parent lives on separately in `AgentMystia/th07_web`). CI is
+`.github/workflows/deploy.yml`: `core` (check/build/test) + `browser`
+(playwright boot probes) + `replay` (replay:verify:th08 as an advisory,
+continue-on-error — promote it to a gate when Stage 1 converges) gate the
+`pages` job, which deploys `dist/pages` to GitHub Pages. Local dev on a
+host without the original toolchain (no /opt browsers, no wine) is
+static-only; treat CI as the dynamic verifier.
+
 This branch is the Touhou 08 / Imperishable Night vertical-slice port. Treat
 the legacy TH07 text below as parent-engine history, not as format authority:
 
