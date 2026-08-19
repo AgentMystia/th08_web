@@ -55,6 +55,19 @@ export interface RunCarry {
   nextPointItemExtendThreshold?: number;
 }
 
+// The stage time-orb quotas (.data 0x4c77f0, per stage and difficulty):
+// the tally's clock-advance switch (FUN_0043c35f) and the HUD Time row
+// both read this table. Extra's row reads 0.
+export const TH08_STAGE_ORB_QUOTAS: readonly (readonly number[])[] = [
+  [2000, 2500, 2700, 3000],
+  [6500, 7200, 7200, 7200],
+  [7500, 8500, 8800, 8800],
+  [9999, 9999, 9999, 9999],
+  [7500, 8500, 8500, 8500],
+  [9999, 9999, 9999, 9999],
+  [0, 0, 0, 0]
+];
+
 // TH08 ItemType enum (ItemManager.hpp:9-21) in declaration order; the item's
 // etama.anm visual script is 61 + id (ItemManager.cpp:112).
 const TH08_ITEM_TYPE_IDS: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -1697,19 +1710,7 @@ export class StageScene implements GameHost {
     // TH08: the night clock advances at the stage tally — FUN_0043c35f's
     // per-stage switch pays +2 when the stage's time-orb quota is missed,
     // +1 when met (the recorded Lunatic stage 1 ends at clockTime 1, i.e.
-    // met). The quota is the .data table at 0x4c77f0, per stage and
-    // difficulty (stage 1: 2000/2500/2700/3000, stage 2: 6500/7200/7200/
-    // 7200, stage 3: 7500/8500/8800/8800, stages 4/6: 9999, stage 5:
-    // 7500/8500/8500/8500, Extra: 0).
-    const TH08_STAGE_ORB_QUOTAS: readonly (readonly number[])[] = [
-      [2000, 2500, 2700, 3000],
-      [6500, 7200, 7200, 7200],
-      [7500, 8500, 8800, 8800],
-      [9999, 9999, 9999, 9999],
-      [7500, 8500, 8500, 8500],
-      [9999, 9999, 9999, 9999],
-      [0, 0, 0, 0]
-    ];
+    // met). The quota comes from the .data table at 0x4c77f0.
     const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
     this.runState.addClockTime(this.runState.currentTimeOrbs >= quota ? 1 : 2);
     this.clearTimer = 1;
@@ -5472,10 +5473,12 @@ export class StageScene implements GameHost {
     // Point row: items toward the next extend (native "26/100").
     this.drawNumber(r, this.pointItems, valueX, 168, 0, 1, TH08_ADV);
     r.text('/' + run.nextPointItemExtendThreshold, valueX + 28, 168, { size: 12, color: '#ddd' });
-    // Time row: the stage's time-orb progress toward the 3000 quota
-    // (native "825/3000"); the night clock itself advances at the tally.
+    // Time row: the stage's time-orb progress toward the stage+difficulty
+    // quota (DAT_004c77f0; native "825/3000" for Lunatic stage 1); the
+    // night clock itself advances at the tally.
     this.drawNumber(r, run.stageTimeOrbs, valueX, 184, 0, 1, TH08_ADV);
-    r.text('/3000', valueX + 28, 184, { size: 12, color: '#ddd' });
+    const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
+    r.text('/' + quota, valueX + 28, 184, { size: 12, color: '#ddd' });
     // Human/youkai rate gauge at the playfield's bottom-left. Native layout
     // (AsciiManager::InitializeVms): the bar spans 2x56px for +-10000 with
     // the 人/妖 icons at the LIMIT positions and a cursor VM (script 8) at
