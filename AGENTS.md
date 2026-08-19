@@ -8,9 +8,10 @@ parent lives on separately in `AgentMystia/th07_web`). CI is
 `.github/workflows/deploy.yml`: `core` (check/build/test) + `browser`
 (playwright boot probes) + `replay` (replay:verify:th08 as an advisory,
 continue-on-error — promote it to a gate when Stage 1 converges) gate the
-`pages` job, which deploys `dist/pages` to GitHub Pages. Local dev on a
-host without the original toolchain (no /opt browsers, no wine) is
-static-only; treat CI as the dynamic verifier.
+`pages` job, which deploys `dist/pages` to GitHub Pages. Local dev has no
+browsers (all browser-pixel gates run on CI); wine 10.0 + Xvfb IS
+available and drives the native demo/trace pipeline (see the 2026-08-20
+entry for what works and what is blocked).
 
 This branch is the Touhou 08 / Imperishable Night vertical-slice port. Treat
 the legacy TH07 text below as parent-engine history, not as format authority:
@@ -31,6 +32,75 @@ the legacy TH07 text below as parent-engine history, not as format authority:
   to be excised safely.
 - Runtime directories will move to `assets/th08-img`, `assets/audio/th08`,
   and `assets/sfx/th08`; nothing under `reference/` or `replay/` may ship.
+
+### 2026-08-20 convergence pass (goal: Stage1+2 replay convergence + fidelity)
+
+Mechanics, all proven against the v1.00d binary (asm offsets cited inline):
+
+1. **ins_2 is the TH08 ECL WAIT, not a clock SetCurrent** (corrects the
+   2026-08-17 claim). Case 1 SetCurrents the context's SECOND ZunTimer at
+   ctx+0x90 (asm 0x418662-0x418678); the per-instruction pass head
+   (0x418557-0x418598) gates the fetch on it — while positive it Subtracts
+   both the wait timer and the ctx+4 instruction clock (net-zero freeze)
+   and skips the fetch. The SetCurrent reading killed every ins_2 wait
+   loop after its first pass — Wriggle's Sub42 familiar volley cycle
+   (ins_96, ins_2([10000]), ins_96, ins_2, ins_4 jump) never refired, so
+   boss familiars produced no danmaku. The ins_135 sub-context dispatch
+   also gained the familiar form gate (all.c:10801; Sub42's 0x3f =
+   human-only / 0x5f = youkai-only rows now select correctly) and its
+   clock now freezes during waits. Regression tests in
+   tests/th08-familiar.test.mjs (wait cadence + real Sub43/Sub42 chain).
+2. **Deathbomb type was missing its +2.** FUN_0044c650 (all.c:37720-37742):
+   type = form byte; deathbomb (player+4) computes `1 - type` then
+   `type += 2`. The port ran the NORMAL inverted bomb (wrong machine,
+   durations, gauge denominator, declaration name/banner). Now
+   `3 - base`; regression test pins unfocused→3 / focused→2 / stock-1
+   costs 1 (tests/th08-familiar.test.mjs).
+3. **Death white-out moved off the deathbomb window onto the miss.**
+   FUN_0044cbf0 (state-2 window handler) draws no white quad;
+   FUN_0044d180 arms player+0xe2a70=60 on the miss commit (re-armed every
+   squish frame) and FUN_0044d2c0 draws
+   FUN_0044de60(player, 768, 896, 0xffffffff, 0) every frame while it
+   counts down. The port previously flashed 50%-alpha every other frame
+   DURING the window. tests/th08-death-white.test.mjs pins the states.
+4. **var 10096** (exe 0x2770): the chain-keeper's live familiar-child
+   count (FUN_0041f000/41fd40's +8 chain walk); children read 0. Used by
+   Wriggle's Sub35 (!=1) and Mystia's Sub44 (>=3).
+5. **ins_145(n)** = ZunTimer::Add(n) on the context instruction clock
+   (exe case 0x91, asm 0x41d5df). **ins_152** = stage-interp template
+   reset (case 0x98; data uses zeros only — consumer unmodeled, §7).
+6. **Verifier `--stage N`** (scripts/replay-verify-th08.mjs): replays any
+   recorded stage, restores the entry score into BOTH scene.score and
+   runState.score (addScore routes through runState), compares against the
+   next stage's entry snapshot. **Stage 2 (Mystia) is embedded** (ecldata2,
+   stage2.std, stg2bg/stg2enm/stg2txt/eff02, face_st02, msg2a) and runs:
+   earliest divergence **f1168** (ins_106-family volley, same class as
+   stage 1's f997).
+7. **Stage-intro night-time plate** (times.anm script 0, the (256,268)
+   intro template): sprite slot = runState.clockTime (T8RP +0x22; 0=子の刻
+   pm11:00, 1=子の二つ pm11:30 … 12=夜明け), armed on the first stage tick
+   after the entry restore. tests/th08-intro-plate.test.mjs.
+
+**Native demo/trace pipeline (this host: wine 10.0 + Xvfb, no browsers):**
+- The title demo loads `demo/demorpyN.rpy` BY BASENAME FROM th08.dat
+  (FUN_0043e660 → FUN_00474c40 archive lookup) — loose `demo/` shadowing
+  never works. Custom scenarios ship by rebuilding the archive with thtk's
+  `thdat -c 8`. The T8RP validator (FUN_00451d90) requires
+  `u32@+0x10 = 0x3f000318 + sum(decrypted[0x15..rawFileSize))`; the LZSS
+  stream needs the zero-match terminator; the demo picker plays the FIRST
+  NONZERO stage slot then the whole run.
+- Breakpoint tracing is NOT viable here: launching under winedbg OOMs at
+  the game's VirtualAlloc; `winedbg --gdb <wpid>` attaches fine (feed gdb
+  commands on stdin) but any breakpoint (software or hardware) kills the
+  game with 0xC0000005 on the first cont (suspected .text integrity
+  self-check). scripts/native-trace.mjs's header records the details.
+- The f997 (stage 1) / f1168 (stage 2) earliest divergences are both
+  auto-fire-family volley bullets with sub-3px contacts. A replay probe
+  (player shifted 8px down at f986-991, native demo) survives — the native
+  bullet is ≥3px off the recorded path while ours contacts at ~1.3px, so
+  our volley trajectory is ~2-4 flight-frames too far along, uniformly.
+  Root (volley phase / creep / template origin) is unpinable without the
+  slot trace; documented as the standing residual for a healthier host.
 
 ### TH08 vertical-slice checkpoint (2026-08-15)
 
@@ -853,6 +923,19 @@ deployment gate rather than a manual-only checkpoint.
 
 
 ## 7. Approximations registry (known, flagged, improvable)
+
+TH08-slice additions (2026-08-20 convergence pass, inline comments at the sites):
+- ins_152's stage-interp template: the exe's field write (enemy+0x337c =
+  (i16)enemy+0x2cee) + SetCurrent(0) on the +0x2e14 timer is recorded but
+  has no modeled consumer; every shipped use passes all-zero args.
+- The bomb declaration's fourth native VM (capture.anm '@' runtime screen
+  capture, unrecoverable from data) is approximated as a flat rgba(0,0,16,
+  0.55) dim quad over the playfield behind the declaration VMs.
+- The f997 (stage 1) / f1168 (stage 2) earliest replay divergences are a
+  standing residual: our auto-fire-family volley trajectories run ~2-4
+  flight-frames too far along vs native (replay-probe proven), root
+  unpinable without a native slot trace (breakpoint tracing is not viable
+  on this host — see §0's 2026-08-20 entry).
 
 TH08-slice additions (2026-08-18 second presentation pass, inline comments at the sites):
 - FUN_0045d660's second argument tunes playback FREQUENCY (the consumer's

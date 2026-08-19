@@ -4,6 +4,22 @@
 // Evidence plan: AGENTS.md §5 — the original engine's per-event state is the
 // convergence oracle for TH08 Stage 1. Output: /tmp/native-trace.txt.
 //
+// 2026-08-20 environment findings (this host, wine 10.0 + Xvfb):
+//  - The demo picker loads demo/demorpyN.rpy BY BASENAME FROM th08.dat
+//    (FUN_0043e660 -> FUN_00474c40 archive lookup); loose demo/ shadowing
+//    never worked. This script now rebuilds the archive with thdat.
+//  - Launching th08.exe UNDER winedbg (--no-start) OOMs at the game's
+//    VirtualAlloc (err:virtual out of memory) and never renders.
+//  - `winedbg --gdb <wpid>` ATTACHES fine (wine tasklist gives the wpid;
+//    feed gdb commands on stdin), but ANY breakpoint — software or
+//    hardware — kills the game with 0xC0000005 on the first cont. The exe
+//    appears to integrity-check its .text, so breakpoint tracing is not
+//    viable on this host. A working host needs either an exe with the
+//    check patched out or a different tracer (DynamoRIO/pin under wine).
+//  - The demo-capture pipeline (wine + Xvfb + import) DOES work and is the
+//    visual oracle; replay patching (see tmp/make-bomb-demo.mjs) stages
+//    arbitrary scenarios deterministically.
+//
 // Breakpoints (keep the set SMALL: every stop is a gdb round-trip and slows
 // the game — never break on the RNG draw):
 //   P @0x44d650  player per-frame calc callback — the sim-frame clock + the
