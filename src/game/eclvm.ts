@@ -2594,8 +2594,17 @@ export class StageRuntime {
         // lifetime comes from that prototype's flash script.
         const hasSpawnState = (flags & 0xe) !== 0;
         const spawnDuration = !hasSpawnState ? 0 : this.th08FlashDuration(p.sprite, flags);
-        // Th08.exe v1.00d FUN_00431240 states 2/3/4.
-        const spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 4 : flags & 8 ? 1 / 8 : 1;
+        // Th08.exe v1.00d BulletManager::OnUpdate (0x431240) state jump
+        // table @ 0x432156: state 2 -> 0x43176e, state 3 -> 0x431880,
+        // state 4 -> 0x431991, state 5 (death) -> 0x431aa2. Each block does
+        // pos += vel * (1.0f/k) via FUN_0040c7d0 (fdiv of the 1.0f at
+        // 0x4b4338), pushing k = 0x40000000 (=2.0f) at 0x43177e/0x431aa2,
+        // 0x40200000 (=2.5f) at 0x431890, 0x40400000 (=3.0f) at 0x4319a1 —
+        // i.e. creep 1/2, 1/2.5, 1/3 (the 1/4, 1/8 reading of these
+        // immediates was a bit-pattern misparse: 4.0f is 0x40800000 and
+        // 8.0f is 0x41000000). The empirical A/B agrees: with 1/4, 1/8 the
+        // first unexpected replay hit regressed f3301 -> f998.
+        const spawnMoveScale = flags & 2 ? 1 / 2 : flags & 4 ? 1 / 2.5 : flags & 8 ? 1 / 3 : 1;
         // Spawn-time rate bake-in (exe FUN_00421e90/FUN_004229f0:
         // FUN_004074e0(angle, speed * DAT_0056baa8); spec-slowmo.md §3.4) —
         // the nominal speed field stays unscaled.

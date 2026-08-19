@@ -212,9 +212,15 @@ three more exe-proven roots, each reversing or extending a prior claim:
   NO force-collect: items keep falling; the player keeps moving; the STD
   background keeps scrolling. The port previously force-collected and
   skipped the sweep — that was the "shot mid-conversation" bug.
-- **Bullet spawn-transition**: creep is vel·(½, ¼, ⅛) for states 2/3/4
-  (0x431240 immediates 0x40000000/0x40200000/0x40400000 — TH07's ½, 1/2.5,
-  ⅓ do not carry over), and the transition spans duration+2 manager ticks
+- **Bullet spawn-transition**: creep is vel·(½, 0.4, ⅓) for states 2/3/4 —
+  the 2026-08-19 (½, ¼, ⅛) claim below was a bit-pattern misparse,
+  corrected 2026-08-19 (release pass) by disassembling the state jump table
+  @ 0x432156 (state 2→0x43176e, 3→0x431880, 4→0x431991, death 5→0x431aa2):
+  each block calls FUN_0040c7d0 = pos += vel·(1.0f/k) with k = 2.0f
+  (0x40000000) / 2.5f (0x40200000) / 3.0f (0x40400000) — 4.0f would be
+  0x40800000 and 8.0f 0x41000000. The replay A/B agrees: with (½, ¼, ⅛) the
+  first unexpected hit regressed f3301 → f998. The transition spans
+  duration+2 manager ticks
   (FUN_0045e430 constructs the VM with no synchronous t0 pass; the
   finished-report lands a tick after the terminal op itself). The +2 parity
   is empirically pinned by the fixture (see below); the exact VM-internal
