@@ -43,7 +43,7 @@ export class AudioBus {
 
   // Test-only observability: which track names are currently resolved in
   // the decoded BGM cache, so a headless check can assert preload state
-  // (see window.__TH07_TEST__.bgm() in main.ts).
+  // (see window.__TH08_TEST__.bgm() in main.ts).
   get decodedTracks(): string[] {
     return Array.from(this.bgmBuffers.keys());
   }

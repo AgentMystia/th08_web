@@ -1,7 +1,7 @@
 // Deploys the static site to the `gh-pages` branch.
 //
 //   node scripts/deploy-pages.mjs          # build + prepare-pages + push
-//   node scripts/deploy-pages.mjs --no-build  # dist/th07.js already built
+//   node scripts/deploy-pages.mjs --no-build  # dist/th08.js already built
 //
 // Builds the bundle, assembles the Pages tree (scripts/prepare-pages.mjs),
 // then makes an orphan commit of that tree and force-pushes it to

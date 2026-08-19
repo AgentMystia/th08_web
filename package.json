@@ -1,6 +1,13 @@
 {
   "name": "th08-web",
   "version": "0.1.0",
+  "description": "Touhou 08 ~ Imperishable Night browser port (TypeScript, original-data-driven). Stage 1 + Border Team vertical slice.",
+  "homepage": "https://agentmystia.github.io/th08_web/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentMystia/th08_web.git"
+  },
+  "bugs": "https://github.com/AgentMystia/th08_web/issues",
   "private": true,
   "type": "module",
   "scripts": {

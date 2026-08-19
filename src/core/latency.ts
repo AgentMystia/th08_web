@@ -80,7 +80,7 @@ export class LatencyRecorder {
   markDrawEnd(samples: LatencySample[], now: number): void {
     for (const sample of samples) {
       sample.drawEndAt = now;
-      performance.mark(`th07-latency-${sample.sequence}`, {
+      performance.mark(`th08-latency-${sample.sequence}`, {
         detail: { sequence: sample.sequence, logicalFrame: sample.logicalFrame, drawEndAt: now }
       });
     }
@@ -91,7 +91,7 @@ export class LatencyRecorder {
   }
 
   clear(): void {
-    for (const sample of this.orderedSamples()) performance.clearMarks(`th07-latency-${sample.sequence}`);
+    for (const sample of this.orderedSamples()) performance.clearMarks(`th08-latency-${sample.sequence}`);
     this.ring.fill(null);
     this.cursor = 0;
     this.count = 0;

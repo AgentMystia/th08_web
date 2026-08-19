@@ -1805,7 +1805,12 @@ export class StageRuntime {
         e.ecl.vars[0] = count;
         return;
       }
-      case 20: game.playBgmTrack?.('th07_13b'); return; // Yuyuko phase-2 cue
+      case 20:
+        // TH07 remnant: this case used to fire the Yuyuko phase-2 BGM cue
+        // ('th07_13b'). The TH08-native behavior of effect 20 is unrecovered
+        // and Stage-1 data never arms it, so it stays a flagged no-op instead
+        // of playing a wrong cue.
+        return;
       case 1: { // FUN_00416da0 @ 0x416da0: "declaw" + slow-turn. The filter
         // field is the FIRE instruction's second i16 — spriteOffset, exe
         // bullet+0xbf8 (param 1 restricts to offset 8, param 2 to offset 4,

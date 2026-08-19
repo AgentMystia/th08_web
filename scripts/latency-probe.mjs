@@ -189,7 +189,7 @@ try {
 
   const rows = [];
   for (const sample of samples) {
-    const markName = `th07-latency-${sample.sequence}`;
+    const markName = `th08-latency-${sample.sequence}`;
     const mark = events.find((event) =>
       Number.isFinite(event.ts) && (event.name === markName || event.args?.data?.name === markName)
     );
