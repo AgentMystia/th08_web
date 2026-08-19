@@ -39,8 +39,7 @@ test('the tally clock advance is +1 when the stage quota is met, +2 when missed'
   assert.equal(s2met.runState.clockTime, 1, 'stage-2 quota met -> +1');
 });
 
-test('carryState keeps the run state and the carry restores it', () => {
-  const a = makeScene(1);
+test('carryState keeps the run state and the carry restores it', () => {  const a = makeScene(1);
   a.score = 1234560;
   a.runState.score = 1234560;
   a.runState.clockTime = 1;
@@ -60,4 +59,18 @@ test('carryState keeps the run state and the carry restores it', () => {
   assert.equal(b.runState.pointItemValue, 320690);
   assert.equal(b.runState.pointItemExtends, 1);
   assert.equal(b.runState.nextPointItemExtendThreshold, 250);
+});
+
+test('the tally shows the night-clock plate and advances its slot', () => {
+  const scene = makeScene(1);
+  scene.startStageClearPresentation();
+  assert.ok(scene.clearTimeRunner, 'current plate spawned');
+  const curFrame = scene.clearTimeRunner.spriteFrame();
+  assert.equal(curFrame.y, 0, 'current plate = 子の刻 (slot 0)');
+  assert.equal(scene.clearTimeAdvancedRunner, null, 'no advanced plate yet');
+  scene.runState.currentTimeOrbs = 3000; // met -> +1
+  scene.finishStageResults();
+  assert.ok(scene.clearTimeAdvancedRunner, 'advanced plate spawned at the advance');
+  const advFrame = scene.clearTimeAdvancedRunner.spriteFrame();
+  assert.equal(advFrame.y, 32, 'advanced plate = 子の二つ (slot 1, +1 advance)');
 });

@@ -347,6 +347,10 @@ export class StageScene implements GameHost {
   private clearTimer = 0;
   clearLoadingRunner: AnmRunner | null = null;
   clearCaptureRunner: AnmRunner | null = null;
+  // The tally's night-clock plates (times.anm): the current-时刻 plate
+  // (script 1) and the advanced plate (script 2) spawned at the advance.
+  clearTimeRunner: AnmRunner | null = null;
+  clearTimeAdvancedRunner: AnmRunner | null = null;
   clearLoadingKey: string | null = null;
   private clearCaptureArmed = false;
   stageTransitionTimer = 0;
@@ -1713,6 +1717,19 @@ export class StageScene implements GameHost {
     // met). The quota comes from the .data table at 0x4c77f0.
     const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
     this.runState.addClockTime(this.runState.currentTimeOrbs >= quota ? 1 : 2);
+    // The night-clock advance lands in the tally's plate: the current plate
+    // (script 1, holding at label 1) releases, and the advanced plate
+    // (script 2) spawns with the NEW slot.
+    this.clearTimeRunner?.interrupt(1);
+    const times = this.assets.anms.times;
+    if (times?.hasScriptInEntry(0, 2)) {
+      const entry = times.entries[0];
+      const slot = Math.min(Math.max(this.runState.clockTime, 0), 12);
+      this.clearTimeAdvancedRunner = new AnmRunner(times, 2, {
+        entryIndex: 0,
+        spriteIndexOffset: entry.spriteBase + slot
+      });
+    }
     this.clearTimer = 1;
   }
 
@@ -2003,6 +2020,8 @@ export class StageScene implements GameHost {
       this.stageClearTimer++;
       this.clearLoadingRunner?.update(this.slowRate);
       this.clearCaptureRunner?.update(this.slowRate);
+      this.clearTimeRunner?.update(this.slowRate);
+      this.clearTimeAdvancedRunner?.update(this.slowRate);
     }
     if (this.stageClear) {
       // Advance on Z once the tally has been visible for a beat, or after
@@ -4670,6 +4689,20 @@ export class StageScene implements GameHost {
     const capture = this.assets.anms.capture;
     this.clearCaptureRunner = new AnmRunner(capture, -4, { imageKey: 'capture:@', entryIndex: 0, spriteIndexOffset: capture.entries[0].spriteBase });
     this.clearCaptureArmed = true;
+    // The tally's night-clock plate (times.anm): script 1 is the persistent
+    // current-时刻 plate at (224,232) holding at interrupt label 1; the
+    // sprite slot mirrors runState.clockTime at the tally start. When the
+    // tally pays the quota advance, script 2 (the (320,96) plate) takes the
+    // ADVANCED slot and the current plate's wait releases.
+    const times = this.assets.anms.times;
+    if (times?.hasScriptInEntry(0, 1)) {
+      const entry = times.entries[0];
+      const slot = Math.min(Math.max(this.runState?.clockTime ?? 0, 0), 12);
+      this.clearTimeRunner = new AnmRunner(times, 1, {
+        entryIndex: 0,
+        spriteIndexOffset: entry.spriteBase + slot
+      });
+    }
   }
 
   private drawStageClearPresentation(r: Renderer): void {
@@ -4678,6 +4711,9 @@ export class StageScene implements GameHost {
     // 640x480 screen coordinates, so the caller contributes no playfield base.
     r.drawAnmFrame(this.clearLoadingRunner?.spriteFrame() ?? null, 0, 0);
     r.drawAnmFrame(this.clearCaptureRunner?.spriteFrame() ?? null, 0, 0);
+    // The night-clock plates ride the tally (current, then advanced).
+    r.drawAnmFrame(this.clearTimeRunner?.spriteFrame() ?? null, 0, 0);
+    r.drawAnmFrame(this.clearTimeAdvancedRunner?.spriteFrame() ?? null, 0, 0);
   }
 
   private startStageTransition(): void {
