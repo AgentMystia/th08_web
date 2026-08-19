@@ -1056,3 +1056,54 @@ advisory replay 的并行二分,收敛到 ≥f3301 后再把新旧两套对齐�
 sub-1 大蝴蝶(hp 150,f500 于 (320,−32) mirrored 生成)在 f900 位于
 **(177,159)** 场内——飞入恢复正常。main 全绿(run 32253759691),
 Pages 已重部署为恢复版。
+
+## 2026-08-20 —— 目标:Stage1+2 回放收敛 + Bomb/决死结界/使魔保真
+
+**机制修复(全部 exe 证据,asm 偏移见 AGENTS.md §0 当日条目与内联注释)**:
+1. **ins_2 = TH08 ECL 等待定时器**(纠正 2026-08-17 的"时钟 SetCurrent"
+   误读):case 1 写 ctx+0x90 的第二个 ZunTimer,指令级 pass 头
+   (0x418557-0x418598) 以它门控取指并把指令时钟净冻结。此前所有
+   ins_2 等待循环首圈即死——Wriggle Sub42 使魔齐射循环
+   (ins_96,ins_2,ins_96,ins_2,ins_4) 从不重发,使魔弹幕为零。
+   ins_135 子上下文补上人/妖形态门禁(all.c:10801:Sub42 的 0x3f 人态
+   限定 / 0x5f 妖态限定)与等待期时钟冻结。
+2. **决死放雷的雷型缺 +2**(FUN_0044c650,all.c:37720-37742):type =
+   形态字节,决死时先 `1-type` 再 `+2`。此前决死跑的是普通翻面雷
+   (错误的机台/时长/gauge 分母/符卡宣言)。现为 `3-base`。
+3. **死亡白闪归位**:决死窗口(state 2)原作无白屏;白屏属于 miss
+   (FUN_0044d180 于 commit 充能 player+0xe2a70=60 并随 squish 每帧
+   重置,FUN_0044d2c0 逐帧画 768x896 全白 quad)。此前 port 在窗口期
+   以 50% 隔帧白闪——状态、节奏、alpha 全错。
+4. **var 10096** = 使魔链主的存活子数(FUN_0041f000/41fd40 的 +8 链);
+   **ins_145(n)** = 指令时钟 Add(n)(asm 0x41d5df);**ins_152** =
+   舞台插值模板复位(数据全零,消费端未建模,§7 登记)。
+5. **Bomb 宣言** 增加压暗背板(capture.anm '@' 运行时纹理不可复现,
+   §7 登记为近似)。
+
+**验证器与 Stage 2**:`replay-verify-th08.mjs --stage N` 支持任意关卡
+(入口 score 同时落 scene.score 与 runState.score);Stage 2 数据
+(ecldata2/stage2.std/stg2*/eff02/face_st02/msg2a) 已嵌入并直接运行,
+最早发散 **f1168**(与 Stage 1 的 f997 同属 auto-fire 齐射族残差)。
+夜钟推进改读 DAT_004c77f0 quota 表(FUN_0043c35f:+1 达标/+2 未达);
+HUD Time 行同步换表;RunCarry 增加 runState 字段(clockTime/gauge/
+pointItem 阶梯) 的跨关往返。
+
+**Stage Intro 时刻牌**:times.anm script 0(开场模板 (256,268),t=240
+淡出),sprite 槽 = runState.clockTime(T8RP +0x22;0=子の刻 pm11:00,
+1=子の二つ pm11:30…12=夜明け),首个 stage tick 时按入场快照挂载。
+
+**原生管线(本机 wine 10.0 + Xvfb,无浏览器)**:标题 demo 按 BASENAME
+从 th08.dat 读 demorpyN(FUN_0043e660→FUN_00474c40),loose demo/ 完全
+无效——自定义场景必须用 thtk `thdat -c 8` 重打包;T8RP 验收校验和
+FUN_00451d90:u32@+0x10 = 0x3f000318 + sum(解密后 [0x15..rawFileSize)),
+LZSS 需要零匹配终止符;demo 播放首个非零 stage 槽位。断点追踪在本机
+不可行(winedbg 直接启动 OOM;attach 可成但软/硬断点都令游戏
+0xC0000005 自毁——疑似 .text 完整性自检)。
+
+**回放探针证实的残差**(f997/f1168):auto-fire 齐射族子弹,我方比原生
+沿轨迹多飞约 2-4 帧(原生玩家下移 8px 仍存活,我方 1.3px 命中)。根因
+(齐射相位/creep/模板原点) 无原生 slot trace 不可定,列为悬置残差。
+
+**当前门禁**:npm run check/build/test 全绿(130 测试);replay:verify
+Stage 1 最早发散 f997、Stage 2 f1168(均单个 phantom hit,diagnostic
+各 7 个)。

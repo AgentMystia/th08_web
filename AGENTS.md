@@ -80,6 +80,13 @@ Mechanics, all proven against the v1.00d binary (asm offsets cited inline):
    intro template): sprite slot = runState.clockTime (T8RP +0x22; 0=子の刻
    pm11:00, 1=子の二つ pm11:30 … 12=夜明け), armed on the first stage tick
    after the entry restore. tests/th08-intro-plate.test.mjs.
+8. **Stage-tally night-clock plates** (times.anm scripts 1/2): the current
+   plate spawns at the tally start with the entry slot; the quota advance
+   releases its label-1 wait and the advanced plate (script 2) spawns with
+   the new slot. The clock advance itself (FUN_0043c35f: +1 met / +2
+   missed) now reads the DAT_004c77f0 stage×difficulty quota table (also
+   driving the HUD Time row); the run state (clock/gauge/item ladder)
+   round-trips through RunCarry. tests/th08-stage-carry.test.mjs.
 
 **Native demo/trace pipeline (this host: wine 10.0 + Xvfb, no browsers):**
 - The title demo loads `demo/demorpyN.rpy` BY BASENAME FROM th08.dat
@@ -933,9 +940,20 @@ TH08-slice additions (2026-08-20 convergence pass, inline comments at the sites)
   0.55) dim quad over the playfield behind the declaration VMs.
 - The f997 (stage 1) / f1168 (stage 2) earliest replay divergences are a
   standing residual: our auto-fire-family volley trajectories run ~2-4
-  flight-frames too far along vs native (replay-probe proven), root
-  unpinable without a native slot trace (breakpoint tracing is not viable
-  on this host — see §0's 2026-08-20 entry).
+  flight-frames too far along vs native (replay-probe proven). Eliminated
+  this pass against the binary: kill-box formula (0x44a230 AABB), hit
+  sizes (rice 4.0, player hitbox 1.65/2), creep factors (½/0.4/⅓ from the
+  state jump table), the transition+2 parity, the origin backup ×4
+  (0x42fc4c), the template origin (loop-head +0x2d88), ins_105/106
+  deadline/phase mechanics incl. the u32%draw, the ring's clock-30 volley
+  timing (no timeline holds before t=900), and rank (min 8 on Lunatic —
+  cannot push the native behind us). What remains needs a native per-frame
+  slot trace; breakpoint tracing is not viable on this host (see §0's
+  2026-08-20 entry). Interactive native captures of the stage-tally card
+  were likewise abandoned: synthetic xdotool input destabilizes the wine
+  game within ~60s (repeated mid-run crashes), so the tally's night-clock
+  plates are built from the decompiled VM structure (times.anm scripts
+  1/2) rather than a captured layout.
 
 TH08-slice additions (2026-08-18 second presentation pass, inline comments at the sites):
 - FUN_0045d660's second argument tunes playback FREQUENCY (the consumer's
