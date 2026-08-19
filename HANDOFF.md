@@ -1051,3 +1051,8 @@ native(重点 ins_66 armed 消费者的 bit-18/mirror/timer-frac 三候选,
 以及 f880 附近 sub-3 齐射的 rank-lerp 窗口)——用 research 分支 ×
 advisory replay 的并行二分,收敛到 ≥f3301 后再把新旧两套对齐结论
 合并。
+
+修复验证(research 分支 900 帧 browser-boot 快照,run 32254008827):
+sub-1 大蝴蝶(hp 150,f500 于 (320,−32) mirrored 生成)在 f900 位于
+**(177,159)** 场内——飞入恢复正常。main 全绿(run 32253759691),
+Pages 已重部署为恢复版。
