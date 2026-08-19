@@ -74,7 +74,8 @@ const ANM_FILES = [
   'title01', 'player00', 'ascii', 'text', 'front', 'times', 'capture',
   'enemy', 'etama',
   'stg1bg', 'stg1enm', 'stg1txt', 'eff01',
-  'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp', 'face_cdbg'
+  'stg2bg', 'stg2enm', 'stg2txt', 'eff02',
+  'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp', 'face_st02', 'face_st02sp', 'face_cdbg'
 ];
 const SHT_FILES = ['ply00a', 'ply00as'];
 
@@ -98,6 +99,18 @@ const data = {
       stdTxtAnm: 'stg1txt',
       faceAnm: 'face_st01',
       faceAnms: ['face_rm00', 'face_yk00', 'face_st01']
+    },
+    2: {
+      ecl: b64('ecldata2.ecl'),
+      std: b64('stage2.std'),
+      msg: b64('msg2a.dat'),
+      enemyAnm: 'stg2enm',
+      bulletAnm: 'etama',
+      bgAnm: 'stg2bg',
+      effectAnm: 'eff02',
+      stdTxtAnm: 'stg2txt',
+      faceAnm: 'face_st02',
+      faceAnms: ['face_rm00', 'face_yk00', 'face_st02']
     }
   },
   anm: Object.fromEntries(ANM_FILES.map((n) => [n, anm(n)])),

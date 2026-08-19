@@ -14,7 +14,7 @@ const { Anm } = await import('../tests/.build/th08-data/formats/anm.mjs');
 const { Sht } = await import('../tests/.build/th08-data/formats/sht.mjs');
 
 test('TH08 vertical-slice data embeds Stage 1 and its original scripts', () => {
-  assert.deepEqual(Object.keys(TH08_DATA.stages), ['1']);
+  assert.deepEqual(Object.keys(TH08_DATA.stages), ['1', '2']);
   const stage = TH08_DATA.stages[1];
   assert.deepEqual(
     [stage.enemyAnm, stage.bulletAnm, stage.bgAnm, stage.effectAnm, stage.stdTxtAnm, stage.faceAnm],
@@ -26,13 +26,24 @@ test('TH08 vertical-slice data embeds Stage 1 and its original scripts', () => {
   assert.equal(ecl.readUInt32LE(0), 0x800);
   assert.equal(ecl.readUInt16LE(4), 53);
   assert.equal(ecl.readUInt16LE(6), 2);
+
+  // Stage 2 (Mystia) ships the same surface set for the convergence work.
+  const stage2 = TH08_DATA.stages[2];
+  assert.deepEqual(
+    [stage2.enemyAnm, stage2.bulletAnm, stage2.bgAnm, stage2.effectAnm, stage2.stdTxtAnm, stage2.faceAnm],
+    ['stg2enm', 'etama', 'stg2bg', 'eff02', 'stg2txt', 'face_st02']
+  );
+  assert.deepEqual(stage2.faceAnms, ['face_rm00', 'face_yk00', 'face_st02']);
+  const ecl2 = Buffer.from(stage2.ecl, 'base64');
+  assert.equal(ecl2.readUInt32LE(0), 0x800);
 });
 
 test('every stripped TH08 ANM resolves its shipped texture', () => {
   const expectedKeys = [
     'title01', 'player00', 'ascii', 'text', 'front', 'times', 'capture',
     'enemy', 'etama', 'stg1bg', 'stg1enm', 'stg1txt', 'eff01',
-    'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp', 'face_cdbg'
+    'stg2bg', 'stg2enm', 'stg2txt', 'eff02',
+    'face_rm00', 'face_yk00', 'face_st01', 'face_st01sp', 'face_st02', 'face_st02sp', 'face_cdbg'
   ];
   assert.deepEqual(Object.keys(TH08_DATA.anm), expectedKeys);
   const images = new Set(readdirSync('assets/th08-img'));

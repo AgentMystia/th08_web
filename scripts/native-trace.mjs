@@ -15,13 +15,16 @@
 // The game plays the title demo with our recording staged as
 // demo/demorpy0.rpy, so the trace replays the exact verifier input stream.
 // Usage: node scripts/native-trace.mjs [seconds]
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync } from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 
 const SECONDS = Number(process.argv[2] ?? 600);
 const ROOT = '/tmp/th08-native';
 const SRC = '/workspace/reference/th08-original/th08';
-const REPLAY = '/workspace/tests/replays/th8_udLy01.rpy';
+// TH08_TRACE_REPLAY overrides the staged demo: the title demo picks a random
+// stage block per cycle, so stage-1 work wants a stage-1-stripped replay
+// (e.g. /tmp/th08-stage1-only.rpy).
+const REPLAY = process.env.TH08_TRACE_REPLAY ?? '/workspace/tests/replays/th8_udLy01.rpy';
 const OUT = '/tmp/native-trace.txt';
 const GDB_PORT = 31337;
 
@@ -33,8 +36,18 @@ if (!existsSync(SRC) || !existsSync(REPLAY)) {
 rmSync(ROOT, { recursive: true, force: true });
 mkdirSync(ROOT, { recursive: true });
 cpSync(SRC, ROOT, { recursive: true });
-mkdirSync(`${ROOT}/demo`, { recursive: true });
-cpSync(REPLAY, `${ROOT}/demo/demorpy0.rpy`);
+// The demo picker loads demo/demorpyN.rpy BY BASENAME FROM th08.dat (the
+// loose demo/ dir is ignored — FUN_0043e660 → FUN_00474c40 archive lookup),
+// so staging a custom replay means rebuilding the archive. Requires thdat
+// (thtk) at THDAT or the known build path.
+const THDAT = process.env.THDAT ?? '/tmp/thtk-1786734539101457666/build/thdat/thdat';
+const build = '/tmp/th08-trace-dat';
+rmSync(build, { recursive: true, force: true });
+mkdirSync(build, { recursive: true });
+execFileSync(THDAT, ['-x', '8', `${ROOT}/th08.dat`], { cwd: build, stdio: 'ignore' });
+for (let i = 0; i <= 3; i++) cpSync(REPLAY, `${build}/demorpy${i}.rpy`);
+execFileSync(THDAT, ['-c', '8', `${ROOT}/th08.dat`].concat(
+  readdirSync(build).map((f) => `./${f}`), ), { cwd: build, stdio: 'ignore' });
 
 const gdbCmds = `
 set pagination off

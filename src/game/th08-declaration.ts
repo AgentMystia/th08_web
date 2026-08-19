@@ -129,6 +129,14 @@ export class Th08SpellDeclaration {
   // coordinates: banner strips at y=16, the name at (208,344)); the name is
   // typeset at the VM's live position/alpha, riding its drift and squash.
   draw(r: Renderer): void {
+    // The native's fourth VM (capture.anm) draws the runtime-captured
+    // playfield texture dimmed behind the declaration ('@' surface). That
+    // surface is exe-runtime-generated and unrecoverable from data
+    // (AGENTS.md §7); approximate its visible effect — the darkened
+    // backdrop seen in native captures — with a plain dim quad.
+    // (approximation: flat dim, not the transformed capture texture.)
+    r.ctx.fillStyle = 'rgba(0,0,16,0.55)';
+    r.ctx.fillRect(32, 16, 384, 448);
     for (const runner of [this.face, this.banner1, this.banner2]) {
       if (runner === this.banner1 || runner === this.banner2) {
         if (this.age >= 160) continue;
