@@ -45,6 +45,14 @@ export interface RunCarry {
   rank: number;
   rankAccumulator?: number;
   powerItemCountForScore?: number;
+  // TH08 run-state fields persisting across stages (T8RP stage blocks):
+  // the night clock (post-tally advance), the human/youkai gauge, and the
+  // point-item ladder. currentTimeOrbs is per-stage and does not carry.
+  clockTime?: number;
+  youkaiGauge?: number;
+  pointItemValue?: number;
+  pointItemExtends?: number;
+  nextPointItemExtendThreshold?: number;
 }
 
 // TH08 ItemType enum (ItemManager.hpp:9-21) in declaration order; the item's
@@ -642,6 +650,17 @@ export class StageScene implements GameHost {
       this.rank = carry.rank;
       this.rankAccumulator = carry.rankAccumulator ?? 0;
       this.powerItemCountForScore = carry.powerItemCountForScore ?? 0;
+      // The TH08 run state carries the night clock / gauge / item ladder
+      // across stages (T8RP stage-entry snapshots mirror these fields).
+      // score also needs the runState mirror (addScore routes through it).
+      this.runState.score = carry.score;
+      if (carry.clockTime != null) this.runState.clockTime = carry.clockTime;
+      if (carry.youkaiGauge != null) this.runState.youkaiGauge = carry.youkaiGauge;
+      if (carry.pointItemValue != null) this.runState.pointItemValue = carry.pointItemValue;
+      if (carry.pointItemExtends != null) this.runState.pointItemExtends = carry.pointItemExtends;
+      if (carry.nextPointItemExtendThreshold != null) {
+        this.runState.nextPointItemExtendThreshold = carry.nextPointItemExtendThreshold;
+      }
       this.startStageTransition();
     }
     this.captureStageEntryTotals();
@@ -965,7 +984,12 @@ export class StageScene implements GameHost {
       power: this.playerObj.power,
       rank: this.rank,
       rankAccumulator: this.rankAccumulator,
-      powerItemCountForScore: this.powerItemCountForScore
+      powerItemCountForScore: this.powerItemCountForScore,
+      clockTime: this.runState.clockTime,
+      youkaiGauge: this.runState.youkaiGauge,
+      pointItemValue: this.runState.pointItemValue,
+      pointItemExtends: this.runState.pointItemExtends,
+      nextPointItemExtendThreshold: this.runState.nextPointItemExtendThreshold
     };
   }
 
@@ -1673,8 +1697,21 @@ export class StageScene implements GameHost {
     // TH08: the night clock advances at the stage tally — FUN_0043c35f's
     // per-stage switch pays +2 when the stage's time-orb quota is missed,
     // +1 when met (the recorded Lunatic stage 1 ends at clockTime 1, i.e.
-    // met). The stage-1 quota displays as /3000 on the Time row.
-    this.runState.addClockTime(this.runState.currentTimeOrbs >= 3000 ? 1 : 2);
+    // met). The quota is the .data table at 0x4c77f0, per stage and
+    // difficulty (stage 1: 2000/2500/2700/3000, stage 2: 6500/7200/7200/
+    // 7200, stage 3: 7500/8500/8800/8800, stages 4/6: 9999, stage 5:
+    // 7500/8500/8500/8500, Extra: 0).
+    const TH08_STAGE_ORB_QUOTAS: readonly (readonly number[])[] = [
+      [2000, 2500, 2700, 3000],
+      [6500, 7200, 7200, 7200],
+      [7500, 8500, 8800, 8800],
+      [9999, 9999, 9999, 9999],
+      [7500, 8500, 8500, 8500],
+      [9999, 9999, 9999, 9999],
+      [0, 0, 0, 0]
+    ];
+    const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
+    this.runState.addClockTime(this.runState.currentTimeOrbs >= quota ? 1 : 2);
     this.clearTimer = 1;
   }
 
@@ -4648,11 +4685,15 @@ export class StageScene implements GameHost {
     // seed capture.anm scripts 2/3 with var8 = row + 2*column. Their original
     // ANM bytecode staggers a 60-frame quadratic shrink/fade/rotation, which
     // reveals the already-running next stage beneath the old clear screen.
+    // TH08's capture.anm has no scripts 2/3 (its table is -5..-1): the TH07
+    // tile shatter is not applicable here and is skipped (TH08's own
+    // transition runs through the tally presentation instead).
     const capture = this.assets.anms.capture;
     this.stageTransitionTiles.length = 0;
     for (let row = 0; row < 14; row++) {
       for (let column = 0; column < 12; column++) {
         const script = 2 + ((row + column) & 1);
+        if (!capture.hasScriptInEntry(0, script)) continue;
         const delay = row + column * 2;
         const runner = new AnmRunner(capture, script, { imageKey: 'capture:@' });
         runner.setVariable(8, delay);
