@@ -465,6 +465,11 @@ export class StageScene implements GameHost {
   // Live player spell-card declaration (bomb cut-in), FUN_00415d60's four
   // VMs; retires itself once every script has removed.
   private th08Declaration: Th08SpellDeclaration | null = null;
+  // TH08 miss white-out countdown (player+0xe2a70): armed at 60 on the miss
+  // commit and re-armed every squish frame (FUN_0044d180), drawn as a full
+  // white playfield quad while nonzero (FUN_0044d2c0). NOT the deathbomb
+  // window — the window itself has no white flash in the native.
+  private th08DeathWhiteFrames = 0;
   // Focus aura (FUN_00425870(0x16) on focus-in, interrupt 1 out): the
   // follow-actor + handle pair so the aura tracks the player.
   private th08AuraActor: { x: number; y: number; angle: number; state: number } | null = null;
@@ -2066,6 +2071,13 @@ export class StageScene implements GameHost {
     const death = p.tickDeath(this.slowRate);
     if (death === 'effects') this.onPlayerDeath();
     else if (death === 'respawn') this.onPlayerRespawn();
+    // TH08 death white-out (FUN_0044d180 arms player+0xe2a70 = 60 on the miss
+    // commit and RE-ARMS it every squish frame; FUN_0044d2c0 decrements and
+    // draws FUN_0044de60(player, 768, 896, 0xffffffff) while nonzero): the
+    // white playfield quad runs through the death squish and 60 frames past
+    // it. There is NO white flash during the deathbomb window itself.
+    if (p.dyingFrame >= 0) this.th08DeathWhiteFrames = 60;
+    else if (this.th08DeathWhiteFrames > 0) this.th08DeathWhiteFrames--;
     if (this.respawnClearFrames > 0) {
       // Exe FUN_0043e2e0 top (all.c:28692-28695): while player+0x2400
       // counts down, FUN_00422ea0(0) runs every frame — silent, itemless,
@@ -4432,16 +4444,6 @@ export class StageScene implements GameHost {
       // Th07.exe layers the player sprite UNDER the enemy bullet/laser danmaku
       // (only the focus hitbox indicator, drawn later, sits on top).
       this.drawPlayerSprite(r, ox, oy);
-      // TH08 決死結界: while the deathbomb window runs, FUN_0044d2c0 calls
-      // FUN_0044de60(player, 768, 896, 0xffffffff, 0) every frame — a white
-      // full-playfield flash pulsing through the window (approximated as an
-      // every-other-frame overlay; the native draw is a screen-effect quad).
-      if (this.playerObj.hitState && (this.frame & 1) === 0) {
-        r.ctx.globalAlpha = 0.5;
-        r.ctx.fillStyle = '#ffffff';
-        r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
-        r.ctx.globalAlpha = 1;
-      }
       this.drawLasers(r, ox, oy);
       // Player shots ride under the enemy-bullet danmaku so dense patterns
       // stay readable (Th07.exe layers player shot/laser below enemy bullets).
@@ -4527,6 +4529,14 @@ export class StageScene implements GameHost {
       r.ctx.restore();
       this.markPass('items');
       const p = this.playerObj;
+      // TH08 miss white-out: FUN_0044d2c0 draws FUN_0044de60(player, 768,
+      // 896, 0xffffffff, 0) EVERY frame while the +0xe2a70 countdown runs —
+      // a solid white playfield quad through the death squish and 60 frames
+      // past it (not the deathbomb window; that has no white flash).
+      if (this.th08DeathWhiteFrames > 0) {
+        r.ctx.fillStyle = '#ffffff';
+        r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
+      }
       this.playerEffects.draw(r, ox, oy);
       this.th08Effects.draw(r, ox, oy);
       // The declaration VMs self-position in 640x480 screen space
