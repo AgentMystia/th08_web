@@ -253,7 +253,10 @@ test('retained TH08 midboss death callbacks settle exactly once', async () => {
     if (event.kind === 'enemy-kill' && event.sub === 15) kills.push(event);
   };
   const shooting = { held: new Set(['shoot']), pressed: new Set() };
-  for (let frame = 0; frame < 4740; frame++) scene.update(shooting);
+  // 5000-frame budget: the familiar master-death kill quads (Th08.exe
+  // FUN_0044df00 pool) replaced the bogus direct 16-orb spawn, shifting the
+  // post-f921 RNG stream; the exit chain now lands at ~f4758 (was ~f4640).
+  for (let frame = 0; frame < 5000; frame++) scene.update(shooting);
 
   assert.equal(kills.length, 1, 'mode-2 midboss actor must not re-enter death settlement');
   assert.equal(scene.runtime.lifecycleLog.filter((event) =>

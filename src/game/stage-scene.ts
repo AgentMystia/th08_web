@@ -469,6 +469,22 @@ export class StageScene implements GameHost {
   }[] = Array.from({ length: BOMB_CLEAR_REGION_CAP }, () => ({
     x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0
   }));
+  // Th08.exe's FUN_0044df00 pool (player+0xbb834, circle entries): pure
+  // bullet-kill regions — the enemy-bullet tick's FUN_00449ff0 probe sets
+  // state 5 on any live bullet inside the radius (0x1000-flagged bullets are
+  // immune), awarding NO item outside bomb/spell context (the item-id global
+  // DAT_018b8988 reads -1 there; measured on the native master death at
+  // replay f922: child quads (r32, +2/frame, 8 frames, param6 7/9) plus the
+  // master quad (r32, +1/frame, 16 frames, param6 7) swept ~85 bullets —
+  // scripts/native-memtrace.mjs pool dump). Populated by the familiar
+  // master-death sweep (settleTh08FamiliarDeath, all.c:20497/20542). Bomb
+  // orb quads (r24, param5 500, param6 6) share the native pool but ride
+  // bombClearRegions above.
+  private readonly th08DeathClearZones: {
+    x: number; y: number; radius: number; growth: number; framesLeft: number
+  }[] = Array.from({ length: 16 }, () => ({
+    x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0
+  }));
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
   private th08Bomb: Th08BorderBomb | null = null;
   // Enemy-manager target caches (Th08.exe writes them through the absolute
@@ -1038,6 +1054,7 @@ export class StageScene implements GameHost {
     this.bombEngine.reset();
     this.activeBombSlots.length = 0;
     for (const region of this.bombClearRegions) region.framesLeft = 0;
+    for (const zone of this.th08DeathClearZones) zone.framesLeft = 0;
     this.playerEffects.clear();
     this.th08Effects.clear();
     this.screenShakes.length = 0;
@@ -2532,6 +2549,20 @@ export class StageScene implements GameHost {
         return this.beginBombClearFade(b);
       }
     }
+    // Th08.exe FUN_00449ff0's pool probe (player+0xbb834): the familiar
+    // master-death quads. Same contact shape as the bomb regions above, but
+    // the kill enters state 5 directly — no time-orb award (DAT_018b8988 is
+    // -1 outside bomb/spell context, all.c:23535-23552). The exe defers the
+    // state-5 entry of SPAWN-STATE bullets to their transition-VM completion
+    // (all.c:23589-23644); the port fades those immediately (flagged).
+    for (const z of this.th08DeathClearZones) {
+      if (z.framesLeft <= 0) continue;
+      const dx = b.x - z.x;
+      const dy = b.y - z.y;
+      if (dx * dx + dy * dy < z.radius * z.radius) {
+        return this.beginBulletClearFade(b);
+      }
+    }
     // ReimuA's moving r128 circles are published explicitly by its state-1
     // bomb VM into bombClearRegions above. Do not infer them from attack
     // slots: the state-2/landmine r256 damage slots have no matching
@@ -3177,11 +3208,11 @@ export class StageScene implements GameHost {
   //   the silent auto-despawn with the enep00 pop per child (all.c:
   //   20445-20528). Then the time-orb shower at the master's position:
   //   two per familiar, each scattered by (frand*128, frand*pi) in that
-  //   draw order (all.c:20533-20541), plus FUN_0044df00's burst pool
-  //   registration (pos, 32.0, 1.0, 0x10, 7) — a 16-orb batch, spawned
-  //   directly here with the item pool's own state-3 velocity draws
-  //   (flagged: the native burst is pool-deferred, its release draws are
-  //   not yet traced).
+  //   draw order (all.c:20533-20541). Finally the FUN_0044df00 kill quads:
+  //   one per swept child (r32, +2/frame, 8 frames, param6 = 7|9 by flags2
+  //   bit1) and one at the master (r32, +1/frame, 16 frames, param6 7) —
+  //   modeled by th08DeathClearZones (the per-child local_30 orb burst
+  //   with its FUN_0042f270/2f230 count tiers is not yet modeled, §7).
   private settleTh08FamiliarDeath(e: Enemy): void {
     const t8 = e.ecl.th08;
     if (t8?.familiar) {
@@ -3238,7 +3269,26 @@ export class StageScene implements GameHost {
         {}
       );
     }
-    for (let i = 0; i < 16; i++) this.spawnItem('time', e.x, e.y, {});
+    // FUN_0044df00 pool registrations (all.c:20497/20542): every swept child
+    // drops a (pos, r=32, +2/frame, 8-frame) bullet-kill quad — param6 is 7
+    // with flags2 bit1 set, 9 otherwise — and the master its own (pos, r=32,
+    // +1/frame, 16-frame, param6 7). These are the regions that sweep the
+    // dead master's danmaku (native replay f922: ~85 bullets state-5'd over
+    // 8 frames); the old direct 16-orb spawn was a stand-in with no kill
+    // semantics and is removed (the per-child local_30 orb burst with its
+    // pool-pressure count tiers stays unmodeled — §7).
+    for (const c of children) this.armTh08DeathClearZone(c.x, c.y, 32, 2, 8);
+    this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16);
+  }
+
+  private armTh08DeathClearZone(x: number, y: number, radius: number, growth: number, frames: number): void {
+    let zone = this.th08DeathClearZones.find(z => z.framesLeft <= 0)
+      ?? this.th08DeathClearZones.reduce((a, b) => (a.framesLeft <= b.framesLeft ? a : b));
+    zone.x = x;
+    zone.y = y;
+    zone.radius = radius;
+    zone.growth = growth;
+    zone.framesLeft = frames;
   }
 
   private collideEnemyBody(e: Enemy): void {
@@ -3697,6 +3747,13 @@ export class StageScene implements GameHost {
       // every head-of-player-tick update, then marks the fixed slot free.
       r.radius = Math.fround(r.radius + r.growth);
       if (--r.framesLeft <= 0) r.framesLeft = 0;
+    }
+    // The Th08 death-clear quads age identically (the exe's pool update grows
+    // param_4 per tick and frees the slot when param_5 lapses).
+    for (const z of this.th08DeathClearZones) {
+      if (z.framesLeft <= 0) continue;
+      z.radius = Math.fround(z.radius + z.growth);
+      if (--z.framesLeft <= 0) z.framesLeft = 0;
     }
   }
 
