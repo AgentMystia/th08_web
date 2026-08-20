@@ -3258,7 +3258,12 @@ export class StageScene implements GameHost {
         : 10000;
       this.spawnScorePopup(popupValue, e.x, e.y, 0xdfffef80);
       this.addScore(popupValue);
-      this.runState.addTimeOrbs(1);
+      // FUN_0042adb0's familiar direct-kill tail (all.c:20546-20566): the
+      // payout is a REAL time-orb item spawn (FUN_004400a0(pos,7,1) = the
+      // state-3 draw pair), which then homes and is collected like any orb —
+      // NOT a direct counter increment. This feeds the orb's 4-draw spawn
+      // AND the 4-draw collect into the stream at the native times.
+      this.spawnItem('time', e.x, e.y, {});
       const sc = this.spellcard;
       if (sc?.capturing && this.runState.th08SideMirror === 0) {
         const elapsed = sc.elapsed + sc.elapsedFrac;
