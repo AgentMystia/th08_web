@@ -284,6 +284,139 @@ Verifier state at this checkpoint: npm run check/build/test all green
 spawn+2 vs native spawn+52); stage 2 f1051. The replay-golden CI job
 stays advisory.
 
+### 2026-08-20 third convergence pass — the RNG draw economy
+(commits dafcb6f..75eaddf; verifier earliest divergence stage 1
+**f2873 → f2895 → f3250 → f2882 → f2685 → f3201/3202 → f3065 → f2873**,
+each hop a re-rolled auto-fire lottery as the stream economy improved;
+cumulative draw-count delta vs native over f696-2606 driven
+**-10640 → -160**; stage-1 total native budget ≈ 294960 draws)
+
+**The draw counter.** FUN_0043ecc0 (the u16 LFSR) increments a u32 at
+**0x164d524** (`*(int*)(param_1+2)+=1`, param_1 = the seed at 0x164d520).
+Reading it per frame boundary from /proc/pid/mem gives the native's exact
+per-frame draw count — a frame-exact economy oracle that needs no
+breakpoints. Draw-unit prices (u16 per call): FUN_0043ecc0/00410c00 = 1,
+FUN_0043ed20 (u32) = 2, FUN_0043ed50 (rand01) = 2, FUN_0043ed80
+(rand[-1,1)) = 2, FUN_00406ef0 (u32%range) = 2, FUN_0040d390
+(rand01*amp) = 2, FUN_004143c0 (randSigned*amp) = 2. **Case mapping:
+ANM (FUN_0045ea00) exe case = on-disk op + 1; ECL (FUN_004184b0) exe
+case = on-disk ins − 1** (double-anchored: ins_106 = case 0x69,
+ins_144 = case 0x8f). ANM random ops are only on-disk ins_59 (int
+u32%range) and ins_60 (float rand01*amp), 2 each at arm.
+
+**Effect spawn cost = 2×(the etama script's ins_59+ins_60 count) + the
+init callback's draws, PER PARTICLE (FUN_00425430 runs the callback per
+particle and its nonzero return vetoes THAT particle)**. The effect map
+DAT_004c6d30 (12-byte entries {scriptIdx, d2, cb}): scriptIdx is the
+ARCHIVE file-order script index, NOT the on-disk id — multi-entry files
+reuse ids, so resolve through the file-order enumeration (the earlier
+'effect 38 = 0 draws' note misread 0x47 as an on-disk id; the truth is
+archive idx 71 = on-disk -79 = 5 random ops = 10/arm, measured 10/arm
+against the counter). cb costs: FUN_00426280 = 16 (id 51), FUN_00426720
+= 16 (id 63), FUN_00426e70 = 20 (id 19), FUN_00425d70 = 4 (ids 4-11),
+FUN_00425ea0 = 4 (id 3), FUN_004270c0 = 4 (ids 21/26), FUN_00426b20 = 2
+(ids 17/18/27); every d2 per-frame updater draws 0. Effect 63 = 26/arm
+(script -76: 5 ops + cb 16), effect 47 = 8/arm (script -78), effect 38 =
+10/arm (script -79), effect 40 = 0 (script -69 has 2 random ops — entry
+2! — but map's cb 0... measured 0). Full measured table now lives in
+EFFECT_DRAW_COST (stage-scene.ts).
+
+**Consumers pinned and ported this pass (each verified against the
+counter and the pool censuses):**
+1. **effect-62 option afterimages** (already landed in the 2nd pass):
+   12 VMs every 3rd player tick from counter >699, 0 draws each, 72-frame
+   life — they hold the 512-slot main pool at ~276-288 steady, which is
+   what throttles effect-51 emission to ~66%.
+2. **effect-38 familiar white sparkles**: FUN_0042c420's per-tick branch
+   (all.c:21164-21166) — materialized (flags bit 11 clear) familiars
+   flagged by ins_83(1) (+0x3328 bit 1 = our flags2 bit 1) emit effect
+   0x26 at their live position every second +0x2e14 timer tick. The
+   FUN_0040ebc0(2) gate reads the timer PRE-tick (asm 0x42c4b1-0x42c4bc),
+   so the native fires on the familiar's 1st/3rd/5th tick (odd e.frame
+   here). 10 draws/arm; the stage-1 Sub2/Sub12 orbiters emit 4-6 per
+   second frame (40-60 draws), matching to the draw from f1590 on.
+3. **Master-death time-orb shower (FUN_0042adb0(1), all.c:20446-20544)**:
+   per swept child, local_30 orbs around the CHILD (frand01*(2*tier),
+   frandSigned*pi), tier = childCount*2+10 (< 8) for stage 1-2 — the
+   FUN_0042f270/2f230 tier byte is DAT_0164d0b1 (the TEAM index, < 4
+   here). Each orb = FUN_004400a0(7,3) = 8 draws (4 scatter + 4 state-3
+   when the item probe succeeds). Then the child's own drop
+   (effect(dropEffectId+4)×3 + pointSmall) and the master-tail 2-per-child
+   burst + the kill quads. f1249's native death: 79 orbs + 608 draws,
+   matching to the orb.
+4. **Kill-quad bullet→item conversion**: the sweep's FUN_0044df00 quads
+   carry param6 (quad[10]); FUN_00449ff0's probe hit writes it to
+   player+0xe2a90 (== the 'DAT_018b8988' read site) and the state-5 entry
+   converts the bullet: param6 9 → TWO time orbs, any other type > -1 →
+   one item of that type (all.c:23597-23651; each FUN_004400a0(.,7,1)
+   forced into the state-3 draw pair). Stage-1 masters hold +0x3324 bit1
+   clear → child quads arm 9, the master quad 7. Spawn-state (2/3/4)
+   bullets defer the kill+conversion to their transition-VM completion
+   (the +0xdbe latch, all.c:23589-23644) — the port latches per spawn
+   tick (quadKillType) and converts on the completion tick. Measured:
+   f922's sweep = 32 burst orbs + 2+60+2 conversions spread over the
+   quads' 8-frame expansion; the old 'no item award (=-1)' note was wrong
+   for these quads.
+5. **Shot-impact effect 5**: FUN_00451670's state-1 (in-flight) shot's
+   first contact re-arms the VM AND arms effect 5 in the main pool
+   (all.c:40425-40431, 4 draws via cb FUN_00425d70). Was the scripted
+   side layer (0 draws, no slot); now spawnEffectParticles(5).
+6. **Form-flip pools**: FUN_0044aec0 arms the player form tints (effect
+   0x1c/0x1d, 0 draws) into the main pool and the focus aura (effect
+   0x16) via FUN_00425870 into the dedicated slot 0x282 — the aura's arm
+   runs script -96's t0 with ONE random op (2 draws). The familiar
+   materialize flashes (effect 0x1e/0x1f = 30/31, 0 draws, 10-frame
+   life) now occupy real main-pool slots too.
+7. **effect-51 firefly lifetime distribution**: the per-frame d2
+   (FUN_004264f0) releases the VM once the particle leaves the viewing
+   cone (dot(normalize(pos − DAT_004ea3c4), DAT_004ea3e8) < 0.94,
+   all.c:18019-18026) — the anchor/axis ride the stage's 3D camera.
+   Native slot-tracked lifetimes (f300-1100, n=581): 37% reach the
+   240-frame script end, the rest ~uniform over 1-239. The port rolls
+   the same distribution from the arm's third drawn u16 (already inside
+   the 26-draw cost — no extra draws). Pool occupancy then tracks the
+   native (e51 163-172 vs 165-187). §7: the per-particle cone formula is
+   unmodeled; the distribution is measured, not derived.
+8. **Time-orb collects draw 4 u16 each** (draw counter vs item-pool
+   census, f966-972: 5/8/10/24/18/19/7 collects → 20/32/40/96/72/76/28
+   draws, exact). The collect switch (FUN_004412b0 + fall-through
+   FUN_00441020) shows no direct RNG call in the decompile — the consumer
+   is an unexposed callee (the item VM's absorb re-arm suspected). §7.
+9. **Item-pool active-flag leak fixed**: syncItemSlots only saw entities
+   still in this.items, but updateItems compacts the dead out first — so
+   every collected/despawned item's pool slot leaked active (378 live
+   marks vs 3 live entities by stage-1 f2700), making later time-orb
+   first-probes fail. The slot is now freed at the compact itself.
+
+**Item-pool spawn semantics (FUN_004400a0, all.c:30776-30873)**: the
+rotating cursor scans 2096 slots; out-of-bounds x (<-64, >448) rejects
+with 0 draws; param_4 2/3/5 draw 4 inside the found-slot block (so a
+failed probe draws 0); **type 7 (time orb) gives up after the FIRST
+occupied probe** (the `if (param_3 == 7) return dummy` at the loop tail)
+while other types wrap-scan the full pool. Type 10 → forced 7 + param_4
+5; type 7 → forced param_4 3.
+
+**Open consumers (small, parked):** isolated 4-draw bursts at stage-1
+f504/508/511/552/553/555 with no product in ANY pool (main/pool2/item)
+and no ECL/ANM random op on the alive enemies — single +4 bursts
+mid-frame per the high-frequency poll. ~24 draws by f555. And the
+f967-972-class aftermath (largely the orb-collect 4-draws, now modeled).
+The remaining macro-structure of the deficit is the kill-timing cascade:
+orb scatter values feed collect timing feed power feed damage timing;
+each master death lands 1-10 frames off until the stream is count-exact
+upstream of it. No local fix exists — drive the per-frame draw count to
+zero delta from the start.
+
+**Native probe toolbox** (tmp/, never committed): native-memtrace.mjs
+(per-frame player/enemy/bullet/shot-pool/RNG dump), native-pool-census.mjs
+(effect-pool composition), native-item-census.mjs (effects + items +
+per-slot spawn transitions incl. the second pool at mgr+0x6c01c),
+native-e51-life.mjs (per-slot lifetime histogram), native-microtrace.mjs
+(sub-frame draw phase), native-spawn-diff.mjs. Sim side:
+tmp/sim-rng-dump.mjs / sim-pool-census.mjs / sim-spawn-dump.mjs /
+sim-rng-profile.mjs. Compare with native(f) == sim(f−1) (the replay
+playback feed's one-frame input latency).
+
 
 
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
