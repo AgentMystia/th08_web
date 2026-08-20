@@ -240,6 +240,20 @@ seed stream (0x164d520 polled at frame boundaries):
   spawns FUN_004400a0 = 1-2 frand, ambient bursts, the -79/-78/-77/-76
   effect scripts at 8-10 u16/arm, -118/-117/-116 big bullets at 4 u16/arm)
   plus the ~4000-draw init gap — none of which our port ticks at arm time.
+- 2026-08-20 over-consumption mechanism (effect-pool probes at f607/1006/
+  1502/2000): the native effect pool (FUN_00425430, 0x200 × 0x360 @
+  0x4ece60) is ~FULL (499-510/512) from f1000 on — effect-51 only ~150-185
+  active while ours pegs at 240. The pool is held full by ~280 script-62
+  VMs (on-disk script -88, sprite 173, NO random ops, NOT items — the item
+  manager is 0x1653648 with its own pool — and NOT tracking the live
+  bullet count). Those VMs throttle effect-51 emission to ~66%, so the
+  native draws effect-51 at ~0.66/frame while ours runs unthrottled at
+  1.0/frame: ours OVER-consumes (seed walk from 0x8fbe: ours 29254 steps
+  by f2605 vs native 14058 — we are ~2x AHEAD, not behind). The modeled
+  fix: our effect pool must fill the same way (emit the script-62 VM
+  family so effect-51 is pool-pressure-throttled identically) — identity
+  of the script-62 family is the open sub-question (combat-debris/drop
+  VMs is the leading candidate).
   Matching them is the TH07 "RNG budget" task for TH08: arm/tick every
   spawn-time ANM VM with its t0 ops incl. the ins_59/60/61 draws, profile
   per-consumer against the frame-aligned native seed stream. Until the
