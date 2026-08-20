@@ -222,6 +222,30 @@ seed stream (0x164d520 polled at frame boundaries):
   So the deficit scales with ACTIVITY (many live enemies + volleys), not
   a constant per-frame rate: it lives in per-enemy / per-spawn / per-event
   consumers, and is ~zero in quiet windows.
+- 2026-08-20 deep-dive elimination (native-null-replay control + full
+  all.c RNG-call inventory): the deficit is ambient/enemy/bullet-side —
+  a NULL-INPUT demo (no player keys) runs at the SAME 26-40/frame as the
+  full replay, so player shots/kills/drops contribute ≈ 0. Effect-51 is
+  matched at 10/particle on both sides (etama script idx 73 = 5 random
+  ops × 2 u16). Ruled out as deficit sources: bullet spawn AND tick
+  (FUN_0042f5f0/431240/42ffc0/410a70 hold no RNG call; the rice/big-bullet
+  transition scripts -129/-128/-127 carry only non-drawing ops 8/34),
+  enemy ECL/VM per-frame (no per-frame random ops in stg1enm/fairy
+  scripts; FUN_0045ea00 draws only inside ANM ins_59/60/61 handlers, all
+  at t=0 for these), deaths (~0.03-0.045/frame → ~1/frame), integrity
+  checksum (0x4012b0 is TH07-only, absent in TH08), frame pacing (verifier
+  cadence 10494 sim-frames vs 10504 records = 1:1), world petals (effect
+  26 is Sub50/51 boss-spell only). The open consumers are therefore the
+  many small per-spawn VM arms whose scripts carry t0 ins_59/60/61 (item
+  spawns FUN_004400a0 = 1-2 frand, ambient bursts, the -79/-78/-77/-76
+  effect scripts at 8-10 u16/arm, -118/-117/-116 big bullets at 4 u16/arm)
+  plus the ~4000-draw init gap — none of which our port ticks at arm time.
+  Matching them is the TH07 "RNG budget" task for TH08: arm/tick every
+  spawn-time ANM VM with its t0 ops incl. the ins_59/60/61 draws, profile
+  per-consumer against the frame-aligned native seed stream. Until the
+  streams align, every u32%deadline auto-fire phase is a lottery and the
+  phantom deaths keep moving; there is no local fix — DO NOT paper over
+  it with phase clamps or special cases (forbidden by the task contract).
 - Our per-frame stream is ~90% effect-51 emission (the ambient Sub14's
   ins_139(51,·) bursts: 6×16 at t=4-24 then 4 particles every 4 frames
   forever; each particle = 5 ANM random ops × 2 u16 = 10 draws — cost
