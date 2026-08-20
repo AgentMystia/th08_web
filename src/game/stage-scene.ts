@@ -4535,6 +4535,17 @@ export class StageScene implements GameHost {
       data: { type: it.type, slot: it.poolSlot, x: it.x, y: it.y }
     });
     this.playSfx(21); // TH08 item00 channel
+    // Native measured: each TIME-ORB collect consumes exactly 4 u16 draws
+    // (draw counter 0x164d524 vs item-pool census, stage-1 f966-972: 5/8/10/
+    // 24/18/19/7 collects -> 20/32/40/96/72/76/28 draws, exact 1:4 ratio).
+    // The collect switch path (FUN_004412b0 + fall-through FUN_00441020)
+    // holds no direct RNG call — the consumer sits in a callec the decompile
+    // does not expose (suspected: the item VM's absorb re-arm). Until the
+    // site is pinned, the port draws the same 4 here (§7).
+    if (it.type === 'time' || it.type === 'time2') {
+      this.rng.f();
+      this.rng.f();
+    }
     // TH08 collect dispatch: the TH08 item types settle through the run
     // state's native scoring (CollectPoint/CollectPointSmall/CollectTimeOrb,
     // reference/re-specs/th08-decomp-items/), not the TH07 cherry path. The
