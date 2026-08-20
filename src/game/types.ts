@@ -120,6 +120,11 @@ export interface EnemyBullet {
   // the slot. Stored as remaining logical ANM ticks; absent in normal states.
   clearFadeFrames?: number;
   clearRunner?: AnmRunner;
+  // TH08 deferred quad kill (bullet+0xdbe latch): a spawn-state bullet that
+  // contacts a death-clear quad converts at transition-VM completion, not on
+  // the contact tick (all.c:23589-23644). Holds the contacting quad's param6
+  // conversion type (player+0xe2a90 in the native); null = no pending kill.
+  quadKillType?: number | null;
   dead?: boolean;
 }
 

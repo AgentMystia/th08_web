@@ -3728,6 +3728,19 @@ export class StageScene implements GameHost {
         return;
       }
       const wasInSpawnState = (b.spawnAge ?? b.spawnDuration) < b.spawnDuration;
+      // TH08 spawn-state quad probe (all.c:23589-23591/23615-23617/
+      // 23638-23640): while the transition runs, each manager tick probes the
+      // death-clear quad pool (clear-immunity 0x1000 excepted) and LATCHES
+      // the contact (+0xdbe = 1); the bullet converts and enters state 5 on
+      // the tick its transition VM completes, not on the contact tick.
+      if (wasInSpawnState && (b.flags & 0x1000) === 0) {
+        for (const z of this.th08DeathClearZones) {
+          if (z.framesLeft <= 0) continue;
+          const dx = b.x - z.x;
+          const dy = b.y - z.y;
+          if (dx * dx + dy * dy < z.radius * z.radius) b.quadKillType = z.convertType;
+        }
+      }
       // Native spawn states 2/3/4 skip behavior, cull, bomb and player
       // collision until their authored ANM ends. On the ending tick control
       // falls through into state 1 and performs the normal move as well.
@@ -3765,6 +3778,23 @@ export class StageScene implements GameHost {
           b.offscreenFrames = (b.offscreenFrames ?? 0) + 1;
           this.enemyBulletOffscreenCounters[slot] = b.offscreenFrames;
           if (b.offscreenFrames >= 128) b.dead = true;
+        }
+      }
+      if (!b.dead && wasInSpawnState && b.quadKillType != null) {
+        // The transition VM completed with the quad-contact latch set: convert
+        // at the bullet position (type 9 = two time orbs, any other type > -1
+        // = one item of that type) and enter state 5 (all.c:23595-23604).
+        const t = b.quadKillType;
+        b.quadKillType = null;
+        if (t === 9) {
+          this.spawnItem('time', b.x, b.y, {});
+          this.spawnItem('time', b.x, b.y, {});
+        } else if (t > -1) {
+          this.spawnItem(t === 7 ? 'time' : 'pointSmall', b.x, b.y, {});
+        }
+        if (this.beginBulletClearFade(b)) {
+          b.age += this.slowRate;
+          return;
         }
       }
       if (!b.dead && this.cancelBulletWithBombSlots(b)) {
