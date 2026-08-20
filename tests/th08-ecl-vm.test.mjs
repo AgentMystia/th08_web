@@ -329,12 +329,14 @@ test('TH08 Stage-1 opening mob waves retain the authored Lunatic spawn and FIRE 
   assert.deepEqual(primaryFire.slice(0, 2).map(fireSignature), [
     {
       sub: 1, clock: 30, sprite: 2, offset: 2, ways: 32, stacks: 2,
-      speed1: Math.fround(Math.fround(2.1) - 0.25), speed2: Math.fround(0.375),
+      // Rank-8 lerp with the ECL-context init bounds ±0.15 (all.c:19955-19956;
+      // native ring bullets measured at speed 2.0344 on rank 9 = 2.1-0.0656).
+      speed1: Math.fround(Math.fround(2.1) - 0.075), speed2: Math.fround(0.4625),
       angle2: Math.fround(0.18479957), aimMode: 3, flags: 515
     },
     {
       sub: 1, clock: 34, sprite: 2, offset: 2, ways: 5, stacks: 3,
-      speed1: Math.fround(2.95), speed2: Math.fround(0.875),
+      speed1: Math.fround(3.125), speed2: Math.fround(0.9625),
       angle2: Math.fround(0.08975979), aimMode: 0, flags: 515
     }
   ]);
@@ -342,7 +344,7 @@ test('TH08 Stage-1 opening mob waves retain the authored Lunatic spawn and FIRE 
   assert.ok(firstSub3Ring, 'central primary fairy never emitted its 32x2 ring');
   assert.deepEqual(fireSignature(firstSub3Ring), {
     sub: 3, clock: 30, sprite: 2, offset: 2, ways: 32, stacks: 2,
-    speed1: Math.fround(Math.fround(2.1) - 0.25), speed2: Math.fround(0.375),
+    speed1: Math.fround(Math.fround(2.1) - 0.075), speed2: Math.fround(0.4625),
     angle2: Math.fround(0.18479957), aimMode: 3, flags: 515
   });
 

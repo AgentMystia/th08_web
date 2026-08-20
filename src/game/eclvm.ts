@@ -586,7 +586,17 @@ export class StageRuntime {
       id: game.id++,
       poolSlot: -1,
       x, y, z,
-      hp: hasLife ? life | 0 : 1,
+      // Timeline spawns run the synchronous t0 core at the template-default
+      // hp — measured on the native replay: a wave fairy whose sub has no
+      // t0 hp-setter (stage-1 Sub13 has no ins_57/op110) reads hp=0 there,
+      // so its t0 ins_96 is blocked by the fire gate `if (0 < hp)` and the
+      // machine-gun only ever re-fires through the auto-fire deadline
+      // (native volley at spawn+52 vs our direct volley at spawn+2). The
+      // timeline life is applied AFTER the core (below), clobbering any
+      // ins_57 placeholder the same way the native post-t0 assignment does.
+      // !hasLife spawns keep the life=1 placeholder through t0 (boss entry
+      // subs set their real HP via op110 inside the cascade).
+      hp: hasLife ? 0 : 1,
       maxHp: hasLife ? life | 0 : 1,
       pendingShotDmg: 0,
       pendingBombDmg: 0,
@@ -621,12 +631,13 @@ export class StageRuntime {
       enemySlot: e.poolSlot, sub: subId,
       data: { x: e.x, y: e.y, mirrored, parentId: parent?.id ?? null }
     });
-    // Apply the timeline life/score BEFORE the initial ECL run so a t=0
-    // op110 (set HP) is not clobbered by the spawn-event life afterwards.
-    // Bosses ship with life=1 as a placeholder; their real HP comes from
-    // op110 inside the entry sub. The old post-run overwrite reset every
-    // stage-4+ multi-slot boss back to 1 and let the first player shot
-    // fire its death-callback (op99(-1)) on frame 1.
+    // Apply the timeline life/score AFTER the synchronous t0 core (native
+    // order, all.c:13395-13412): the core runs at the template default so a
+    // sub without its own t0 hp-setter stays hp=0 through its first cascade
+    // (its t0 FIRE is blocked, exactly as measured natively). Subs that DO
+    // set hp at t0 (ins_57/op110) are clobbered by the timeline life here,
+    // matching the native post-t0 assignment (wave masters read 150/400,
+    // not ins_57's 48).
     if (hasLife) e.hp = e.maxHp = life | 0;
     // Both native allocators execute one complete FUN_0040f6c0 core tick
     // synchronously, including the movement controller, but do not run the
@@ -818,10 +829,14 @@ export class StageRuntime {
           origin: { x: 0, y: 0, z: 0 },
           positionOffset: { x: 0, y: 0, z: 0 }
         },
-        // FUN_00415c80 @ all.c:9244: fire rank-lerp defaults ±0.5 speed,
-        // zero counts (phase entries reset back to these).
-        fireRankSpeedLow: -0.5,
-        fireRankSpeedHigh: 0.5,
+        // TH08 ECL-context init writes ±0.15 into the fresh enemy's
+        // rank-lerp bounds (all.c:19955-19956, measured on the native
+        // midboss at replay f2995: +0x2dec/-0.15, +0x2df0/+0.15). The wider
+        // ±0.5 pair belongs only to phase entries / spell declarations /
+        // death-callback entries (FUN_00415c80 @ all.c:9249-9254) — applied
+        // in phaseTransition and the death-callback path below.
+        fireRankSpeedLow: -0.15000000596046448,
+        fireRankSpeedHigh: 0.15000000596046448,
         fireRankCount1Low: 0,
         fireRankCount1High: 0,
         fireRankCount2Low: 0,
@@ -1384,6 +1399,11 @@ export class StageRuntime {
     const s = e.ecl;
     s.bulletRankSpeedLow = -0.5;
     s.bulletRankSpeedHigh = 0.5;
+    // FUN_00415c80 (all.c:9249-9254): every phase entry / spell declaration
+    // re-arms the wider ±0.5 rank-lerp pair on the TH08 fire template too
+    // (the fresh-enemy default is ±0.15, all.c:19955-19956).
+    s.th08!.fireRankSpeedLow = -0.5;
+    s.th08!.fireRankSpeedHigh = 0.5;
     s.bulletRankAmount1Low = 0;
     s.bulletRankAmount1High = 0;
     s.bulletRankAmount2Low = 0;
@@ -2967,6 +2987,12 @@ export class StageRuntime {
       s.bulletRankAmount1High = 0;
       s.bulletRankAmount2Low = 0;
       s.bulletRankAmount2High = 0;
+      // Same FUN_00415c80 reset on the TH08 fire template (±0.5 for
+      // death-callback entries; fresh enemies carry ±0.15).
+      if (s.th08) {
+        s.th08.fireRankSpeedLow = -0.5;
+        s.th08.fireRankSpeedHigh = 0.5;
+      }
       this.resetFireTemplateState(s);
       s.stack.length = 0;
       s.periodicExportArmed = false;
@@ -3444,6 +3470,18 @@ export class StageRuntime {
         e.x = gf(0);
         e.y = gf(4);
         e.z = 0;
+        // The teleport updates the logical position (+0x2d34) immediately:
+        // ins_64 executing later in the SAME dispatch pass computes its
+        // interpolation displacement from this snapshot, not from the
+        // core-head's pre-dispatch one. Measured on the native replay: the
+        // stage-1 midboss's ins_63(96,-48) -> ins_64(60,4,192,128) sequence
+        // lands at eased t=2/60 = (102.29,-36.46) on its second frame —
+        // with a stale snapshot our displacement collapsed to (0,144) and
+        // parked the boss at (96,96), out of the player's shot column.
+        if (s.th08) {
+          s.th08.loopHeadX = Math.fround(e.x);
+          s.th08.loopHeadY = Math.fround(e.y);
+        }
         this.applyTh08PlayerClamp(game);
         return null;
       }
