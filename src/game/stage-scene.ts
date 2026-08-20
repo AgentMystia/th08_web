@@ -122,6 +122,22 @@ const EFFECT_POOL_CAP = 400;
 // strides), TH07's 400. The slot array sizes to the superset; the cursor
 // loops below cap at this field.
 const EFFECT_POOL_CAP_TH08 = 512;
+// TH08 effect 51 (the ambient firefly spark) usually does NOT run to its
+// script's 241-frame removal: the per-frame d2 (FUN_004264f0) releases the VM
+// once the particle drifts out of the viewing cone anchored at DAT_004ea3c4
+// along DAT_004ea3e8 (dot(normalize(pos-anchor), axis) < 0.94 -> release,
+// all.c:18019-18026; the anchor/axis ride the stage's 3D camera, which the
+// port does not model). Native slot-tracked lifetimes on stage 1 f300-1100
+// (n=581): 37% reach the 240-frame script end, the rest spread ~uniformly
+// over 1-239. The roll reuses the arm's third drawn u16 (already consumed by
+// the measured 26-draw cost) so the RNG stream is unchanged; pool occupancy
+// (therefore the spawn-throttle cadence) tracks the native statistically
+// (§7 — the per-particle cone formula is unmodeled).
+function th08FireflyLife(raw: number): number {
+  const u = raw / 65536;
+  if (u < 0.37) return 240;
+  return 1 + Math.floor(((u - 0.37) / 0.63) * 239);
+}
 // Th07.exe v1.00b _DAT_0048eb98 (file value 0x38d1b717), used by
 // FUN_00423910 @ 0x4239e4/0x423a05 before recomputing an accel heading.
 const NATIVE_VELOCITY_EPSILON_F32 = 9.999999747378752e-5;
@@ -1350,6 +1366,9 @@ export class StageScene implements GameHost {
         // port's fallback visual; authored lifetime/capacity remains exact.
         let vx = 0;
         let vy = 0;
+        // Effect 51 only: the arm's third drawn u16 (already consumed by the
+        // measured cost) is retained to roll the firefly lifetime.
+        let lifeRoll = -1;
         for (let d = 0; d < perParticle; d++) {
           const raw = this.rng.u16();
           if (d === 0) {
@@ -1360,6 +1379,8 @@ export class StageScene implements GameHost {
             const speed = (0.3 + (raw / 65536) * 0.9) * this.slowRate;
             vx *= speed;
             vy *= speed;
+          } else if (d === 2 && effectId === 51) {
+            lifeRoll = raw;
           }
         }
         if (seed) {
@@ -1369,7 +1390,9 @@ export class StageScene implements GameHost {
         particle = {
           id: this.id++, poolSlot: slot, effectId,
           x, y, vx, vy, age: 0,
-          life: EFFECT_SCRIPT_LIFE[effectId] ?? 24,
+          life: effectId === 51 && lifeRoll >= 0
+            ? th08FireflyLife(lifeRoll)
+            : (EFFECT_SCRIPT_LIFE[effectId] ?? 24),
           color, size: 2, kind: 'spark',
           ...(ownerEnemyId == null ? {} : { ownerEnemyId })
         };
