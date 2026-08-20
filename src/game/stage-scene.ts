@@ -102,7 +102,13 @@ const EFFECT_DRAW_COST: Record<number, number> = {
   // TH08 effect 51 (the stage-1 ambient firefly family, etama script 73):
   // five ANM random ops (2x ins_60 float + 3x ins_59 int) at two u16 draws
   // each (Global.hpp GetRandomF32/U32InRange).
-  51: 10
+  51: 10,
+  // TH08 effect 62 (the option-afterimage family, etama script 75): the
+  // script has no random ops — zero draws. Its role is pool PRESSURE: 12
+  // VMs every 3 player ticks from tick 702 fill the 512-slot pool to
+  // ~510/512, throttling effect-51 emission to the native rate (measured
+  // via /proc/pid/mem: native n62 steadies at 276-288, n51 at ~180).
+  62: 0
 };
 const ENEMY_POOL_CAP = 0x1e0;
 const PLAYER_BULLET_POOL_CAP = 0x60;
@@ -128,7 +134,9 @@ const EFFECT_SCRIPT_LIFE: Record<number, number> = {
   24: Infinity, 26: 300, 27: 300, 29: 30, 30: 300, 31: 300,
   32: 90, 33: 120,
   // TH08 effect 51: etama script 73 removes at frame 241.
-  51: 241
+  51: 241,
+  // TH08 effect 62: etama script 75 removes at frame 72 (1+1+70).
+  62: 72
 };
 
 // TH08 sfx ids: .data 0x4c81b0 (36 filename pointers, loaded by the loop at
@@ -245,6 +253,11 @@ export class StageScene implements GameHost {
   private readonly effectSlots: (EffectParticle | null)[] = new Array(EFFECT_POOL_CAP_TH08).fill(null);
   private effectPoolCap = EFFECT_POOL_CAP;
   private effectPoolCursor = 0;
+  // TH08 player-manager tick counter (exe DAT_004e4030 + 0x81c, zeroed by the
+  // per-stage memset of the player-manager struct at FUN_00409b20). Drives the
+  // option-afterimage spawn gate below; read-then-increment order matches the
+  // exe (all.c:2997-3009).
+  private th08AfterimageClock = 0;
   // GameHost's power view must be the live run-global player field. Keeping a
   // second numeric copy here made ECL op119 see zero after replay snapshots,
   // so its full-power branch emitted power drops that spawnItem then converted
@@ -2217,6 +2230,33 @@ export class StageScene implements GameHost {
     // already armed when the message began.
     this.updatePlayerBullets();
     this.firePlayerBullets(allowShotSpawnThisTick);
+    // TH08 option afterimages (exe FUN_00407400 @ all.c:2997-3004): while the
+    // player-manager tick counter satisfies counter%3==0 && counter>699, the
+    // player tick spawns 12 effect-62 VMs, one per option-trail point
+    // (player-manager +0x6480), with color 0x20ffffff. Scheduler position
+    // matters: the player callback (priority 8) runs BEFORE the enemy manager
+    // (priority 10, whose ins_139 emissions request effect-51) and the effect
+    // manager (priority 11, which frees dead slots), so the afterimages get
+    // first pick of each frame's freed slots — that ordering is what
+    // throttles effect-51 to the native ~0.76/frame (measured via
+    // /proc/pid/mem: native n62 steadies 276-288, n51 ~180).
+    // The trail is written only while the option-formation radius gate
+    // (+0xaec) is active — never in replay/demo play, where every afterimage
+    // piles at (0,0,0) — so the port spawns at the origin and leaves the
+    // trail-write semantics unmodeled (visual-only; the script draws 0 RNG
+    // either way). The +0xb24<2 gate pauses spawning from 60 frames into an
+    // ENEMY spell declaration (FUN_00415ce0/00416ad0; player bombs never arm
+    // +0xb24) until the banner releases (~frame 100).
+    {
+      const clock = this.th08AfterimageClock++;
+      if (clock % 3 === 0 && clock > 699) {
+        const declAge = this.spellcard?.declAge ?? -1;
+        const declSuppress = declAge >= 60 && declAge < 100;
+        if (!declSuppress) {
+          this.spawnEffectParticles(62, 0, 0, 12, 0x20ffffff);
+        }
+      }
+    }
     // FUN_0041ed50 (priority 10) and the generic effect manager (priority
     // 11) do NOT honor the TH07 dialogue freeze: invisible ECL controllers,
     // enemies, movement/collision and ambient effects continue. The only
@@ -4555,6 +4595,10 @@ export class StageScene implements GameHost {
       this.drawSpellBackground(r);
       this.markPass('background');
       for (const p of this.particles) {
+        // Effect 62 (option afterimages) is pool-pressure only: the native
+        // VMs sit at world (0,0,0) and show nothing on screen in practice
+        // (userdemo-t100 corner region reads dark), so they are not drawn.
+        if (p.effectId === 62) continue;
         const alpha = 1 - p.age / p.life;
         r.ctx.globalAlpha = alpha * 0.8;
         r.ctx.fillStyle = p.kind === 'snow' ? '#cde' : '#fff';
