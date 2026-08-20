@@ -3185,6 +3185,7 @@ export class StageScene implements GameHost {
     const t8 = e.ecl.th08;
     if (!t8?.familiar || e.dead) return;
     const form = this.playerObj.th08Form;
+    const wasMaterialized = t8.sideBit === 0; // bit 11 BEFORE this tick's re-sync
     if (t8.sideBit !== form) {
       const toYoukai = form === 1;
       // FUN_0042c420's transition colors as ARGB -> our rgb multiplier +
@@ -3210,8 +3211,11 @@ export class StageScene implements GameHost {
     // counts 1 on the first tick, so the gate lands on ODD e.frame).
     // Measured against the native draw counter: 5 random ops x 2 u16 = 10
     // draws per arm, 4-6 arms per second frame from the six Sub12 orbiters
-    // at stage-1 f1590+.
-    if (t8.sideBit === 0 && (t8.flags2 & 2) !== 0 && e.frame % 2 === 1) {
+    // at stage-1 f1590+. The bit-11 read uses the PRE-flip state:
+    // FUN_0042c420 re-syncs bit 11 only at the function's END
+    // (all.c:21179-21180), so on a flip frame the materialized branch
+    // still runs.
+    if (wasMaterialized && (t8.flags2 & 2) !== 0 && e.frame % 2 === 1) {
       this.spawnEffectParticles(38, e.x, e.y, 1, 0xffffffff);
     }
     if (!t8.markerHandle) {
