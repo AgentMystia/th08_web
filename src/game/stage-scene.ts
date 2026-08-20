@@ -150,7 +150,10 @@ const EFFECT_SCRIPT_LIFE: Record<number, number> = {
   4: 30, 5: 30, 6: 30, 7: 30, 8: 30, 9: 30, 10: 30, 11: 30,
   12: 40, 13: Infinity, 14: Infinity, 15: Infinity,
   17: 60, 18: 240, 19: 120, 20: 300, 21: 40, 22: 90,
-  24: Infinity, 26: 300, 27: 300, 29: 30, 30: 300, 31: 300,
+  24: Infinity, 26: 300, 27: 300,
+  // TH08 form/focus tints (28/29, player) + familiar materialize flashes
+  // (30/31): on-disk scripts -93..-90 all remove at frame 10.
+  28: 10, 29: 10, 30: 10, 31: 10,
   32: 90, 33: 120,
   // TH08 effect 51: etama script 73 removes at frame 241.
   51: 241,
@@ -2081,14 +2084,19 @@ export class StageScene implements GameHost {
     const fx = p.pendingTh08FormEffect;
     p.pendingTh08FormEffect = 0;
     if (fx === 28) {
-      this.spawnTh08Effect(57, p.x, p.y, 90, { color: 0x8080ff });
+      this.spawnEffectParticles(28, p.x, p.y, 1, 0x808080ff);
     } else if (fx === 29) {
-      this.spawnTh08Effect(58, p.x, p.y, 90, { color: 0xff8080 });
+      this.spawnEffectParticles(29, p.x, p.y, 1, 0x80ff8080);
     }
     const aura = p.pendingTh08Aura;
     p.pendingTh08Aura = null;
     if (aura === 'in') {
       this.th08AuraHandle?.release();
+      // FUN_00425870 arms the aura into the effect manager's dedicated
+      // (non-rotating) slot 0x282: FUN_004069f0 runs the script's t0 pass —
+      // etama archive 54 (on-disk -96) holds ONE random op (ins_60 = 2 u16
+      // draws, the arm-time scale roll). Consume the same 2 draws here.
+      this.rng.f();
       const actor = { x: p.x, y: p.y, angle: 0, state: 1 };
       this.th08AuraActor = actor;
       this.th08AuraHandle = this.th08Effects.spawnHandle({
@@ -3182,9 +3190,8 @@ export class StageScene implements GameHost {
       // FUN_0042c420's transition colors as ARGB -> our rgb multiplier +
       // alpha: 0x80303080 (blue, player -> youkai) / 0x80803030 (red,
       // player -> human).
-      this.spawnTh08Effect(
-        toYoukai ? 60 : 59, e.x, e.y, 60,
-        { color: toYoukai ? 0x303080 : 0x803030, alpha: 0x80 / 255 }
+      this.spawnEffectParticles(
+        toYoukai ? 31 : 30, e.x, e.y, 1, toYoukai ? 0x80303080 : 0x80803030
       );
       t8.markerHandle?.interrupt(toYoukai ? 2 : 1);
       this.playSfx(toYoukai ? 40 : 39); // se_ophide / se_opshow
@@ -4465,6 +4472,14 @@ export class StageScene implements GameHost {
     for (const it of this.items) {
       if (!it.dead) {
         this.items[w++] = it;
+      } else if (this.th08ItemPool) {
+        // Release the spawn-pool slot HERE, at the compact that removes the
+        // entity — syncItemSlots only sees entities still in this.items, so
+        // deferring to it leaked every collected/despawned item's slot (the
+        // pool filled monotonically: 378 live marks vs the 3-entity truth at
+        // stage-1 f2700, which then made later time-orb probes fail).
+        const slot = this.th08ItemPool.items[it.poolSlot];
+        if (slot) slot.active = false;
       }
     }
     this.items.length = w;
