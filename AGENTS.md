@@ -101,6 +101,12 @@ Mechanics, all proven against the v1.00d binary (asm offsets cited inline):
   commands on stdin) but any breakpoint (software or hardware) kills the
   game with 0xC0000005 on the first cont (suspected .text integrity
   self-check). scripts/native-trace.mjs's header records the details.
+  CONFIRMED (2026-08-20): a .text patch (a 5-byte JMP hook at FUN_0043ecc0
+  with a proper appended RWX section, scripts/tmp pe-patch) loads fine but
+  the game then hangs BEFORE the RNG init (0x164d520 stays 0) — the
+  integrity check runs at startup. Any .text instrumentation (breakpoints,
+  code-cave hooks) is therefore dead on this host; the only native channel
+  is read-only /proc/pid/mem state polling (memtrace below).
 - The f997 (stage 1) / f1168 (stage 2) earliest divergences are both
   auto-fire-family volley bullets with sub-3px contacts. A replay probe
   (player shifted 8px down at f986-991, native demo) survives — the native
