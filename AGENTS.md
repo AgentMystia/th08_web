@@ -109,7 +109,132 @@ Mechanics, all proven against the v1.00d binary (asm offsets cited inline):
   Root (volley phase / creep / template origin) is unpinable without the
   slot trace; documented as the standing residual for a healthier host.
 
-### TH08 vertical-slice checkpoint (2026-08-15)
+### 2026-08-20 second convergence pass — native /proc/pid/mem slot tracing
+(commits b070851..e337630; verifier earliest divergence driven
+**f997 → f2873** on stage 1, and the roots of five independent defect
+classes pinned and fixed, each proven against the v1.00d binary AND a
+native per-frame trace)
+
+**The native slot-trace breakthrough.** Breakpoint tracing is dead on this
+host (§ above), but it turns out to be unnecessary: the game runs under
+wine on this host, and its ENTIRE live state is readable from Linux with
+zero cooperation from the target. Recipe (scripts/native-memtrace.mjs):
+- yama ptrace_scope=1 + no CAP_SYS_PTRACE: /proc/pid/mem only opens for
+  DESCENDANTS of the reader. wine forks game processes from wineserver,
+  so keep wineserver in the foreground as the tracer's child
+  (`wineserver -f`, binary at /usr/lib/x86_64-linux-gnu/wine/wineserver) —
+  Th08.exe becomes a grandchild and /proc/<pid>/mem opens read-only.
+- The exe loads at its preferred base 0x400000 under wine (validate by
+  reading MZ and the quota table at 0x4c77f0 =
+  2000/2500/2700/3000,6500,7200×3).
+- Frame sync: ReplayInf = *(u32*)0x18b8a28; the playback FRAME COUNTER is
+  u32 @ ReplayInf+0 (FUN_00452550's *param_1; job+0x50 is the input
+  cursor). Poll it; it advances once per replay frame. Zero missed frames
+  at 60fps with a full bullet-array pread per frame.
+- Player object (static) = 0x17d5ef8; collision center = +0x2b4/+0x2b8,
+  AABB at +0x38c..+0x39c (center ± 0.825), hitbox half-extents at +0x3d4.
+  Player quad/attack pool (FUN_0044de60/4df00, the bullet-kill quads) at
+  player+0xbb834, 0xC0 × 0x40: [0]=x [1]=y [2]=radius [3]=growth/frame
+  [9]=lifetime-countdown [10]=type(param6) [0xc]=kills [0xf]=active.
+  Player-shot pool at player+0xbe838, 0x80 × 0x484: pos +0x2a4/+0x2a8,
+  vel +0x43c/+0x440, alive i16 +0x462, type +0x464.
+- Bullet manager (static) = 0xf54e90; array at mgr+0x1a880, 1536 × 0x10b8
+  (asm 0x431254/0x4312b7): state u16 +0xdb8 (0 free, 1 normal, 2/3/4
+  spawn transition, 5 dying), pos +0xd44/+0xd48, hitbox size +0xd34,
+  type +0xd42, proto +0x224, cmd flags +0xdac, timer +0xda8, vel
+  +0xd50/+0xd54. Slot iteration is 0,1535..1 (backward with wrap).
+- Enemy manager (static) = 0x577f20; enemy[i] = mgr+(i+1)*0x53d0, 480
+  slots: pos +0x2d88/+0x2d8c (live = origin(+0x2d40) + logical(+0x2d34)),
+  hp +0x2dfc, flags2 +0x3324, form-rank +0x3330, parent +0x2da4, ECL ctx
+  = *(enemy+0x2ca0) (clock ctx+4, wait timer ctx+0x90), rank-lerp bounds
+  +0x2dec/+0x2df0.
+- RNG state = u16 seed at 0x164d520 (FUN_0043ecc0; boot-seeded by
+  timeGetTime at all.c:34288, stage-restored from the T8RP block's
+  +0x1a u16 by FUN_00453be0 at asm 0x452f8f — so the demo's per-frame
+  seed IS the recording's stream, deterministic and frame-exact once you
+  poll it at the frame boundary).
+- The replay playback feed has a ONE-FRAME input latency (jobs run
+  descending priority: player(9) before the feed(6)), so native demo
+  state at counter N == live frame N-1. EVERY native/sim comparison must
+  apply native(f) = sim(f-1); verified to 0.0000px over 165 frames.
+
+**Five root fixes landed from the traces:**
+1. Familiar master-death bullet-kill quads (commit 9414953): on the
+   master's death the engine registers one FUN_0044df00 quad per swept
+   child (r32, +2/frame, 8 frames, param6 7|9 by flags2 bit1) plus one at
+   the master (r32, +1/frame, 16 frames, param6 7); the enemy-bullet tick
+   probes this pool (FUN_00449ff0) and state-5s every live bullet inside
+   the radius (no item award — DAT_018b8988 = -1 outside bomb/spell
+   context). Measured: two quads swept ~85 bullets over 8 frames at
+   replay f922, erasing the f880 ring's down-going band — the f997/f1011/
+   f1338 phantom killers. The port's old stand-in (16 direct time orbs,
+   no kill semantics) is gone. The per-child local_30 orb burst with its
+   FUN_0042f270/2f230 count tiers stays unmodeled (§7).
+2. Familiar tangibility gates + pos-inherit orbit tracking (commit
+   5e78608): updateTh08TargetCaches and collidePlayerShots both skip
+   ethereal familiars (flags bit 11; all.c:21448-21450) — measured: the
+   native target cache jumps to the master during the f1680-1698 youkai
+   window, and the master took ~280 damage through the ghosts vs our ~54.
+   And all.c:21350-21355's origin-rewrite (movement ORIGIN follows the
+   parent's logical pos every tick while flags bit 9 + parent link live)
+   — our frozen spawn-point orbits rode a constant 3.33px high (measured,
+   x exact to 0.00), slipping shot-hit timing by a frame and letting the
+   last familiar live to fire its f1718 Sub9 volley (the f1759 killer).
+3. ins_63 teleport sync (commit e337630): ins_63 setPos now refreshes the
+   loop-head snapshot immediately; with the stale value the stage-1
+   midboss's ins_63(96,-48) -> ins_64(60,4,192,128) displacement collapsed
+   to (0,144) and parked her at (96,96), out of the player's shot column
+   (native: (102.29,-36.46) at eased t=2/60, melting ~1400 hp through
+   f2995-3070). Verifier f2873 -> f3221.
+4. Rank-lerp bounds split (commit e337630): the ECL-context init writes
+   ±0.15 (all.c:19955-19956, native midboss reads -0.15/+0.15 at f2995);
+   FUN_00415c80's phase-entry/spell/death-callback reset writes ±0.5
+   (all.c:9249-9254). The port used ±0.5 unconditionally (midboss f2995
+   volley: native 1.962 = 2.0 - 0.038 at bounds ±0.15/rank 12, ours 1.875
+   at ±0.5). phaseTransition and the death-callback entry now reset
+   fireRankSpeed* to ±0.5; spawn init is ±0.15. th08-ecl-vm.test.mjs's
+   fire signatures recalibrated (native ring bullets: 2.0344 at rank 9).
+5. Timeline-spawn t0 hp ordering (commit e337630): the t0 core now runs
+   at the template default (hp=0 with a life-carrying spawn, placeholder
+   1 otherwise) and the timeline life is applied AFTER the core — measured
+   that Sub13 fairies read hp=0 through their t0 cascade, so their t0
+   ins_96 is blocked (`if (0 < hp)`) and the machine-gun only re-fires
+   through the auto-fire deadline. (ins_57/op110 subs still clobber to the
+   timeline life afterward, wave masters 150/400.)
+
+**The standing residual: the RNG draw economy (stage 1 at f2873, stage 2
+at f1051 — both auto-fire-phase volleys, ins_106's u32%deadline).** The
+auto-fire phase is the ONLY RNG-driven pattern element (every other
+divergence class above was deterministic). Measured against the native
+seed stream (0x164d520 polled at frame boundaries):
+- Native consumes ~26-31 u16 draws/frame baseline with a ~20-frame
+  oscillation (wave-spawn bursts spike 40-52/frame), plus ~4200 draws of
+  stage-init bootstrap by f100. Ours: ~11.4/frame + ~170 bootstrap.
+- Our per-frame stream is ~90% effect-51 emission (the ambient Sub14's
+  ins_139(51,·) bursts: 6×16 at t=4-24 then 4 particles every 4 frames
+  forever; each particle = 5 ANM random ops × 2 u16 = 10 draws — cost
+  verified against etama script idx 73 (on-disk id -77), which matches
+  the native effect map DAT_004c6d30 entry 51 -> script 0x49).
+- So the deficit is NOT effect-51's cost or cadence (those match); it is
+  the long tail of unmodeled per-frame consumers (enemy/effect/item
+  spawn-init draws, fire volley spreads, drop rolls, VM-init draws) plus
+  the ~4000-draw init gap. Matching it is the TH07 "RNG budget" task for
+  TH08: profile per-consumer draw counts against the frame-aligned native
+  seed stream (scripts/native-memtrace.mjs now logs rng per frame) and
+  replicate each consumer's draw cost. Until the streams align, every
+  u32%deadline auto-fire phase is a lottery and the phantom deaths keep
+  moving; there is no local fix — DO NOT paper over it with phase
+  clamps or special cases (forbidden by the task contract).
+- The stage-2 entry seed check is the total budget oracle: recording's
+  stage-2 entry = 0x32fb; ours currently diverges at f2873 with the
+  stream ~15k draws apart.
+
+Verifier state at this checkpoint: npm run check/build/test all green
+(130/130); stage 1 earliest divergence f2873 (auto-fire volley at
+spawn+2 vs native spawn+52); stage 2 f1051. The replay-golden CI job
+stays advisory.
+
+
 
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
 Border Team, dialogue, HUD, and the replay harness are all live.
