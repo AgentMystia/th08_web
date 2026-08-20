@@ -210,6 +210,12 @@ seed stream (0x164d520 polled at frame boundaries):
 - Native consumes ~26-31 u16 draws/frame baseline with a ~20-frame
   oscillation (wave-spawn bursts spike 40-52/frame), plus ~4200 draws of
   stage-init bootstrap by f100. Ours: ~11.4/frame + ~170 bootstrap.
+  Per-window (native vs ours, LFSR-walk from 0x8fbe to each frame seed):
+  f100-520 opening waves 26 vs 10 (deficit ~16/f), f520-1300 quiet
+  10 vs 11 (MATCHED), f2500-2700 Sub13 wave 30 vs 14 (deficit ~16/f).
+  So the deficit scales with ACTIVITY (many live enemies + volleys), not
+  a constant per-frame rate: it lives in per-enemy / per-spawn / per-event
+  consumers, and is ~zero in quiet windows.
 - Our per-frame stream is ~90% effect-51 emission (the ambient Sub14's
   ins_139(51,·) bursts: 6×16 at t=4-24 then 4 particles every 4 frames
   forever; each particle = 5 ANM random ops × 2 u16 = 10 draws — cost
