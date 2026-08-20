@@ -139,7 +139,10 @@ const EFFECT_SCRIPT_LIFE: Record<number, number> = {
   // TH08 effect 51: etama script 73 removes at frame 241.
   51: 241,
   // TH08 effect 62: etama script 75 removes at frame 72 (1+1+70).
-  62: 72
+  62: 72,
+  // TH08 effect 38 (familiar white sparkle): on-disk script -79 removes at
+  // frame 20 (its +20 ins_1).
+  38: 20
 };
 
 // TH08 sfx ids: .data 0x4c81b0 (36 filename pointers, loaded by the loop at
@@ -3143,6 +3146,21 @@ export class StageScene implements GameHost {
       t8.sideBit = form;
       t8.flags = (t8.flags & ~0x800) | (form << 11);
     }
+    // all.c:21164-21166: while materialized (flags bit 11 clear), familiars
+    // flagged by ins_83(1) (+0x3328 bit 1, our flags2 bit 1) emit effect 0x26
+    // (etama archive script 71, on-disk id -79) at the familiar's live
+    // position every second tick of the enemy+0x2e14 timer
+    // (FUN_0040ebc0(2): current changed && current % 2 == 0; the timer ticks
+    // once per enemy tick from 0 at construction and the gate reads it
+    // PRE-tick, so the native fires on the familiar's 1st, 3rd, 5th... tick —
+    // measured: cur=0 on the first-alive tick, then cur=2, 4. Our e.frame
+    // counts 1 on the first tick, so the gate lands on ODD e.frame).
+    // Measured against the native draw counter: 5 random ops x 2 u16 = 10
+    // draws per arm, 4-6 arms per second frame from the six Sub12 orbiters
+    // at stage-1 f1590+.
+    if (t8.sideBit === 0 && (t8.flags2 & 2) !== 0 && e.frame % 2 === 1) {
+      this.spawnEffectParticles(38, e.x, e.y, 1, 0xffffffff);
+    }
     if (!t8.markerHandle) {
       const etama = this.assets.anms.etama;
       const ref = archiveScript(etama, 48);
@@ -3211,6 +3229,17 @@ export class StageScene implements GameHost {
       c => !c.dead && c.ecl.parent === e && c.ecl.th08?.familiar
     );
     if (children.length === 0) return;
+    // FUN_0042adb0(1)'s per-child loop (all.c:20446-20528): each swept child
+    // in chain order gets the kill quad FIRST (FUN_0044df00, no draws), then
+    // its time-orb burst — local_30 orbs scattered by (frand01*(2*local_30),
+    // frandSigned*pi) around the CHILD, each spawned as FUN_004400a0(7,3)
+    // (state-3 velocity draws only when the item pool has a slot). The count
+    // tier for stage 1-2 (FUN_0042f270/2f230 both read the difficulty-side
+    // byte as < 4): childCount < 8 ? childCount*2+10 : 26. Then the child's
+    // own drop runs FUN_0042bea0(0) with +0x3304 = 8 (pointSmall, param_4=0)
+    // plus its (dropEffectId+4) effect burst, and the alternating enep pop.
+    const childCount = children.length;
+    const orbTier = childCount < 8 ? childCount * 2 + 10 : 26;
     for (const c of children) {
       const ct8 = c.ecl.th08!;
       ct8.flags |= 0x400;
@@ -3219,11 +3248,27 @@ export class StageScene implements GameHost {
       ct8.markerHandle?.release();
       ct8.markerHandle = null;
       ct8.markerActor = null;
+      this.armTh08DeathClearZone(c.x, c.y, 32, 2, 8);
+      for (let i = 0; i < orbTier; i++) {
+        const radius = this.rng.f() * (orbTier * 2);
+        const angle = (this.rng.f() * 2 - 1) * Math.PI;
+        this.spawnItem(
+          'time',
+          Math.fround(c.x + Math.cos(angle) * radius),
+          Math.fround(c.y + Math.sin(angle) * radius),
+          {}
+        );
+      }
+      this.spawnEffectParticles((ct8.dropEffectId ?? 0) + 4, c.x, c.y, 3, 0xffffffff);
+      this.spawnItem('pointSmall', c.x, c.y, {});
       this.playSfx(2 + (c.id & 1));
     }
-    for (let i = 0; i < children.length * 2; i++) {
+    // Master tail (all.c:20530-20544): two time orbs per swept child around
+    // the MASTER (frand01*128, frandSigned*pi), then the master's own
+    // (r32, +1/frame, 16-frame) kill quad.
+    for (let i = 0; i < childCount * 2; i++) {
       const radius = this.rng.f() * 128;
-      const angle = this.rng.f() * Math.PI;
+      const angle = (this.rng.f() * 2 - 1) * Math.PI;
       this.spawnItem(
         'time',
         Math.fround(e.x + Math.cos(angle) * radius),
@@ -3231,15 +3276,6 @@ export class StageScene implements GameHost {
         {}
       );
     }
-    // FUN_0044df00 pool registrations (all.c:20497/20542): every swept child
-    // drops a (pos, r=32, +2/frame, 8-frame) bullet-kill quad — param6 is 7
-    // with flags2 bit1 set, 9 otherwise — and the master its own (pos, r=32,
-    // +1/frame, 16-frame, param6 7). These are the regions that sweep the
-    // dead master's danmaku (native replay f922: ~85 bullets state-5'd over
-    // 8 frames); the old direct 16-orb spawn was a stand-in with no kill
-    // semantics and is removed (the per-child local_30 orb burst with its
-    // pool-pressure count tiers stays unmodeled — §7).
-    for (const c of children) this.armTh08DeathClearZone(c.x, c.y, 32, 2, 8);
     this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16);
   }
 
