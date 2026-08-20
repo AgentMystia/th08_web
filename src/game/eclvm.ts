@@ -942,6 +942,22 @@ export class StageRuntime {
     // newly written rate on that same core tick (FUN_00436acc call sites),
     // while the periodic pre-dispatch timer above used the entry rate.
     const tailRate = game.slowRate ?? 1;
+    // Th08 pos-inherit tracking (all.c:21350-21355): while the parent link
+    // (enemy+0x2da4) lives and flags bit 9 (0x200) is set, the enemy's
+    // movement ORIGIN is rewritten from the parent's logical position every
+    // manager tick — a familiar's orbit center follows its master instead of
+    // freezing at the spawn point. Measured on the native replay: the wave
+    // master settles 3.33px below its f1590 position and every orbiting
+    // familiar carries exactly that offset (native-memtrace f1589-1717).
+    const t8move = s.th08?.movement;
+    if (t8move && (s.th08!.flags & 0x200) !== 0) {
+      const parent = e.ecl.parent;
+      if (parent && !parent.dead) {
+        t8move.origin.x = Math.fround(parent.x);
+        t8move.origin.y = Math.fround(parent.y);
+        t8move.origin.z = Math.fround(parent.z);
+      }
+    }
     // Th07.exe (v1.00b): both FUN_0041da10 and FUN_0041db60 call the complete
     // FUN_0040f6c0 core synchronously. The controller is inside that core;
     // only FUN_0041d050 position integration is manager-only. Consequently a

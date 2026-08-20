@@ -1576,6 +1576,12 @@ export class StageScene implements GameHost {
     let lunge: { x: number; y: number } | null = null;
     for (const e of this.enemies) {
       if (e.dead || !e.ecl.interactable) continue;
+      // all.c:21448-21450: the damage/contact/pointer-cache block is gated on
+      // flags bit 11 == 0 — an ETHEREAL familiar (player in youkai form) is
+      // invisible to BOTH caches. Measured on the native replay (f1680-1698):
+      // while the familiars' bit11 read 1 the target cache jumped to the
+      // (304,104) master instead of the lower familiars.
+      if (e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1) continue;
       if (!primary || e.y > primary.y) primary = { x: e.x, y: e.y };
       if (Math.abs(e.x - 224) <= 64 && (!lunge || e.y < lunge.y)) lunge = { x: e.x, y: e.y };
     }
@@ -2985,6 +2991,12 @@ export class StageScene implements GameHost {
     // (all.c:21448 gates the scan on it clear). Controllers like stage-1's
     // ambient Sub14 hold it set permanently.
     if (e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) return;
+    // Same all.c:21448 block: flags bit 11 (ethereal familiar, player in
+    // youkai form) skips the shot scan entirely — shots fly THROUGH to the
+    // enemies behind. Without this gate our shots die on the ghost with the
+    // damage merely vetoed, starving the master (native replay f1680-1698:
+    // the master took ~280 damage through the ethereal familiars).
+    if (e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1) return;
     if (!e.ecl.shotCollision || !e.ecl.interactable || e.ecl.invisible || e.dead) return;
     this.collidePlayerShotsInBox(e, e.ecl.hitbox);
     const second = e.ecl.hitbox2;
