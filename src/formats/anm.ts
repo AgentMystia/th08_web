@@ -6,7 +6,7 @@ import type { Rng } from '../core/rng';
 //
 // Entry header layout: anm_header06_t (64 bytes) — see thtk/extlib/thtypes.
 const warnedAnmOps = new Set<string>();
-function warnUnhandledOp(message: string): void {
+export function warnUnhandledOp(message: string): void {
   if (warnedAnmOps.has(message)) return;
   warnedAnmOps.add(message);
   console.warn(`[anm] ${message}`);

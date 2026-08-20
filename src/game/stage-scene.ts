@@ -10,7 +10,7 @@ import {
 import type { InputFrame } from '../core/input';
 import { Renderer, PLAYFIELD, SCREEN_W } from '../gfx/renderer';
 import type { GameAssets } from './assets';
-import { Anm, AnmRunner, type AnmFrame } from '../formats/anm';
+import { Anm, AnmRunner, warnUnhandledOp, type AnmFrame } from '../formats/anm';
 import { bgQuadCorner, orderBgJobsByVisibility, type Vec3 } from '../formats/std';
 import { TH08_DATA } from '../data/th08-data';
 import type { AudioBus } from '../audio/audio';
@@ -88,27 +88,30 @@ const TH08_ITEM_TYPE_SLOT: Partial<Record<ItemType, number>> = {
 //      FUN_004486e0 during allocation.
 // Ignoring (2) undercounted ambient families shared by stages 2-6 even when
 // the veto function itself was modeled exactly.
+// TH08 (v1.00d) per-effect spawn-time RNG cost in u16 draws, measured
+// exhaustively from the binary:
+//   cost = 2 * (ins_59 + ins_60 ops in the effect's etama script)
+//        + draws in the effect's DAT_004c6d38 init callback.
+// The ANM VM has exactly two random ops (Th08.exe FUN_0045ea00 cases
+// 0x3c/0x3d = disk ops 59/60, one u32 each = 2 u16); the script cost runs on
+// the VM's first tick and the callback cost runs inside FUN_00425430, both
+// in the spawn frame. Init-callback costs measured from the binary:
+// FUN_00426280=16 (id 51), FUN_00426720=16 (id 63), FUN_00426e70=20 (id 19),
+// FUN_00425d70=4 (ids 4-11), FUN_00425ea0=4 (id 3), FUN_004270c0=4 (ids
+// 21/26), FUN_00426b20=2 (ids 17/18/27); every other callback draws 0
+// (verified: FUN_00425fe0/4272e0/427260/411720/411a80 and the d2 per-frame
+// updaters FUN_004264f0 et al. are all draw-free). Native /proc/pid/mem
+// draw-counter (0x164d524) cross-check f2600-2915: firefly emissions land
+// ~26/arm, shot-impact effects ~4/arm.
 const EFFECT_DRAW_COST: Record<number, number> = {
-  // Th07.exe v1.00b effect table + etama.anm entry-scoped scripts.
-  0: 0, 1: 0, 2: 0,
-  3: 4, 4: 4, 5: 4, 6: 4, 7: 4, 8: 4, 9: 4, 10: 4, 11: 4,
-  // Effect 12 (g_EffectMapping[12] = {0x2bb, NULL, NULL}) has no callbacks
-  // and its ANM script contains no random ops: zero draws. The four raw
-  // u16s observed on the death frame are Die()'s RegenerateGameIntegrityCsum,
-  // not this effect (see onPlayerHit).
+  0: 0, 1: 0, 2: 0, 3: 4, 4: 4, 5: 4, 6: 4, 7: 4, 8: 4, 9: 4, 10: 4, 11: 4,
   12: 0, 13: 0, 14: 0, 15: 0,
-  17: 6, 18: 6, 20: 22, 22: 6, 23: 0,
-  26: 14, 27: 12, 29: 6, 30: 16, 31: 16, 32: 6, 33: 6,
-  // TH08 effect 51 (the stage-1 ambient firefly family, etama script 73):
-  // five ANM random ops (2x ins_60 float + 3x ins_59 int) at two u16 draws
-  // each (Global.hpp GetRandomF32/U32InRange).
-  51: 10,
-  // TH08 effect 62 (the option-afterimage family, etama script 75): the
-  // script has no random ops — zero draws. Its role is pool PRESSURE: 12
-  // VMs every 3 player ticks from tick 702 fill the 512-slot pool to
-  // ~510/512, throttling effect-51 emission to the native rate (measured
-  // via /proc/pid/mem: native n62 steadies at 276-288, n51 at ~180).
-  62: 0
+  17: 6, 18: 6, 19: 20, 20: 0, 21: 8, 22: 2, 23: 0, 24: 0, 25: 0,
+  26: 10, 27: 6, 28: 0, 29: 0, 30: 0, 31: 0, 32: 0, 33: 0, 34: 0,
+  35: 0, 36: 0, 37: 0, 38: 10, 39: 0, 40: 4, 41: 0, 42: 0, 43: 0, 44: 0,
+  45: 0, 46: 0, 47: 8, 48: 0, 49: 0, 50: 0, 51: 26, 52: 0, 53: 0, 54: 0,
+  55: 0, 56: 0, 57: 0, 58: 0, 59: 0, 60: 0, 61: 0, 62: 0, 63: 26, 64: 0,
+  65: 0
 };
 const ENEMY_POOL_CAP = 0x1e0;
 const PLAYER_BULLET_POOL_CAP = 0x60;
@@ -1325,100 +1328,13 @@ export class StageScene implements GameHost {
       if (this.effectSlots[slot] !== null) continue;
 
       let particle: EffectParticle;
-      if (effectId === 20 || effectId === 26 || effectId === 27 ||
-          effectId === 30 || effectId === 31) {
-        // Th07.exe DAT_00494fb0: ids 20/26/27/30/31 all install
-        // FUN_0041a050 as their per-frame gate. Their spawn initializers are
-        // FUN_0041a210/a600/a8d0/ab50/ad80 respectively. They are genuine
-        // world-space particles, not fixed 300-frame screen sprites: omitting
-        // the shared camera-cone/ground gate left hundreds of stale id30/31
-        // slots alive in Stage 5 and changed which later RNG-visible effects
-        // the rolling 400-slot allocator could accept.
-        const camera = this.runtime.std.camera();
-        const facing = this.runtime.std.facing();
-        const r = (): number => this.rng.f();
-        const scaled = (value: number): number => Math.fround(Math.fround(value) * this.slowRate);
-        const origin = (dx: number, dy: number, dz: number) => ({
-          x: Math.fround(camera.x + facing.x / 2 + dx),
-          y: Math.fround(camera.y + facing.y / 2 + dy),
-          z: Math.fround(camera.z + facing.z / 2 + dz)
-        });
-        const launchX = Math.fround(seed?.x ?? 0);
-        const launchY = Math.fround(seed?.y ?? 0);
-        const launchZ = Math.fround(seed?.z ?? 0);
-        let pos: { x: number; y: number; z: number };
-        let vx: number;
-        let vy: number;
-        let vz: number;
-        let ax = 0;
-        let ay = 0;
-        let az = 0;
-        if (effectId === 20) {
-          // FUN_0041a210: ten frand calls plus one u32 tint branch.
-          pos = origin(r() * 120 - 60, r() * 200 - 100, r() * 100 - 100);
-          vx = scaled(launchX + r() * 0.06 - 0.03);
-          vy = scaled(launchY + r() * 0.06 - 0.03);
-          vz = scaled(launchZ + r() * 0.1 + 0.03);
-          ax = scaled(r() * 0.0002 - 0.0001);
-          ay = scaled(r() * 0.0002 - 0.0001);
-        } else if (effectId === 26 || effectId === 27) {
-          // FUN_0041a600 / FUN_0041a8d0. The caller's launch-x is the
-          // authored orbital divisor (+0x258); real stage data keeps it
-          // non-zero. Both variants bake slowRate into their velocity once.
-          const dx = Math.fround(r() * 160 - 80);
-          const dy = Math.fround(r() * 160 - 80);
-          // Both FUN_0041a600 and FUN_0041a8d0 stage world Z as
-          // frand*100-50 (Th07.exe v1.00b @ 0x41a632 / 0x41a8ee). The old
-          // -frand-50 collapsed every particle into a one-unit slab, making
-          // id27 leave the shared 400-slot pool far too early. At Stage-4
-          // PRE17527 that exposed 24 false free slots and admitted eight
-          // extra RNG-visible id17 particles.
-          pos = origin(dx, dy, Math.fround(r() * 100 - 50));
-          vx = scaled(-dy / launchX);
-          vy = scaled(dx / launchX);
-          vz = scaled(effectId === 26 ? r() * 0.1 + 0.09 : -(r() * 0.2) - 0.06);
-          // FUN_0041a600 has one additional unconditional u32 tint branch.
-          // It occurs after the two angle draws below.
-        } else if (effectId === 30) {
-          // FUN_0041ab50 deliberately does not slowRate-scale its launch
-          // vector; its per-frame manager clock supplies the rate behavior.
-          // Th07.exe (v1.00b) @ 0x41aba1-0x41abb0 stages world Z as
-          // frand*100-100. The old 1-frand range kept Extra snow inside the
-          // camera cone for the wrong lifetime and silently changed fixed-
-          // pool pressure before PRE10621.
-          pos = origin(r() * 160 - 80, r() * 160 - 80, r() * 100 - 100);
-          vx = Math.fround(launchX + r() * 0.06 - 0.03);
-          vy = Math.fround(launchY + r() * 0.06 - 0.03);
-          vz = Math.fround(launchZ + r() * 0.02 + 0.01);
-        } else {
-          // FUN_0041ad80 (id31): falling world flakes with a constant
-          // -0.015 z acceleration. Velocity is spawn-time slowRate baked.
-          pos = origin(r() * 160 - 80, r() * 160 - 80, r() * 200);
-          vx = scaled(launchX + r() * 0.06 - 0.03);
-          vy = scaled(launchY + r() * 0.06 - 0.03);
-          vz = scaled(launchZ - r() * 0.1);
-          az = Math.fround(-0.015);
-        }
-        const angle = Math.fround(r() * Math.PI * 2 - Math.PI);
-        const angularVelocity = Math.fround(r() * 0.031415928 - 0.015707964);
-        if (effectId === 20 || effectId === 26) this.rng.u32();
-        const world = { ...pos, vx, vy, vz, ax, ay, az, angle, angularVelocity };
-        particle = {
-          id: this.id++, poolSlot: slot, effectId,
-          x, y, vx: 0, vy: 0, age: 0, life: 300,
-          color, size: 3, kind: 'snow', world,
-          ...(ownerEnemyId == null ? {} : { ownerEnemyId })
-        };
-      } else if (spec !== undefined) {
-        // Effect ids 22/32 use FUN_0041b020's sentinel branch in addition to
-        // four unconditional ANM time-0 draws. Th07.exe (v1.00b) @ 0x41b02c
-        // compares launch-x with the f64 constant -990.0 @ 0x48ec28: values
-        // <= -990 request a random angle (8 total draws), while ordinary
-        // signed launch vectors are deterministic (6). Treating the low
-        // dword of that f64 as a standalone 0.0 caused every negative half of
-        // Stage 1 Sub51's orbit to overdraw by two.
-        const conditional = effectId === 22 || effectId === 32;
-        const perParticle = conditional ? (seed && seed.x <= -990 ? 8 : 6) : spec;
+      if (spec !== undefined) {
+        // TH08 single-path: every effect id draws EXACTLY its measured
+        // spawn-time cost (script random ops + init callback, see the table).
+        // The first pair of raw u16s only drives the port's fallback visual;
+        // authored lifetime/capacity remains exact. TH08 stages 1-2 never
+        // exercise ids outside the measured table; warn once if one appears.
+        const perParticle = spec;
         // Draw EXACTLY `perParticle` raw u16. The first pair only drives the
         // port's fallback visual; authored lifetime/capacity remains exact.
         let vx = 0;
@@ -1439,29 +1355,23 @@ export class StageScene implements GameHost {
           vx += seed.x * 0.02;
           vy += seed.y * 0.02;
         }
-        const snow = effectId === 26 || effectId === 27 || effectId === 30 || effectId === 31;
         particle = {
           id: this.id++, poolSlot: slot, effectId,
           x, y, vx, vy, age: 0,
           life: EFFECT_SCRIPT_LIFE[effectId] ?? 24,
-          color, size: snow ? 3 : 2, kind: snow ? 'snow' : 'spark',
+          color, size: 2, kind: 'spark',
           ...(ownerEnemyId == null ? {} : { ownerEnemyId })
         };
       } else {
-        // Unrecovered ids 16/25/28 keep the legacy visual/RNG model, but now
-        // still obey the native fixed-pool allocation contract.
-        const isSnow = effectId >= 18;
-        const angle = this.rng.range(Math.PI * 2);
-        const speed = (isSnow ? 0.2 + this.rng.range(0.5) : 0.5 + this.rng.range(2)) * this.slowRate;
+        // TH08: every id used by stages 1-2 is in the measured table. An
+        // unknown id draws 0 (the table's explicit 0 entries are measured,
+        // not defaults) and warns once so new information gets modeled.
+        warnUnhandledOp(`effect ${effectId}: no measured TH08 draw cost, treating as 0`);
         particle = {
           id: this.id++, poolSlot: slot, effectId,
-          x: x + (isSnow ? this.rng.range(384) - 192 : 0),
-          y: y + (isSnow ? this.rng.range(64) - 32 : 0),
-          vx: isSnow ? -0.3 - this.rng.range(0.4) : Math.cos(angle) * speed,
-          vy: isSnow ? 0.7 + this.rng.range(0.8) : Math.sin(angle) * speed,
-          age: 0, life: isSnow ? 240 : 24 + this.rng.u32InRange(16),
-          color, size: isSnow ? 2 + this.rng.range(2) : 3,
-          kind: isSnow ? 'snow' : 'spark',
+          x, y, vx: 0, vy: 0, age: 0,
+          life: EFFECT_SCRIPT_LIFE[effectId] ?? 24,
+          color, size: 2, kind: 'spark',
           ...(ownerEnemyId == null ? {} : { ownerEnemyId })
         };
       }

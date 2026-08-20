@@ -3038,15 +3038,17 @@ export class StageRuntime {
       const type = TH08_ITEM_TYPES[itemDrop];
       if (type) game.spawnItem(type, e.x, e.y, { state: spawnMode });
     }
-    // +0x330c: extra jittered sub-drops (frand*128-64 per axis, one raw draw
-    // choosing power(0) vs point(1) per drop), then the field zeroes.
+    // +0x330c (deathDropB, ins_144 2nd): each sub-drop costs TWO draws
+    // (frand*128-64 per axis, all.c:21006-21013); the type is the
+    // power<128 check (FUN_00422480), which consumes NO draw — type 0
+    // (powerSmall) below 128, type 1 (point) at/above.
     const extra = t?.deathDropB ?? 0;
     if (extra > 0) {
+      const lowPower = game.power < 128;
       for (let i = 0; i < extra; i++) {
         const x = Math.fround(e.x + game.rng.f() * 128 - 64);
         const y = Math.fround(e.y + game.rng.f() * 128 - 64);
-        const typeId = game.rng.u16() < 0x80 ? 0 : 1;
-        game.spawnItem(TH08_ITEM_TYPES[typeId] ?? 'point', x, y, { state: spawnMode });
+        game.spawnItem(TH08_ITEM_TYPES[lowPower ? 0 : 1] ?? 'point', x, y, { state: spawnMode });
       }
       if (t) t.deathDropB = 0;
     }
