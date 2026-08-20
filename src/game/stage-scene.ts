@@ -500,9 +500,17 @@ export class StageScene implements GameHost {
   // orb quads (r24, param5 500, param6 6) share the native pool but ride
   // bombClearRegions above.
   private readonly th08DeathClearZones: {
-    x: number; y: number; radius: number; growth: number; framesLeft: number
+    x: number; y: number; radius: number; growth: number; framesLeft: number;
+    // Quad param6 (all.c FUN_0044df00's 6th arg): the bullet->item
+    // conversion type. A quad-probe hit writes it into player+0xe2a90
+    // (FUN_00449ff0 @ all.c:36505); the bullet's state-5 entry then converts
+    // it — type 9 pays TWO time orbs, any other type > -1 pays one item of
+    // that type (all.c:23597-23651, each FUN_004400a0(.,7,1) forced to the
+    // state-3 velocity draws). The familiar sweep arms 9 (child quads, the
+    // stage-1 masters all hold +0x3324 bit1 clear) and 7 (master quad).
+    convertType: number
   }[] = Array.from({ length: 16 }, () => ({
-    x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0
+    x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0, convertType: -1
   }));
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
   private th08Bomb: Th08BorderBomb | null = null;
@@ -2519,6 +2527,17 @@ export class StageScene implements GameHost {
       const dx = b.x - z.x;
       const dy = b.y - z.y;
       if (dx * dx + dy * dy < z.radius * z.radius) {
+        // Bullet->item conversion on the quad kill (all.c:23597-23651):
+        // the quad's param6 (surfaced via player+0xe2a90) is the item type;
+        // 9 pays two time orbs, any other type > -1 pays one of that type.
+        // Spawn-state bullets defer this to their transition-VM completion
+        // natively (all.c:23589-23644); we convert on the kill frame (§7).
+        if (z.convertType === 9) {
+          this.spawnItem('time', b.x, b.y, {});
+          this.spawnItem('time', b.x, b.y, {});
+        } else if (z.convertType > -1) {
+          this.spawnItem(z.convertType === 7 ? 'time' : 'pointSmall', b.x, b.y, {});
+        }
         return this.beginBulletClearFade(b);
       }
     }
@@ -3055,10 +3074,14 @@ export class StageScene implements GameHost {
             // full 96-slot pool (native Stage 3 processing frame 2811).
             b.runner.frame = 1;
           }
-          // TH08 settle (all.c:40420-40438): the VM re-arms to sprite+0xb
-          // and effect 5 (DAT_004c6d30 -> etama archive script 37) bursts
-          // at the bullet position; velocity is reduced to one eighth.
-          this.spawnTh08Effect(37, b.x, b.y, 60);
+          // TH08 settle (all.c:40425-40438): while the shot is still in its
+          // flying state the VM re-arms to sprite+0xb and FUN_00425430(5)
+          // arms the impact burst in the MAIN effect pool — etama archive
+          // script 37, 30-frame life, 4 draws (init callback FUN_00425d70).
+          // Routing through the pool (not the scripted side layer) is what
+          // feeds the native draw economy + pool pressure; the particle
+          // renders as the spark fallback (§7).
+          this.spawnEffectParticles(5, b.x, b.y, 1, 0xffffffff);
           b.vx /= 8;
           b.vy /= 8;
           this.playSfx(20);
@@ -3248,7 +3271,11 @@ export class StageScene implements GameHost {
       ct8.markerHandle?.release();
       ct8.markerHandle = null;
       ct8.markerActor = null;
-      this.armTh08DeathClearZone(c.x, c.y, 32, 2, 8);
+      // FUN_0044df00 per child (all.c:20497): r32/+2/8 quad; param6 = 7
+      // when the master's +0x3324 bit1 is set, 9 otherwise (the stage-1
+      // masters all run bit1 clear -> 9, paying two time orbs per converted
+      // bullet).
+      this.armTh08DeathClearZone(c.x, c.y, 32, 2, 8, (t8!.flags & 2) !== 0 ? 7 : 9);
       for (let i = 0; i < orbTier; i++) {
         const radius = this.rng.f() * (orbTier * 2);
         const angle = (this.rng.f() * 2 - 1) * Math.PI;
@@ -3276,10 +3303,10 @@ export class StageScene implements GameHost {
         {}
       );
     }
-    this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16);
+    this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16, 7);
   }
 
-  private armTh08DeathClearZone(x: number, y: number, radius: number, growth: number, frames: number): void {
+  private armTh08DeathClearZone(x: number, y: number, radius: number, growth: number, frames: number, convertType = -1): void {
     let zone = this.th08DeathClearZones.find(z => z.framesLeft <= 0)
       ?? this.th08DeathClearZones.reduce((a, b) => (a.framesLeft <= b.framesLeft ? a : b));
     zone.x = x;
@@ -3287,6 +3314,7 @@ export class StageScene implements GameHost {
     zone.radius = radius;
     zone.growth = growth;
     zone.framesLeft = frames;
+    zone.convertType = convertType;
   }
 
   private collideEnemyBody(e: Enemy): void {
