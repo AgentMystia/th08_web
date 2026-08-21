@@ -415,6 +415,15 @@ export class StageScene implements GameHost {
     clear: number; point: number; graze: number; time: number;
     player: number; bomb: number; mult: number; total: number;
   } | null = null;
+  // Tally night-clock count-up (all.c:25480-25503): the advanced-time text
+  // row counts minute-by-minute from the entry clock (gui+0x22e0c) to the
+  // post-advance clock (gui+0x22e08), after a 60-frame beat (gui+0x22e10),
+  // +1 per frame or +4 with Z/Ctrl held. Values are minutes on the native
+  // 12-hour display clock: slot*30 + 660 (all.c:24838, 0x294 = 660).
+  tallyClockEntry = 660;
+  tallyClockShown = 660;
+  tallyClockTarget = 660;
+  private tallyClockBeat = 0;
   spellcard: {
     name: string;
     id: number;
@@ -1019,17 +1028,27 @@ export class StageScene implements GameHost {
     }
   }
 
-  // TH08 Stage-1 clear bonus (Gui update around Th08.exe 0x437000):
-  //   award = 1,000,000 + stageGraze*50 + stagePointItems*5000
-  //           + currentTimeOrbs*100
-  // followed by the integer difficulty and configured-lives multipliers.
-  // The original credits the same award ten times through FUN_004181f0;
-  // each call adds floor(award/10) to the stored score.
+  // TH08 stage-clear bonus (MSG op9 snapshot all.c:24830-24847 + the tally
+  // credit at all.c:25435-25478):
+  //   award = CLEAR_BONUS_BY_STAGE[stage] + stageGraze*50
+  //           + stagePointItems*5000 + currentTimeOrbs*100
+  // The clear base is the per-stage .data table DAT_004c7158 (1M/1.5M/2M/
+  // 2.5M/2.5M/3M/4M/6M/6.66M), NOT a flat 1M. Difficulty multipliers apply
+  // in the exe's integer order: Easy /2, Hard *12/10, Lunatic *15/10,
+  // Extra <<1; Phantasm has NO multiplier arm (all.c:25449-25460) even
+  // though its tally rank line prints "*2.0" — a native display quirk,
+  // reproduced. The configured-lives penalty follows (3/4/5/6 →
+  // *5/10, *2/10, /10, /20). The original credits the award in ten
+  // FUN_004181f0 slices; each adds floor(award/10) to the stored score.
+  private static readonly CLEAR_BONUS_BY_STAGE = // DAT_004c7158
+    [1000000, 1500000, 2000000, 2500000, 2500000, 3000000, 4000000, 6000000, 6660000];
+
   private computeClearBonus(): void {
     const stageGraze = this.graze - this.stageEntryGraze;
     const stagePointItems = this.pointItems - this.stageEntryPointItems;
     const timeOrbs = this.runState.currentTimeOrbs;
-    const clearAward = 1000000;
+    const clearAward =
+      StageScene.CLEAR_BONUS_BY_STAGE[this.stageNumber - 1] ?? StageScene.CLEAR_BONUS_BY_STAGE[0];
     const pointAward = stagePointItems * 5000;
     const grazeAward = stageGraze * 50;
     const timeAward = timeOrbs * 100;
@@ -1040,6 +1059,9 @@ export class StageScene implements GameHost {
       case 1: break;
       case 2: award = Math.trunc((award * 12) / 10); mult = 1.2; break;
       case 3: award = Math.trunc((award * 15) / 10); mult = 1.5; break;
+      case 4: award *= 2; mult = 2.0; break;
+      // Phantasm: the rank line prints *2.0 but no multiplier arm exists.
+      case 5: mult = 2.0; break;
     }
     if (this.startingLives === 3) award = Math.trunc((award * 5) / 10);
     else if (this.startingLives === 4) award = Math.trunc((award * 2) / 10);
@@ -1564,6 +1586,14 @@ export class StageScene implements GameHost {
   private tickTh08Gauge(): void {
     const run = this.runState;
     const p = this.playerObj;
+    // Player-tick tail (all.c:37597-37614): gated only on IsDialogPresent,
+    // NOT on bombs — every non-dialogue tick counts the tally denominator,
+    // and each frame past either effects threshold (±8000) trickles a +100
+    // award (addScore applies the native /10 → +10 live score).
+    if (!this.isDialogueActive()) {
+      const trickle = run.tickGaugeTrickle();
+      if (trickle) this.addScore(trickle);
+    }
     if (this.th08Bomb || this.isDialogueActive()) return;
     const armed = p.fireFrame >= 0;
     if (armed) {
@@ -1688,11 +1718,28 @@ export class StageScene implements GameHost {
     this.startDialogueTh08(index);
   }
 
+  // FUN_0043c35f (all.c:28503-28569): the tally's night-clock advance pays
+  // +1 when the stage's time-orb quota (DAT_004c77f0 stage×difficulty
+  // table) is met, +2 when missed; stages 6/7/Extra pay 0.
+  private th08ClockAdvance(): number {
+    if (this.stageNumber >= 6) return 0;
+    const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
+    return this.runState.currentTimeOrbs >= quota ? 1 : 2;
+  }
+
   private activateStageResults(): void {
     if (this.stageResultsActive) return;
     this.stageResultsActive = true;
     this.stageClearTimer = 0;
     this.computeClearBonus();
+    // MSG op9 snapshots the night clock onto the tally (all.c:24837-24845):
+    // the current row holds the entry minutes; the advanced row counts up
+    // from the same value toward entry + advance*30 during the tally.
+    this.tallyClockEntry = this.runState.clockTime * 30 + 660;
+    this.tallyClockShown = this.tallyClockEntry;
+    this.tallyClockTarget =
+      Math.min(Math.max(this.runState.clockTime + this.th08ClockAdvance(), 0), 12) * 30 + 660;
+    this.tallyClockBeat = 0;
     this.startStageClearPresentation();
   }
 
@@ -1701,12 +1748,9 @@ export class StageScene implements GameHost {
     if (!this.stageResultsActive) this.activateStageResults();
     if (this.stageClear) return;
     this.stageClear = true;
-    // TH08: the night clock advances at the stage tally — FUN_0043c35f's
-    // per-stage switch pays +2 when the stage's time-orb quota is missed,
-    // +1 when met (the recorded Lunatic stage 1 ends at clockTime 1, i.e.
-    // met). The quota comes from the .data table at 0x4c77f0.
-    const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
-    this.runState.addClockTime(this.runState.currentTimeOrbs >= quota ? 1 : 2);
+    // TH08: the night clock advance was already computed for the tally
+    // display; the run-state commit lands here with the transition latch.
+    this.runState.addClockTime(this.th08ClockAdvance());
     // The night-clock advance lands in the tally's plate: the current plate
     // (script 1, holding at label 1) releases, and the advanced plate
     // (script 2) spawns with the NEW slot.
@@ -2012,6 +2056,18 @@ export class StageScene implements GameHost {
       this.clearCaptureRunner?.update(this.slowRate);
       this.clearTimeRunner?.update(this.slowRate);
       this.clearTimeAdvancedRunner?.update(this.slowRate);
+      // Tally night-clock count-up (all.c:25485-25503): a 60-frame beat,
+      // then the shown advanced time ticks +1 minute/frame toward the
+      // target, +4 with Z or Ctrl held, clamped at the target.
+      if (this.tallyClockShown < this.tallyClockTarget) {
+        if (this.tallyClockBeat < 60) {
+          this.tallyClockBeat++;
+        } else {
+          this.tallyClockShown++;
+          if (input.held.has('shoot') || input.held.has('skip')) this.tallyClockShown += 3;
+          if (this.tallyClockShown > this.tallyClockTarget) this.tallyClockShown = this.tallyClockTarget;
+        }
+      }
     }
     if (this.stageClear) {
       // Advance on Z once the tally has been visible for a beat, or after
@@ -4984,56 +5040,111 @@ export class StageScene implements GameHost {
     r.text('Enemy', x, y, { size: 11, color: 'rgba(255,80,80,0.6)', align: 'center' });
   }
 
-  // TH08 result tally: yellow spaced "Stage Clear", then Clear/Point/Graze/Time rows with
-  // right-aligned values, the red "<Difficulty> Rank *<mult>" line, and
-  // Total. Rows reveal one by one; Z advances the stage once all shown.
-  private drawStageClear(r: Renderer): void {
+  // TH08 result tally (native draw FUN_0043826b, all.c:26466-26606). The
+  // exe typesets every row in one pass once the tally is armed — there is
+  // NO row-by-row reveal. Layout (absolute 640x480 GUI space): rows start
+  // at (120, 96), the heading is followed by a 32px gap, plain rows are
+  // 16px apart, the rank block opens with another 32px gap, and the
+  // night-clock row trails 40px below Total (floats _DAT_004b42c4/cc/d4,
+  // _DAT_004b432c @ 0x4b42c4/0x4b42cc/0x4b42d4/0x4b432c). Row text uses the
+  // exe's own format strings; colors are the FUN_004398e8 D3DCOLORs.
+  stageClearRows(): { text: string; x: number; y: number; color: string }[] {
     const b = this.clearBonus;
-    if (!b) return;
-    const ox = PLAYFIELD.x;
-    const oy = PLAYFIELD.y;
+    if (!b) return [];
+    const rows: { text: string; x: number; y: number; color: string }[] = [];
+    const disp = (v: number) => `${String(Math.round(v / 10)).padStart(8)}0`; // "%8d0"
+    const WHITE = '#ffffff';
+    const YELLOW = '#ffff40'; // 0xffffff40
+    const LAVENDER_HI = '#e0e0ff'; // 0xffe0e0ff
+    const LAVENDER = '#d0d0ff'; // 0xffd0d0ff
+    const SALMON = '#ff8080'; // 0xffff8080
+    const CREAM = '#ffff80'; // 0xffffff80
+    // "All Clear!" replaces "Stage Clear" on route-final clears
+    // (DAT_0164d2cc >= 6 gate, all.c:26476-26484).
+    rows.push({ text: this.stageNumber >= 6 ? 'All Clear!' : 'Stage Clear', x: 120, y: 96, color: YELLOW });
+    let y = 96 + 32;
+    rows.push({ text: `Clear = ${disp(b.clear)}`, x: 120, y, color: WHITE });
+    y += 16;
+    rows.push({ text: `Point = ${disp(b.point)}`, x: 120, y, color: LAVENDER_HI });
+    y += 16;
+    rows.push({ text: `Graze = ${disp(b.graze)}`, x: 120, y, color: LAVENDER });
+    y += 16;
+    rows.push({ text: `Time  = ${disp(b.time)}`, x: 120, y, color: LAVENDER });
+    y += 16;
+    // Gauge-extreme time ratios (all.c:26503-26508): counted by the player
+    // tick tail accumulators (gaugeTrick*), displayed "%3d.%.2d%%".
+    const tot = this.runState.gaugeTrickTotal;
+    const pct = (n: number) =>
+      tot > 0
+        ? `${String(Math.trunc((n * 100) / tot)).padStart(3)}.${String(Math.trunc((n * 10000) / tot) % 100).padStart(2, '0')}`
+        : '  0.00';
+    rows.push({ text: `over-80% = ${pct(this.runState.gaugeTrickHuman)}%`, x: 120, y, color: LAVENDER });
+    y += 16;
+    rows.push({ text: `over 80% = ${pct(this.runState.gaugeTrickYoukai)}%`, x: 120, y, color: LAVENDER });
+    // Player/Bomb rows only on route-final clears (all.c:26509-26518).
+    if (this.stageNumber >= 6) {
+      y += 16;
+      rows.push({ text: `Player =${disp(b.player)}`, x: 120, y, color: CREAM });
+      y += 16;
+      rows.push({ text: `Bomb   = ${String(Math.round(b.bomb / 10)).padStart(7)}0`, x: 120, y, color: CREAM });
+    }
+    y += 32;
+    // Exact native rank strings (all.c:26534-26557) — including Phantasm's.
+    const RANK_LINES = [
+      'Easy Rank    *0.5', 'Normal Rank  *1.0', 'Hard Rank    *1.2',
+      'Lunatic Rank *1.5', 'Extra Rank   *2.0', 'Phantasm Rank*2.0'
+    ];
+    if (this.difficulty <= 5) {
+      rows.push({ text: RANK_LINES[this.difficulty], x: 120, y, color: SALMON });
+    }
+    // Configured-lives penalty rows (all.c:26558-26581), difficulty < 4.
+    if (this.difficulty < 4) {
+      const PENALTY: Record<number, string> = {
+        3: 'Player Penalty*0.5', 4: 'Player Penalty*0.2',
+        5: 'Player Penalty*0.1', 6: 'Player Penalty*0.05'
+      };
+      const penalty = PENALTY[this.startingLives];
+      if (penalty) {
+        y += 16;
+        rows.push({ text: penalty, x: 120, y, color: SALMON });
+      }
+    }
+    y += 16;
+    rows.push({ text: `Total = ${disp(b.total)}`, x: 120, y, color: WHITE });
+    // Night-clock row (stage < 6, all.c:26587-26604): current time, ">>",
+    // then the counting advanced time — one horizontal line, x advancing by
+    // +99 / +34 (floats _DAT_004b4d64/_DAT_004b4d5c).
+    if (this.stageNumber < 6) {
+      y += 40;
+      rows.push({ text: StageScene.formatTallyClock(this.tallyClockEntry), x: 120, y, color: '#dfdfdf' });
+      rows.push({ text: '>>', x: 120 + 99, y, color: '#afafaf' });
+      rows.push({ text: StageScene.formatTallyClock(this.tallyClockShown), x: 120 + 99 + 34, y, color: '#ff8f8f' });
+    }
+    return rows;
+  }
+
+  // The tally clock's "%s%2d:%.2d" (all.c:26591-26594): minutes on the
+  // 12-hour face, prefix from PTR_DAT_004c72bc — "PM" while hours < 12,
+  // "AM" after the midnight wrap (the native table is ordered AM,PM and
+  // indexed by the boolean, so PM lands first).
+  private static formatTallyClock(minutes: number): string {
+    const h24 = Math.trunc(minutes / 60);
+    const prefix = h24 < 12 ? 'PM' : 'AM';
+    return `${prefix}${String(h24 % 12).padStart(2)}:${String(minutes % 60).padStart(2, '0')}`;
+  }
+
+  private drawStageClear(r: Renderer): void {
+    const rows = this.stageClearRows();
+    if (!rows.length) return;
     const t = this.stageClearTimer || 1;
     const ctx = r.ctx;
     ctx.save();
     ctx.globalAlpha = Math.min(0.45, t / 60);
     ctx.fillStyle = '#000';
-    ctx.fillRect(ox, oy + 110, PLAYFIELD.width, 210);
+    ctx.fillRect(PLAYFIELD.x, 88, PLAYFIELD.width, 280);
     ctx.restore();
-    const spaced = (s: string) => s.split('').join(' ');
-    const labelX = ox + 74;
-    const valueEndX = ox + 310;
-    const num = (v: number) => v.toLocaleString('en-US').replace(/,/g, '');
-    const row = (label: string, value: number, y: number, color: string) => {
-      r.text(spaced(label), labelX, y, { size: 14, color });
-      const txt = num(value);
-      r.text(txt, valueEndX - txt.length * 9, y, { size: 14, color });
-    };
-    // "All Clear!" replaces "Stage Clear" on route-final clears (stage 6 /
-    // Extra / Phantasm — exe gate DAT_0062583c >= 6 @ all.c:17063-17067).
-    const heading = this.stageNumber >= 6 ? 'All Clear!' : 'Stage Clear';
-    r.text(spaced(heading), labelX, oy + 130, { size: 16, color: '#ffcc44' });
-    const reveal = Math.floor((t - 20) / 12); // rows appear one by one
-    const rows: [string, number][] = [
-      ['Clear', b.clear],
-      ['Point', b.point],
-      ['Graze', b.graze],
-      ['Time', b.time]
-    ];
-    // Player/Bomb rows only appear on route-final clears (all.c:17081-17094).
-    if (this.stageNumber >= 6) {
-      rows.push(['Player', b.player], ['Bomb', b.bomb]);
-    }
-    rows.forEach(([label, value], i) => {
-      if (reveal > i) row(label + '  =', value, oy + 168 + i * 22, '#d8d8f8');
-    });
-    if (reveal > rows.length) {
-      const names = ['Easy', 'Normal', 'Hard', 'Lunatic', 'Extra'];
-      const y = oy + 176 + rows.length * 22;
-      // Phantasm prints no Rank line at all (no else arm in the exe chain).
-      if (this.difficulty <= 4) {
-        r.text(spaced(`${names[this.difficulty] ?? ''} Rank *${b.mult.toFixed(1)}`), labelX, y, { size: 14, color: '#ff5566' });
-      }
-      row('Total  =', b.total, y + 24, '#ffffff');
+    for (const row of rows) {
+      r.text(row.text, row.x, row.y, { size: 14, color: row.color });
     }
   }
 

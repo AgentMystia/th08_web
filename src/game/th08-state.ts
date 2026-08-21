@@ -77,6 +77,30 @@ export class Th08RunState {
     return this.youkaiGauge >= this.gaugeEffectThresholds[1];
   }
 
+  // Tally "over-80%"/"over 80%" row accumulators + the extreme-gauge score
+  // trickle (player tick tail, all.c:37597-37614): every non-dialogue
+  // player tick counts the denominator; a frame with the gauge at/below the
+  // human effects threshold counts gaugeTrickHuman, at/above the youkai
+  // threshold counts gaugeTrickYoukai, and either side trickles a +100
+  // award (FUN_004181f0 → +10 live score) per frame.
+  gaugeTrickTotal = 0;
+  gaugeTrickYoukai = 0;
+  gaugeTrickHuman = 0;
+
+  // Returns the award to credit this frame (0 or 100).
+  tickGaugeTrickle(): number {
+    this.gaugeTrickTotal++;
+    if (this.youkaiGauge <= this.gaugeEffectThresholds[0]) {
+      this.gaugeTrickHuman++;
+      return 100;
+    }
+    if (this.youkaiGauge >= this.gaugeEffectThresholds[1]) {
+      this.gaugeTrickYoukai++;
+      return 100;
+    }
+    return 0;
+  }
+
   // The player update's gauge block (0x44bdf0-0x44c012). While the shot
   // cycle is ARMED (including release inertia), the focus state has been
   // stable >= 30 frames, no dialogue, not frozen and no bomb: the gauge
