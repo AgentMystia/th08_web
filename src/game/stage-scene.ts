@@ -5719,12 +5719,11 @@ export class StageScene implements GameHost {
     }
   }
 
-  // Stage title card during the opening seconds, using the stage/song names
-  // decoded from the STD data.
-  // Vanilla stage intro: play stdNtxt.anm's five scripts verbatim — crest,
-  // vertical JP title, "Stage N", subtitle strip, and the vertical BGM
-  // label — all positioned in screen coordinates by the scripts themselves
-  // (see the constructor note). Runners self-remove around frame 460.
+  // Vanilla stage intro: runs stdNtxt.anm's four scripts verbatim — the
+  // "Stage N" label, the big title, the flavor strip, and the bottom
+  // stage-theme BGM credit — all positioned in screen coordinates by the
+  // scripts themselves (see the constructor note for the exe arming site
+  // and per-script roles). Runners self-remove around frame 550.
   private drawStageTitle(r: Renderer): void {
     for (const runner of this.stageIntroRunners) {
       if (runner.removed) continue;
@@ -5776,9 +5775,11 @@ export class StageScene implements GameHost {
       r.drawAnmFrame(this.th08HudRunners[i].spriteFrame(), 0, 0);
     }
     // TH08's /10 score rule means the live field already reads at display
-    // scale — no appended zero (unlike TH07's "%8d0").
-    this.drawNumber(r, Math.max(this.hiScore, this.score), valueX, 44, 9, 1, TH08_ADV);
-    this.drawNumber(r, this.score, valueX, 60, 9, 1, TH08_ADV);
+    // scale — no appended zero (unlike TH07's "%8d0"). Native rows (exe
+    // DrawGameScene FUN_0043625d, floats 0x4b432c/0x4b42a8): HiScore at
+    // y=40, Score at y=56, both "%.9d" at x=488.
+    this.drawNumber(r, Math.max(this.hiScore, this.score), valueX, 40, 9, 1, TH08_ADV);
+    this.drawNumber(r, this.score, valueX, 56, 9, 1, TH08_ADV);
     // Lives/bombs icons: front.png 16x16 pair at (64,80)/(80,80), 16px pitch,
     // rows y88/y104 (GuiImpl draw: 488+i*16 @ 88/104, draw-game-scene.c:162-192).
     for (let i = 0; i < Math.max(0, p.lives); i++) {
@@ -5788,26 +5789,57 @@ export class StageScene implements GameHost {
       this.blit(r, 'front', TH08_ICON_BOMB, valueX + i * 16, 104);
     }
     const ctx = r.ctx;
-    // Power row (y136): the 128-wide bar fills white with power/128 and the
-    // value prints on it (native rows at 136/152/168/184).
-    ctx.save();
-    ctx.fillStyle = '#303030';
-    ctx.fillRect(valueX, 136, 128, 12);
-    ctx.fillStyle = 'rgba(240,240,240,0.85)';
-    ctx.fillRect(valueX, 136, Math.min(128, Math.max(0, p.power)), 12);
-    ctx.restore();
-    if (p.power >= 128) r.text('MAX', valueX + 2, 137, { size: 11, color: '#222' });
-    else this.drawNumber(r, p.power, valueX + 2, 137, 0, 1, TH08_ADV);
+    // Power row (y136): the native bar is a single 16px-tall quad from
+    // (488,136) to (488+power,152), left color 0xe0e0e0ff fading to
+    // 0x80e0e0ff (D3DCOLORs, all.c:25805-25861) — no background track. The
+    // "%d" value, or "MAX" at 128, prints over it at (488,136)
+    // (all.c:25863-25874).
+    const barW = Math.min(128, Math.max(0, p.power));
+    if (barW > 0) {
+      const grad = ctx.createLinearGradient(valueX, 136, valueX + barW, 136);
+      grad.addColorStop(0, 'rgba(224,224,255,0.878)');
+      grad.addColorStop(1, 'rgba(224,224,255,0.502)');
+      ctx.save();
+      ctx.fillStyle = grad;
+      ctx.fillRect(valueX, 136, barW, 16);
+      ctx.restore();
+    }
+    if (p.power >= 128) r.text('MAX', valueX + 2, 138, { size: 11, color: '#fff' });
+    else this.drawNumber(r, p.power, valueX + 2, 138, 0, 1, TH08_ADV);
     this.drawNumber(r, this.graze, valueX, 152, 0, 1, TH08_ADV);
-    // Point row: items toward the next extend (native "26/100").
-    this.drawNumber(r, this.pointItems, valueX, 168, 0, 1, TH08_ADV);
-    r.text('/' + run.nextPointItemExtendThreshold, valueX + 28, 168, { size: 12, color: '#ddd' });
-    // Time row: the stage's time-orb progress toward the stage+difficulty
-    // quota (DAT_004c77f0; native "825/3000" for Lunatic stage 1); the
-    // night clock itself advances at the tally.
-    this.drawNumber(r, run.stageTimeOrbs, valueX, 184, 0, 1, TH08_ADV);
+    // Point row (y168): items toward the next extend, native "%d/%d" with
+    // the slash at x+digits*13 (half-scale) and the threshold 6px past it
+    // (all.c:25756-25773, digit advance 13, slash dx 6 @ 0x4b497c).
+    const afterItems = this.drawNumber(r, this.pointItems, valueX, 168, 0, 1, TH08_ADV);
+    r.text('/', afterItems, 170, { size: 8, color: '#ddd' });
+    this.drawNumber(r, run.nextPointItemExtendThreshold, afterItems + 6, 168, 0, 1, TH08_ADV);
+    // Time row (y184): the stage's time-orb progress toward the
+    // stage+difficulty quota (DAT_004c77f0). The whole row tints
+    // 0xfffff0c0 once the quota is met (all.c:25780-25798).
     const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
-    r.text('/' + quota, valueX + 28, 184, { size: 12, color: '#ddd' });
+    if (quota > 0 && run.stageTimeOrbs >= quota) {
+      r.text(`${run.stageTimeOrbs}/${quota}`, valueX, 186, { size: 12, color: '#fff0c0' });
+    } else {
+      const afterOrbs = this.drawNumber(r, run.stageTimeOrbs, valueX, 184, 0, 1, TH08_ADV);
+      r.text('/', afterOrbs, 186, { size: 8, color: '#ddd' });
+      this.drawNumber(r, quota, afterOrbs + 6, 184, 0, 1, TH08_ADV);
+    }
+    // Difficulty tag: ascii.anm entry-0 script 25, sprite 283+difficulty,
+    // corner-anchored at (552,200); alpha 0 until t=60, fades in over 20
+    // frames, then holds (armed at stage load, all.c:26916-26923).
+    {
+      const DIFF_TAG_RECTS = [
+        [192, 0, 64, 16], // Easy (sprite 283)
+        [192, 16, 64, 16], // Normal (284)
+        [128, 0, 64, 16], // Hard (285)
+        [128, 16, 64, 16], // Lunatic (286)
+        [192, 192, 64, 16], // Extra (287)
+        [192, 208, 64, 16] // Phantasm (288)
+      ] as const;
+      const rect = DIFF_TAG_RECTS[this.difficulty] ?? DIFF_TAG_RECTS[1];
+      const alpha = Math.max(0, Math.min(1, (this.stageFrame - 60) / 20));
+      if (alpha > 0) this.blit(r, 'ascii', rect, 552, 200, alpha);
+    }
     // Human/youkai rate gauge at the playfield's bottom-left. Native layout
     // (AsciiManager::InitializeVms): the bar spans 2x56px for +-10000 with
     // the 人/妖 icons at the LIMIT positions and a cursor VM (script 8) at
@@ -5860,22 +5892,11 @@ export class StageScene implements GameHost {
     this.drawSidebarTh08(r);
   }
 
-  // Bottom-right difficulty tag (+ the Practice tag above it), straight from
-  // pause.png: the authored ascii.anm entry-2 scripts place the 64x16 tags
-  // corner-anchored at x=344 (difficulty y=444, practice y=428).
+  // Practice tag, straight from pause.png (the difficulty tag moved to the
+  // sidebar's ascii.anm script-25 slot at (552,200) — see drawSidebarTh08).
+  // The original's practice-mode marker position is unrecovered; this keeps
+  // the long-standing bottom-right slot as a mode marker (PROBABLE).
   private drawModeTags(r: Renderer): void {
-    // Column layout pixel-verified against pause.png: Hard/Lunatic stack at
-    // x=128, Easy/Normal at x=192 (the reverse of reading order).
-    const DIFF_TAG_RECTS = [
-      [192, 0, 64, 16], // Easy
-      [192, 16, 64, 16], // Normal
-      [128, 0, 64, 16], // Hard
-      [128, 16, 64, 16], // Lunatic
-      [192, 192, 64, 16], // Extra
-      [192, 208, 64, 16] // Phantasm
-    ] as const;
-    const rect = DIFF_TAG_RECTS[this.difficulty] ?? DIFF_TAG_RECTS[1];
-    this.blit(r, 'pause', rect, 344, 444, 0.9);
     if (this.mode === 'practice') this.blit(r, 'pause', [192, 240, 64, 16], 344, 428, 0.9);
   }
 }

@@ -18,11 +18,22 @@ const {
 
 test('TH08 playfield and front label positions match v1.00d', () => {
   assert.deepEqual(TH08_PLAYFIELD, { x: 32, y: 16, width: 384, height: 448 });
-  assert.deepEqual(TH08_HUD_FIELDS.score, {
+  // Exe DrawGameScene value rows (FUN_0043625d): HiScore y=40 ABOVE Score
+  // y=56 (floats 0x4b432c/0x4b42a8); front.png's baked labels read
+  // HiScore..Time top-down (sprites 2-9).
+  assert.deepEqual(TH08_HUD_FIELDS.highScore, {
     labelScript: 2,
     labelPosition: { x: 432, y: 40 },
     valuePosition: { x: 488, y: 40 }
   });
+  assert.deepEqual(TH08_HUD_FIELDS.score, {
+    labelScript: 3,
+    labelPosition: { x: 432, y: 56 },
+    valuePosition: { x: 488, y: 56 }
+  });
+  assert.deepEqual(TH08_HUD_FIELDS.power.valuePosition, { x: 488, y: 136 });
+  assert.deepEqual(TH08_HUD_FIELDS.graze.valuePosition, { x: 488, y: 152 });
+  assert.deepEqual(TH08_HUD_FIELDS.point.valuePosition, { x: 488, y: 168 });
   assert.deepEqual(TH08_HUD_FIELDS.time.valuePosition, { x: 488, y: 184 });
   assert.equal(TH08_HUD.digitAdvance, 13);
 });

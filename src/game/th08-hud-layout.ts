@@ -20,12 +20,18 @@ export const TH08_PLAYFIELD = {
 } as const;
 
 export const TH08_HUD_FIELDS = {
-  score: {
+  // Value-row y coordinates are the exe's DrawGameScene floats (FUN_0043625d;
+  // x = 0x4b4cfc = 488 everywhere): HiScore 0x4b432c=40, Score 0x4b42a8=56,
+  // lives 0x4b452c=88, bombs 0x4b4cd0=104, power 0x4b4d18=136,
+  // graze 0x4b4d14=152, point 0x4b4d10=168, time 0x4b4d0c=184. front.png's
+  // baked label column reads HiScore/Score/Player/Spell/Power/Graze/Point/
+  // Time top-down (sprites 2-9), so HiScore sits ABOVE Score.
+  highScore: {
     labelScript: 2,
     labelPosition: { x: 432, y: 40 },
     valuePosition: { x: 488, y: 40 }
   },
-  highScore: {
+  score: {
     labelScript: 3,
     labelPosition: { x: 432, y: 56 },
     valuePosition: { x: 488, y: 56 }
@@ -40,17 +46,17 @@ export const TH08_HUD_FIELDS = {
     labelPosition: { x: 432, y: 104 },
     valuePosition: { x: 488, y: 104 }
   },
-  gauge: {
+  power: {
     labelScript: 6,
     labelPosition: { x: 432, y: 136 },
     valuePosition: { x: 488, y: 136 }
   },
-  power: {
+  graze: {
     labelScript: 7,
     labelPosition: { x: 432, y: 152 },
     valuePosition: { x: 488, y: 152 }
   },
-  graze: {
+  point: {
     labelScript: 8,
     labelPosition: { x: 432, y: 168 },
     valuePosition: { x: 488, y: 168 }
