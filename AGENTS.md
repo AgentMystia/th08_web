@@ -493,6 +493,57 @@ tmp/sim-rng-dump.mjs / sim-pool-census.mjs / sim-spawn-dump.mjs /
 sim-rng-profile.mjs. Compare with native(f) == sim(f−1) (the replay
 playback feed's one-frame input latency).
 
+### 2026-08-22 Boss visual audit delivery (commits be3c4a9..a8d3de9)
+
+The interrupted Kimi visual-audit goal is complete for every Stage 1/2
+midboss/boss nonspell and spell phase. The audit aligns screenshots to each
+side's own phase event (declaration + N frames / spell end + N frames), so
+the known RNG/kill-timing residual cannot silently shift the comparison.
+Bullet patterns are checked by family/shape/density, not pixel identity.
+
+Native evidence was captured under Wine/Xvfb by polling the live replay
+counter through `/proc/<pid>/mem`: Stage 1 midboss f2950..3700 and final
+boss nonspell f5900..6150; Stage 2's stock demo f4000..6020, including the
+Mystia midboss nonspell f5860..6000. The native demos then return to title
+(Stage 1 during the first final-boss nonspell; Stage 2 immediately before
+the midboss spell declaration). Per the audit stop rule, later phases are
+marked data-verified from their ECL/ANM assets plus phase-relative port
+captures, never claimed as native screenshot matches. The full temporary
+ledger and local capture tools live in ignored `tmp/`.
+
+Five presentation roots were fixed and regression-locked:
+
+1. Enemy spell declarations now run the authored `face_stNN` entry-0 VM;
+   the hand-positioned portrait stand-in is gone.
+2. Boss fights draw the stage romaji name strip, `ins_134` phase countdown,
+   and the native two-pixel HP strip at playfield y=19.
+3. Native declaration layering is restored: effect 39, portrait, spell
+   name/Bonus/history sit behind boss and danmaku; the invented cyan
+   full-playfield flash and thick red ribbon were removed. History excludes
+   the live attempt and commits only when the card ends.
+4. Effect 39 resolves through `DAT_004c6d30[39]` to etama archive script 76
+   (sprite221, the 16x768 repeated `etama3` strip). Its 70-frame alpha and
+   192→15/120-frame settle drive a dedicated segmented rune-ring draw.
+5. The browser image preload list had omitted the entire Stage 2 surface
+   family even though its ANMs were embedded. `stg2bg/stg2enm/stg2txt`,
+   `eff02/eff02b`, and every `face_st02*` surface now preload; a test walks
+   every embedded Stage 1/2 ANM entry and rejects any future texture that is
+   absent from the browser registry. This restored the forest, Mystia art,
+   spell sheets, declaration portrait, and nameplate in actual browser play.
+
+Post-fix port captures cover Stage 1's 8 ledger phases and Stage 2's 8
+ledger phases at declaration/mid/late representatives (the final Stage 2
+card was also observed at declaration age 800 before replay-driven defeat).
+The remaining presentation approximations are explicitly registered in §7;
+no per-phase clamps or RNG special cases were introduced.
+
+Verification at delivery: `npm run check`, `npm run build`, and all 155
+tests pass. Both replay clear probes complete (`--stage 1 --clear-check` at
+f13650; `--stage 2 --clear-check` at f30515). The verifier still exits 1 on
+its end-snapshot comparison, as expected for the already-recorded advisory
+RNG/score convergence residual; this visual pass neither promotes that job
+nor conceals the divergence.
+
 
 
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
@@ -1314,6 +1365,23 @@ deployment gate rather than a manual-only checkpoint.
 
 
 ## 7. Approximations registry (known, flagged, improvable)
+
+Boss-visual-audit additions (2026-08-22, inline comments at the sites):
+- Effect 39's authored etama script/texture, alpha, repeat count, settle
+  duration, and final radius are data/native-backed. Its
+  `FUN_004272e0` custom 3D strip-bending callback has no Canvas equivalent;
+  `drawSpellRing` reconstructs it as 96 textured annulus segments plus the
+  measured declaration-time radial rays. Early-ray projection is therefore
+  close by screenshot, not pixel-exact.
+- Enemy spell names, Bonus/history and phase countdown use Canvas text
+  because the executable's runtime AsciiManager/text surface is unavailable.
+  Native screenshots pin their layer, position, color, ordering and ungrouped
+  number format; exact glyph metrics remain approximate.
+- Boss romaji rows are cropped from the authored `face_stNN_name` sheets at
+  the native top-left position. The stage-2 native demo appends a dynamic
+  `+5(10)`-style field whose producer/meaning is unrecovered, so only the
+  authored `Mystia Lorelei` row is drawn. The bottom boss marker remains the
+  existing measured `Enemy` text fallback until its front.anm VM is pinned.
 
 TH08-slice additions (2026-08-20 convergence pass, inline comments at the sites):
 - ins_152's stage-interp template: the exe's field write (enemy+0x337c =
