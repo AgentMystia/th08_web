@@ -6,12 +6,13 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 mkdirSync('tests/.build', { recursive: true });
 execSync(
   'npx esbuild src/data/th08-data.ts src/formats/anm.ts src/formats/sht.ts ' +
-  'src/formats/bin.ts --bundle --format=esm --outdir=tests/.build/th08-data ' +
+  'src/formats/bin.ts src/game/assets.ts --bundle --format=esm --outdir=tests/.build/th08-data ' +
   '--out-extension:.js=.mjs --log-level=silent'
 );
 const { TH08_DATA } = await import('../tests/.build/th08-data/data/th08-data.mjs');
 const { Anm } = await import('../tests/.build/th08-data/formats/anm.mjs');
 const { Sht } = await import('../tests/.build/th08-data/formats/sht.mjs');
+const { TH08_IMAGE_NAMES } = await import('../tests/.build/th08-data/game/assets.mjs');
 
 test('TH08 vertical-slice data embeds Stage 1 and its original scripts', () => {
   assert.deepEqual(Object.keys(TH08_DATA.stages), ['1', '2']);
@@ -58,6 +59,19 @@ test('every stripped TH08 ANM resolves its shipped texture', () => {
         `${key} texture ${entry.imageKey}`
       );
     }
+  }
+});
+
+test('the browser preload registry covers every Stage 1/2 ANM texture and boss nameplate', () => {
+  const preloaded = new Set(TH08_IMAGE_NAMES);
+  for (const [key, encoded] of Object.entries(TH08_DATA.anm)) {
+    const anm = new Anm(Buffer.from(encoded, 'base64'), key);
+    for (const entry of anm.entries) {
+      if (entry.imageKey) assert.ok(preloaded.has(entry.imageKey), `${key} preloads ${entry.imageKey}`);
+    }
+  }
+  for (const key of ['face_st01_name', 'face_st02_name']) {
+    assert.ok(preloaded.has(key), `preloads ${key}`);
   }
 });
 

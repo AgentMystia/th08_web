@@ -8,13 +8,15 @@ export interface GameAssets {
   images: Record<string, HTMLImageElement>;
 }
 
-const IMAGE_NAMES = [
+export const TH08_IMAGE_NAMES = [
   'ascii', 'asciis', 'eff01', 'eff01b', 'ename', 'enemy',
   'etama', 'etama2', 'etama3', 'etama4', 'etama5', 'etama6',
   'face_rm00', 'face_rm01an', 'face_rm01dp', 'face_rm01hp', 'face_rm01n2',
   'face_rm01no', 'face_rm01pr', 'face_rm01sp', 'face_rm01sw',
   'face_cdbg',
   'face_st01_00', 'face_st01_name', 'face_st01an', 'face_st01n2', 'face_st01no',
+  'face_st02_name', 'face_st02a', 'face_st02an', 'face_st02n2', 'face_st02no',
+  'face_st02sp',
   'face_yk00', 'face_yk01an', 'face_yk01dp', 'face_yk01hp', 'face_yk01n2',
   'face_yk01no', 'face_yk01pr', 'face_yk01sp', 'face_yk01sw',
   'front', 'pause', 'player00', 'player00b', 'replay00',
@@ -23,11 +25,12 @@ const IMAGE_NAMES = [
   'sl_pltxt0', 'sl_pltxt1', 'sl_pltxt10', 'sl_pltxt11', 'sl_pltxt2',
   'sl_pltxt3', 'sl_pltxt4', 'sl_pltxt5', 'sl_pltxt6', 'sl_pltxt7',
   'sl_pltxt8', 'sl_pltxt9', 'sl_text', 'stg1bg', 'stg1enm', 'stg1txt',
+  'stg2bg', 'stg2enm', 'stg2txt', 'eff02', 'eff02b',
   'times', 'title00', 'title01', 'title02'
 ] as const;
 
 const IMAGE_FILES: Record<string, string> = Object.fromEntries(
-  IMAGE_NAMES.map(name => [name, `assets/th08-img/${name}.png`])
+  TH08_IMAGE_NAMES.map(name => [name, `assets/th08-img/${name}.png`])
 );
 
 function loadImage(src: string): Promise<HTMLImageElement> {
