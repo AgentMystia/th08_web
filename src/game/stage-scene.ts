@@ -441,6 +441,9 @@ export class StageScene implements GameHost {
   // The declaration portrait runner (face_stNN entry 0, armed at spell
   // start; see startBossSpell).
   private spellDeclPortraitRunner: AnmRunner | null = null;
+  // The declaration rune ring (etama archive script 76, PlayerEffects
+  // handle; released at spell end).
+  private spellRingHandle: { release(): void } | null = null;
   private spellBanner = 0;
   // Spell-card capture popup (spec-ui-stageclear.md §4): label + value on
   // success only. Failure draws nothing (exe skips FUN_004264e3 entirely).
@@ -1816,6 +1819,20 @@ export class StageScene implements GameHost {
         });
       });
     this.spellBanner = 150;
+    // The declaration ring: effect 39 (etama archive script 76) — a big
+    // additive-blend rune circle that fades in over 70 frames and spins for
+    // the spell's duration. FUN_004152a0 arms it at the boss's position
+    // (all.c:9110-9126); released at spell end. Zero RNG cost (the script
+    // carries no ins_59/60 ops — EFFECT_DRAW_COST[39] = 0).
+    this.spellRingHandle?.release();
+    this.spellRingHandle = null;
+    const boss = this.bossActive;
+    if (boss) {
+      this.spellRingHandle = this.th08Effects.spawnHandle({
+        scriptId: archiveScript(this.assets.anms.etama, 76).localId,
+        x: boss.x, y: boss.y, ttl: Infinity
+      });
+    }
     // The declaration portrait runs the stage face file's entry-0 script
     // verbatim (face_st01/face_st02 entry 0: the 254x510 portrait slides
     // (160,-112)->(160,144) over 180 frames at alpha 192, holds 90, fades
@@ -1860,6 +1877,9 @@ export class StageScene implements GameHost {
     this.spellName = '';
     this.spellcard = null;
     this.spellBackgroundRunners = [];
+    this.spellDeclPortraitRunner = null;
+    this.spellRingHandle?.release();
+    this.spellRingHandle = null;
     // Exe FUN_0040f340: the scored phase-end field sweep only runs when the
     // spell did not time out (DAT_012f40a8 still 1). Getting HIT during the
     // spell voids the bonus but NOT the sweep.
@@ -4927,6 +4947,7 @@ export class StageScene implements GameHost {
     this.drawStageTitle(r);
     if (this.bonusPopup) this.drawSpellBonusPopup(r);
     if (this.bossActive) this.drawBossMarker(r);
+    if (this.bossActive) this.drawBossFightHud(r);
     if (this.stageResultsActive) this.drawStageClear(r);
     this.drawStageTransition(r);
     if (this.continueScreen) this.drawContinueScreen(r);
@@ -5055,6 +5076,35 @@ export class StageScene implements GameHost {
     const x = PLAYFIELD.x + Math.max(0, Math.min(PLAYFIELD.width, boss.x));
     const y = PLAYFIELD.y + PLAYFIELD.height - 2;
     r.text('Enemy', x, y, { size: 11, color: 'rgba(255,80,80,0.6)', align: 'center' });
+  }
+
+  // Boss-fight HUD block (native, userdemo shots n-f2950/n-f3700/ns2-6000):
+  // the romaji nameplate at the playfield's top-left + the armed phase
+  // deadline counting down as a number at the top-right. The native VM/rect
+  // for both is unrecovered in the partial export (§7): the nameplate draws
+  // the romaji row of face_stNN_name.png, the number counts the armed
+  // ins_134 phase deadline down in seconds.
+  private drawBossFightHud(r: Renderer): void {
+    const boss = this.bossActive;
+    if (!boss) return;
+    // Romaji row of the stage's face_stNN_name strip (per-stage text differs
+    // in length; the rows sit at the strip's bottom-right):
+    //   st01 "Wriggle Nightbug" (132,38,119,9); st02 "Mystia Lorelai"
+    //   (45,30,201,17).
+    const nameRect = this.stageNumber === 2
+      ? [45, 30, 201, 17] as const
+      : [132, 38, 119, 9] as const;
+    const nameKey = this.stageNumber === 2 ? 'face_st02_name' : 'face_st01_name';
+    if (r.image(nameKey)) this.blit(r, nameKey, nameRect, PLAYFIELD.x, PLAYFIELD.y + 18);
+    // Phase deadline countdown (the boss's ins_134-armed timer), seconds.
+    const ecl = boss.ecl;
+    const threshold = ecl.timerCallbackThreshold;
+    if (threshold > 0) {
+      const left = Math.max(0, Math.ceil((threshold - ecl.bossTimer) / 60));
+      r.text(String(left), PLAYFIELD.x + PLAYFIELD.width - 8, PLAYFIELD.y + 4, {
+        size: 13, color: '#fff', align: 'right'
+      });
+    }
   }
 
   // TH08 result tally (native draw FUN_0043826b, all.c:26466-26606). The

@@ -64,3 +64,58 @@ test('stage 2 arms eff02, and spell end removes both VMs outright', () => {
   scene.endBossSpell();
   assert.equal(scene.spellBackgroundRunners.length, 0);
 });
+
+// Boss-fight HUD block (drawBossFightHud): the romaji nameplate from
+// face_stNN_name.png's bottom row + the ins_134 phase-deadline countdown,
+// while a boss is present. Native reference: userdemo shots n-f2950 /
+// ns1-03700 (Wriggle) / ns2-6000 (Mystia). The exact native VM/rect is
+// unrecovered in the partial export (§7); the row art + positions come from
+// the name-strip texture + the native shots.
+function stubRenderer() {
+  const calls = { drawImage: [], text: [] };
+  const r = {
+    image: (key) => (key ? { w: 1 } : null),
+    ctx: {
+      save() {}, restore() {},
+      drawImage: (...a) => calls.drawImage.push(a),
+      fillRect() {},
+      globalAlpha: 1, fillStyle: '', globalCompositeOperation: ''
+    },
+    drawSprite() {},
+    text: (txt, x, y, opts) => calls.text.push({ txt, x, y, opts })
+  };
+  return { r, calls };
+}
+
+test('the fight nameplate blits the stage romaji row at the playfield top-left', () => {
+  const scene = makeScene(1);
+  scene.bossActive = { ecl: { timerCallbackThreshold: -1, bossTimer: 0 } };
+  const { r, calls } = stubRenderer();
+  scene.drawBossFightHud(r);
+  assert.equal(calls.drawImage.length, 1, 'one nameplate blit');
+});
+
+test('the phase timer counts the armed deadline down in seconds, top-right', () => {
+  const scene = makeScene(1);
+  scene.bossActive = { ecl: { timerCallbackThreshold: 1800, bossTimer: 300 } };
+  const { r, calls } = stubRenderer();
+  scene.drawBossFightHud(r);
+  const timer = calls.text.find((c) => /^[0-9]+$/.test(c.txt));
+  assert.ok(timer, 'timer number drawn');
+  assert.equal(timer.txt, '25', 'ceil((1800-300)/60) = 25');
+  // No deadline armed -> no timer (nonspell phases before ins_134 arms).
+  const none = makeScene(1);
+  none.bossActive = { ecl: { timerCallbackThreshold: -1, bossTimer: 0 } };
+  const probe = stubRenderer();
+  none.drawBossFightHud(probe.r);
+  assert.equal(probe.calls.text.filter((c) => /^[0-9]+$/.test(c.txt)).length, 0);
+});
+
+test('the declaration ring (etama script 76) rides the spell and releases at its end', () => {
+  const scene = makeScene(1);
+  scene.bossActive = { x: 192, y: 96, ecl: { timerCallbackThreshold: -1, bossTimer: 0 } };
+  scene.startBossSpell(1, 100000, 1000, 'test');
+  assert.ok(scene.spellRingHandle, 'ring armed at spell start');
+  scene.endBossSpell();
+  assert.equal(scene.spellRingHandle, null, 'released at spell end');
+});
