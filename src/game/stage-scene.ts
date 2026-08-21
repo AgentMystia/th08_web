@@ -230,10 +230,6 @@ const makeScorePopup = (): ScorePopup => ({
 // quad is drawn in full every frame with plenty of headroom to spare.
 const BG_MAX_CELL_STEPS = 24;
 
-// face_st01 entry 0 is Wriggle's full-height declaration portrait.
-// The sprite table contains it at global sprite id 0.
-const STAGE1_BOSS_PORTRAIT_SPRITE = 0;
-
 export class StageScene implements GameHost {
   // Installed only by replay-verification tooling.
   traceReplayEvent?: ReplayTraceSink;
@@ -437,13 +433,14 @@ export class StageScene implements GameHost {
     elapsed: number;
     elapsedFrac: number;
     declAge: number;
-    portraitSprite: number;
   } | null = null;
-  // Stage 5 owns two spell-background VMs from eff05.anm. Unlike the
-  // simpler scrolling sheets, both receive bullet-time interrupt 2/1 from
-  // FUN_00418020/FUN_00418130 and must remain real ANM runners so their
-  // authored tint, additive blend, scale and rotation transitions survive.
+  // Spell-card playfield background: two VMs from the stage's eff0N.anm
+  // (archive scripts 0/1), armed at every spell start (FUN_004152a0,
+  // all.c:9093-9095) and deleted outright at spell end.
   private spellBackgroundRunners: AnmRunner[] = [];
+  // The declaration portrait runner (face_stNN entry 0, armed at spell
+  // start; see startBossSpell).
+  private spellDeclPortraitRunner: AnmRunner | null = null;
   private spellBanner = 0;
   // Spell-card capture popup (spec-ui-stageclear.md §4): label + value on
   // success only. Failure draws nothing (exe skips FUN_004264e3 entirely).
@@ -1799,8 +1796,7 @@ export class StageScene implements GameHost {
       decayPerSec: decayPerSecond,
       elapsed: 0,
       elapsedFrac: 0,
-      declAge: 0,
-      portraitSprite: STAGE1_BOSS_PORTRAIT_SPRITE
+      declAge: 0
     };
     // Native spell start (FUN_004152a0, all.c:9093-9095): the effect manager
     // arms TWO full-playfield VMs from the stage's eff0N.anm — archive
@@ -1820,6 +1816,15 @@ export class StageScene implements GameHost {
         });
       });
     this.spellBanner = 150;
+    // The declaration portrait runs the stage face file's entry-0 script
+    // verbatim (face_st01/face_st02 entry 0: the 254x510 portrait slides
+    // (160,-112)->(160,144) over 180 frames at alpha 192, holds 90, fades
+    // out 60, ends at 150 — face_st01.anm dump). Replaces the hand-rolled
+    // sweep (the §7 approximation).
+    const faceEntry = this.faceAnm.entries[0];
+    const declScript = faceEntry?.scriptIds[0];
+    this.spellDeclPortraitRunner = declScript == null ? null
+      : new AnmRunner(this.faceAnm, declScript, { entryIndex: 0, spriteIndexOffset: faceEntry.spriteBase });
     const tally = this.spellHistory.get(spellId) ?? { seen: 0, got: 0 };
     tally.seen++;
     this.spellHistory.set(spellId, tally);
@@ -2242,6 +2247,9 @@ export class StageScene implements GameHost {
     if (this.spellcard) {
       this.spellcard.declAge++;
       for (const runner of this.spellBackgroundRunners) runner.update(this.slowRate);
+      if (this.spellDeclPortraitRunner && !this.spellDeclPortraitRunner.removed) {
+        this.spellDeclPortraitRunner.update(this.slowRate);
+      }
     }
     if (this.bonusPopup && --this.bonusPopup.timer <= 0) this.bonusPopup = null;
     // Native scheduler order (FUN_0042e420 + priority registrations):
@@ -5580,8 +5588,8 @@ export class StageScene implements GameHost {
   // Declaration-time effects drawn over the playfield entities: the teal
   // flash (capture.anm scr0: full-playfield quad, color 0x10c0e0, 30-frame
   // fade in/out — its runtime '@' texture is not extractable, so a flat
-  // tint approximates it) and the boss portrait cutin sweep (face_01_00,
-  // the dialogue portrait art; path/timing approximated — AGENTS.md §7).
+  // tint approximates it) and the authored declaration portrait VM
+  // (face_stNN entry 0, armed at spell start).
   private drawSpellDeclaration(r: Renderer, ox: number, oy: number): void {
     const sc = this.spellcard;
     if (!sc) return;
@@ -5595,25 +5603,11 @@ export class StageScene implements GameHost {
       ctx.fillRect(ox, oy, PLAYFIELD.width, PLAYFIELD.height);
       ctx.restore();
     }
-    if (t < 110) {
-      const sprite = this.faceAnm.sprites.get(sc.portraitSprite);
-      const img = sprite ? r.image(sprite.imageKey) : null;
-      if (sprite && img) {
-        const p = t / 110;
-        const scale = 0.85;
-        const w = sprite.w * scale;
-        const h = sprite.h * scale;
-        const x = ox + PLAYFIELD.width * 0.62 - w / 2;
-        // Ease-out vertical sweep, fading in and back out at the ends.
-        const ease = 1 - (1 - p) * (1 - p);
-        const y = oy + PLAYFIELD.height / 2 - h / 2 + 140 - ease * 280;
-        const alpha = Math.min(1, Math.min(p, 1 - p) * 5) * 0.55;
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.drawImage(img, sprite.x, sprite.y, sprite.w, sprite.h, x, y, w, h);
-        ctx.restore();
-      }
-    }
+    // The authored declaration portrait VM (face_stNN entry 0) replaces the
+    // hand-rolled sweep: sprite/position/alpha/timing all data-driven; it
+    // self-removes at the authored 150-frame end.
+    const frame = this.spellDeclPortraitRunner?.spriteFrame() ?? null;
+    if (frame) r.drawAnmFrame(frame, 0, 0);
   }
 
   private drawSpellOverlay(r: Renderer): void {
