@@ -488,7 +488,6 @@ export class StageScene implements GameHost {
     this.drawPassCosts[label] = (this.drawPassCosts[label] ?? 0) + (now - this.passT0);
     this.passT0 = now;
   }
-  private eff01Pattern: CanvasPattern | null = null;
 
   // Host callbacks for TH08 bullet queue commands (0x4000 transform needs the
   // runtime's prototype tables; 0x80000 plays a sound).
@@ -1660,7 +1659,9 @@ export class StageScene implements GameHost {
           break;
         }
         case 'sound':
-          if (event.id === 12) this.playSfx(12);
+          // RunMsg sound ids: 12 = ownership swap tick (case 0x15 edge),
+          // 10 = the denial tick on a late confirm edge (all.c:25049).
+          this.playSfx(event.id);
           break;
         case 'music-change': {
           if (event.slot < 0) {
@@ -1801,15 +1802,23 @@ export class StageScene implements GameHost {
       declAge: 0,
       portraitSprite: STAGE1_BOSS_PORTRAIT_SPRITE
     };
-    this.spellBackgroundRunners = this.stageNumber === 5
-      ? this.effectAnm.entries.slice(0, 2).map((entry, entryIndex) =>
-          new AnmRunner(this.effectAnm, 0, {
-            entryIndex,
-            spriteIndexOffset: entry.spriteBase,
-            rng: this.rng
-          })
-        )
-      : [];
+    // Native spell start (FUN_004152a0, all.c:9093-9095): the effect manager
+    // arms TWO full-playfield VMs from the stage's eff0N.anm — archive
+    // script indices 0 and 1. eff01.anm: entry 0 (eff01b.png, +0.008333
+    // v-scroll/frame) and entry 1 (eff01.png, -0.002083 v-scroll/frame),
+    // both 384x448 corner-anchored at (32,16) fading in over 60 frames.
+    // No interrupt labels exist in these scripts (bullet-time interrupts
+    // no-op on them); at spell end the manager deletes them outright
+    // (endBossSpell clears the list — the scripts carry no fade-out).
+    this.spellBackgroundRunners = [0, 1]
+      .map((index) => {
+        const ref = archiveScript(this.effectAnm, index);
+        return new AnmRunner(this.effectAnm, ref.localId, {
+          entryIndex: ref.entryIndex,
+          spriteIndexOffset: this.effectAnm.entries[ref.entryIndex].spriteBase,
+          rng: this.rng
+        });
+      });
     this.spellBanner = 150;
     const tally = this.spellHistory.get(spellId) ?? { seen: 0, got: 0 };
     tally.seen++;
@@ -5529,76 +5538,42 @@ export class StageScene implements GameHost {
   // Spellcard background: the scrolling eff01 sheet over the 3D scene while
   // a card is active. Open-coded from eff01.anm script 0 — cornerRel quad at
   // (32,16) sized 384x448 (a tiled view of the 256x256 texture), alpha
-  // 0->255 over 60 frames, then a per-frame loop shifting u +0.004167 and
-  // v -0.008333. Not run through AnmRunner: the script's op-4 frame-reset
-  // loop would pin the frame-keyed fade interpolation near zero.
-  // Spell-card playfield background: entry 0 of the stage's own eff0N.anm,
-  // faded in over 60 frames (op15) and then presented per that script's own
-  // authored model (decoded per stage, recon spellbg-diagnosis.md):
-  //   stages 1/2 + 6-layer0: 384x448 oversized sprite over a 256x256 texture
-  //     = GPU tile-wrap with per-frame op26/27 UV scroll (stage 1 scrolls
-  //     diagonally u+0.004167/v-0.008333; stages 2/6 scroll v+0.008333 ONLY);
-  //   stage 3: 256x256 stretched by op7 scale(1.5,1.75) with a v-wrapping
-  //     pan inside the single stretched quad;
-  //   stages 5/7/8: 256x256 stretched static — NO tiling, NO scroll (the old
-  //     one-size eff01 pattern produced the seamy 2x3 grid the testers saw);
-  //   stage 6 additionally layers entry 1 (eff06) as a static stretched
-  //     overlay alpha-capped at 224/255;
-  //   stage 4's eff04 entries are not corner-anchored backgrounds at all
-  //     (flagged open) — kept on the legacy tiled path.
+  // Spell-card playfield background (native: FUN_004152a0 arms two VMs from
+  // the stage's eff0N.anm — archive script indices 0/1 — at spell start,
+  // all.c:9093-9095). The authored scripts are full-playfield sheets
+  // (384x448 corner-anchored at (32,16)) that fade in over 60 frames and
+  // then tile-wrap their 256x256 texture with per-frame op26/27 UV scroll
+  // (eff01: the eff01b sheet v+0.008333/frame, the eff01 sheet
+  // v-0.002083/frame). Canvas has no GPU UV wrap, so scrolled frames draw
+  // through a repeat-pattern fill.
   private drawSpellBackground(r: Renderer): void {
-    const sc = this.spellcard;
-    if (!sc) return;
-    if (this.stageNumber === 5 && this.spellBackgroundRunners.length) {
-      for (const runner of this.spellBackgroundRunners) {
-        r.drawAnmFrame(runner.spriteFrame(), 0, 0);
-      }
-      return;
+    if (!this.spellcard) return;
+    for (const runner of this.spellBackgroundRunners) {
+      const frame = runner.spriteFrame();
+      if (!frame) continue;
+      if (frame.scrollU !== 0 || frame.scrollV !== 0) this.drawWrappedFrame(r, frame);
+      else r.drawAnmFrame(frame, 0, 0);
     }
-    // Per-stage effect sheet; resolved via the ANM entry's own texture name
-    // (eff07.anm's textures are eff07b/eff07c — there is no eff07.png).
-    const img = r.image(this.effectAnm.entries[0]?.imageKey ?? 'eff01');
+  }
+
+  // Draws an unscaled, unrotated, corner-anchored frame whose sprite rect
+  // tile-wraps its texture (the eff0N spell sheets). scrollU/V are
+  // texture-fraction UV shifts: +v moves the sample window down, i.e. the
+  // content moves UP on screen.
+  private drawWrappedFrame(r: Renderer, frame: AnmFrame): void {
+    const img = r.image(frame.imageKey);
     if (!img) return;
     const ctx = r.ctx;
-    const fade = Math.min(1, sc.declAge / 60);
-    const staticStretch = this.stageNumber === 5 || this.stageNumber === 7 || this.stageNumber === 8;
+    const pattern = ctx.createPattern(img, 'repeat');
+    if (!pattern) return;
     ctx.save();
-    ctx.globalAlpha = fade;
-    if (staticStretch) {
-      ctx.drawImage(img, 0, 0, img.width, img.height, PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
-    } else if (this.stageNumber === 3) {
-      // Stretched quad with a v-wrapping pan: draw two stacked stretched
-      // copies offset by the wrapped scroll so the seamless cycle of the
-      // original's UV window survives without tiling artifacts.
-      const dv = ((0.004167 * 256 * sc.declAge) % 256) * (PLAYFIELD.height / 256);
-      ctx.beginPath();
-      ctx.rect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
-      ctx.clip();
-      ctx.drawImage(img, 0, 0, img.width, img.height, PLAYFIELD.x, PLAYFIELD.y + dv - PLAYFIELD.height, PLAYFIELD.width, PLAYFIELD.height);
-      ctx.drawImage(img, 0, 0, img.width, img.height, PLAYFIELD.x, PLAYFIELD.y + dv, PLAYFIELD.width, PLAYFIELD.height);
-    } else {
-      if (!this.eff01Pattern) this.eff01Pattern = ctx.createPattern(img, 'repeat');
-      if (this.eff01Pattern) {
-        // Stage 1 scrolls diagonally; stages 2/6 (and legacy stage 4)
-        // scroll vertically only.
-        const u = this.stageNumber === 1 ? 0.004167 * 256 * sc.declAge : 0;
-        const v = this.stageNumber === 1 ? -0.008333 * 256 * sc.declAge : 0.008333 * 256 * sc.declAge;
-        ctx.save();
-        ctx.translate(PLAYFIELD.x - u, PLAYFIELD.y - v);
-        ctx.fillStyle = this.eff01Pattern;
-        ctx.fillRect(u, v, PLAYFIELD.width, PLAYFIELD.height);
-        ctx.restore();
-      }
-    }
-    // Stage 6's second authored layer: entry 1 (eff06.png) statically
-    // stretched over the field at 224/255 alpha.
-    if (this.stageNumber === 6) {
-      const overlay = r.image(this.effectAnm.entries[1]?.imageKey ?? '');
-      if (overlay) {
-        ctx.globalAlpha = fade * (224 / 255);
-        ctx.drawImage(overlay, 0, 0, overlay.width, overlay.height, PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
-      }
-    }
+    ctx.globalAlpha = frame.alpha / 255;
+    if (frame.blendAdd) ctx.globalCompositeOperation = 'lighter';
+    const ox = frame.scrollU * img.width;
+    const oy = frame.scrollV * img.height;
+    ctx.translate(frame.vmX - ox, frame.vmY - oy);
+    ctx.fillStyle = pattern;
+    ctx.fillRect(ox, oy, frame.w, frame.h);
     ctx.restore();
   }
 

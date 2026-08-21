@@ -80,7 +80,7 @@ export type Th08DialogueEvent =
       from: Th08DialogueSide;
       to: Th08DialogueSide;
     }
-  | { type: 'sound'; id: 12 }
+  | { type: 'sound'; id: 10 | 12 }
   // GuiImpl::RunMsg cases 7/8 (Th08.exe v1.00d @ 0x4341f8/0x4342ac):
   // switch the stage-local music slot, then expose the authored boss
   // introduction caption carried by the MSG instruction itself.
@@ -131,12 +131,19 @@ export class Th08DialogueMachine {
   private awaitingNewSpeakerBlock = true;
   private restartDelay = 0;
   private _done = false;
-  // op13 arms this (RunMsg case 0xd, gui-run-msg.c:228): while it is set and
-  // Ctrl (0x100) is held, RunMsg SetCurrents the message clock to the pending
-  // instruction's time at the top of every update (line 33-35) and bypasses
-  // the op4/op21 wait bodies outright — the recorded run's held-Ctrl burns
-  // through a full conversation in a handful of frames.
-  private skippable = false;
+  // op13 arms this (RunMsg case 0xd, gui-run-msg.c:228). The RunMsg init
+  // sets it to 1 at every message load (all.c:24649) — waits are skippable
+  // by DEFAULT and op13(0) is what turns a section unskippable. While it is
+  // set and Ctrl (0x100) is held, RunMsg SetCurrents the message clock to
+  // the pending instruction's time at the top of every update (one @block
+  // per frame, gui-run-msg.c:33-35) and bypasses the op4/op21 wait bodies
+  // outright — the recorded run's held-Ctrl burns through a conversation's
+  // skippable sections at one instruction block per frame.
+  private skippable = true;
+  // The Z-confirm release threshold on the wait counter (gui+0x21830):
+  // 6 at message load (all.c:24650), re-armed to 30 after a timeout release
+  // and to 8 after a confirm release (asm 0x434c46/0x434c86).
+  private confirmThreshold = 6;
   private _ownershipSide: Th08DialogueSide = 0;
   private _gameMode: Th08DialogueSide = 0;
 
@@ -192,18 +199,22 @@ export class Th08DialogueMachine {
 
     // RunMsg evaluates every instruction at or before the split-clock value.
     // Op4/21 return from the middle of the loop while incomplete and do not
-    // advance the clock for that scheduler frame.
+    // advance the clock for that scheduler frame. The skip fast-forward
+    // happens ONCE at the loop head (gui-run-msg.c:33-35): the clock jumps
+    // to the pending instruction's timestamp, so a held-Ctrl update runs
+    // exactly one @block — not the whole remainder.
     const skipping = this.skippable
       && (input & TH08_DIALOGUE_INPUT_BITS.fastForward) !== 0;
+    if (skipping) {
+      const pending = this.instructions[this.instructionIndex];
+      if (pending && pending.time > this.clock) this.clock = pending.time;
+    }
     for (let guard = 0; guard < 4096 && !this._done; guard++) {
       const instruction = this.instructions[this.instructionIndex];
       if (!instruction) {
         this.finish(events);
         return events;
       }
-      // The skip fast-forward: the clock jumps straight to the pending
-      // instruction's timestamp instead of creeping one frame per update.
-      if (skipping && instruction.time > this.clock) this.clock = instruction.time;
       if (instruction.time > this.clock) break;
 
       const args = instruction.args ?? [];
@@ -246,12 +257,13 @@ export class Th08DialogueMachine {
           const duration = Math.max(0, args[0] ?? 0);
           if (skipping) {
             // Skippable + Ctrl: RunMsg's case-4 body is bypassed wholesale;
-            // the wait completes on the frame it is reached.
-            this.completeWait(events, duration, false);
+            // the wait completes on the frame it is reached and the confirm
+            // threshold is NOT re-armed (the body never runs).
+            this.completeWait(events, duration, false, true);
             break;
           }
           const confirmed = (rising & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
-            && this.waitCounter >= 30;
+            && this.waitCounter >= this.confirmThreshold;
           if (this.waitCounter === 0 && duration > 0) {
             events.push({ type: 'wait-start', duration });
           }
@@ -356,8 +368,17 @@ export class Th08DialogueMachine {
 
           const duration = Math.max(0, args[0] ?? 0);
           if (skipping) {
-            this.completeWait(events, duration, false);
+            this.completeWait(events, duration, false, true);
             break;
+          }
+          // RunMsg case 0x15 (all.c:25039-25050): a Z edge once the counter
+          // has passed 60 plays the denial tick (sfx 10) but does NOT
+          // release the ownership wait — only the timeout does.
+          if (
+            (rising & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
+            && this.waitCounter >= 60
+          ) {
+            events.push({ type: 'sound', id: 10 });
           }
           if (this.waitCounter === 0 && duration > 0) {
             events.push({ type: 'wait-start', duration });
@@ -403,9 +424,13 @@ export class Th08DialogueMachine {
           // FUN_00439810 receives side+1, replaces the active MSG entry, and
           // RunMsg restarts its outer loop. The replacement is represented as
           // an event plus index/clock reset without reaching into game state.
+          // The reload re-runs the RunMsg init: skippable=1 and the confirm
+          // threshold 6 (all.c:24649-24650).
           this._gameMode = this._ownershipSide;
           this.instructionIndex = 0;
           this.clock = 0;
+          this.skippable = true;
+          this.confirmThreshold = 6;
           this.restartDelay = 1;
           events.push({ type: 'game-mode', side: this._gameMode });
           events.push({ type: 'restart', instructionIndex: 0 });
@@ -461,10 +486,14 @@ export class Th08DialogueMachine {
     this.waitCounter++;
   }
 
-  private completeWait(events: Th08DialogueEvent[], duration: number, confirmed: boolean): void {
+  private completeWait(events: Th08DialogueEvent[], duration: number, confirmed: boolean, bypassed = false): void {
     this.waitActive = false;
     this.waitDuration = 0;
     this.awaitingNewSpeakerBlock = true;
+    // asm 0x434c46/0x434c86: the confirm threshold re-arms to 8 after a
+    // confirm release, 30 after a natural timeout; the Ctrl-bypass path
+    // skips the case-4 body wholesale and never re-arms it.
+    if (!bypassed) this.confirmThreshold = confirmed ? 8 : 30;
     events.push({ type: 'wait-complete', duration, confirmed });
   }
 

@@ -254,6 +254,9 @@ export interface AnmFrame {
   posOffsetZ: number;
   flipX: boolean;
   flipY: boolean;
+  /** Accumulated texture scroll (ANM ops 26/27), in texture-size fractions. */
+  scrollU: number;
+  scrollV: number;
 }
 
 const ANM_VAR_BASE = 10000;
@@ -329,6 +332,11 @@ export class AnmRunner {
   private cornerRelative = false;
   private autoOrient = false;
   private autoRotateMode = 0;
+  // Texture scroll accumulators (ANM ops 26/27: shift texture u/v by the
+  // float arg each time the op executes — the eff0N spell sheets loop them
+  // every frame). Unit: texture-size fractions, matching the native UV add.
+  scrollU = 0;
+  scrollV = 0;
   private fadeInterp: Interp | null = null;
   private moveInterp: Interp | null = null;
   private scaleInterp: Interp | null = null;
@@ -633,8 +641,11 @@ export class AnmRunner {
         this.autoOrient = !!v.i32(a);
         this.autoRotateMode = v.i32(a);
         break;
-      case 26: // shift texture u — not reproducible with plain Canvas drawImage
-      case 27: // shift texture v
+      case 26: // shift texture u by the float arg (accumulates per execution)
+        this.scrollU += v.f32(a);
+        break;
+      case 27: // shift texture v by the float arg
+        this.scrollV += v.f32(a);
         break;
       case 80: // TH08 v3 UScroll/VScroll: continuous UV scroll velocities.
       case 81: // The canvas port keeps the base sprite (no UV wrap); the
@@ -807,7 +818,9 @@ export class AnmRunner {
       posOffsetY: this.offY,
       posOffsetZ: this.offZ,
       flipX: false,
-      flipY: false
+      flipY: false,
+      scrollU: this.scrollU,
+      scrollV: this.scrollV
     };
   }
 
