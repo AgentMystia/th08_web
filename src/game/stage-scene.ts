@@ -24,6 +24,7 @@ import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-bord
 import { Th08SpellDeclaration, th08BombSpellName, archiveScript } from './th08-declaration';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
+import { TH08_HUD } from './th08-hud-layout';
 import { BombEngine, type AttackSlot } from './player-bombs';
 import { stageBgmTrack } from './bgm';
 
@@ -5240,12 +5241,13 @@ export class StageScene implements GameHost {
   // (entity semantics); the HUD layout spec's coordinates are all top-left
   // corners (the ANM scripts run ins_22 corner-relative), so convert here.
   private blit(r: Renderer, key: string, rect: readonly number[], x: number, y: number, alpha = 1): void {
-    if (alpha === 1) {
-      const img = r.image(key);
-      if (img) r.ctx.drawImage(img, rect[0], rect[1], rect[2], rect[3], x, y, rect[2], rect[3]);
-      return;
-    }
-    r.drawSprite(key, rect[0], rect[1], rect[2], rect[3], x + rect[2] / 2, y + rect[3] / 2, { alpha });
+    const img = r.image(key);
+    if (!img) return;
+    const ctx = r.ctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, rect[0], rect[1], rect[2], rect[3], x, y, rect[2], rect[3]);
+    ctx.restore();
   }
 
   // Ornate maroon screen frame: tiles front.png's sprite12 (32x32) and
@@ -5897,13 +5899,18 @@ export class StageScene implements GameHost {
       this.drawNumber(r, run.pointItemValue, gx + 14, gy + 12, 0, 1, TH08_ADV);
     }
 
+    // Native boss HP strip (geometry/colors in TH08_HUD.bossLifebar,
+    // measured on the native demo captures; fills drains right-to-left).
     if (this.bossActive) {
+      const bar = TH08_HUD.bossLifebar;
       const hp = Math.max(0, this.bossActive.hp);
       const max = Math.max(1, this.bossActive.maxHp);
-      ctx.fillStyle = '#311';
-      ctx.fillRect(PLAYFIELD.x + 40, PLAYFIELD.y + 6, PLAYFIELD.width - 80, 5);
-      ctx.fillStyle = '#e55';
-      ctx.fillRect(PLAYFIELD.x + 40, PLAYFIELD.y + 6, (PLAYFIELD.width - 80) * (hp / max), 5);
+      const px = (n: number): string =>
+        `#${((n >> 24) & 0xff).toString(16).padStart(2, '0')}${((n >> 16) & 0xff).toString(16).padStart(2, '0')}${((n >> 8) & 0xff).toString(16).padStart(2, '0')}`;
+      ctx.fillStyle = px(bar.emptyColor);
+      ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
+      ctx.fillStyle = px(bar.fillColor);
+      ctx.fillRect(bar.x, bar.y, bar.width * (hp / max), bar.height);
     }
   }
 

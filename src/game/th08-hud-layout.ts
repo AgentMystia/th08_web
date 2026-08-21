@@ -80,11 +80,18 @@ export const TH08_HUD = {
     leftColor: 0xe0e0e0ff,
     rightColor: 0x80e0e0ff
   },
+  // Native boss HP strip: a 2px bar at y=19 spanning x=34..414 (the
+  // playfield minus a 2px inset), grey-white fill draining right-to-left
+  // over a dark-blue remainder. Geometry/colors measured on the native
+  // demo captures (n-f5900/n-f6050: fill rgb(149,149,149), empty
+  // rgb(0,0,28)); colors packed RGBA like the gauge above.
   bossLifebar: {
-    x: 32,
-    y: 32,
-    maxWidth: 384,
-    height: 8
+    x: TH08_PLAYFIELD.x + 2,
+    y: 19,
+    width: TH08_PLAYFIELD.width - 4,
+    height: 2,
+    fillColor: 0x959595ff,
+    emptyColor: 0x00001cff
   }
 } as const;
 

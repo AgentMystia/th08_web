@@ -55,3 +55,17 @@ test('the power gauge is a 128-wide quad from y136 to y152', () => {
   assert.deepEqual(gaugeQuad(-1)[1], { x: 488, y: 136 });
   assert.deepEqual(gaugeQuad(200)[1], { x: 616, y: 136 });
 });
+
+// Native boss HP strip: measured on the native demo captures
+// (n-f5900/n-f6050) — a 2px bar at y=19 spanning x=34..414, grey-white
+// fill over a dark-blue remainder, draining right-to-left.
+test('the boss lifebar is the native 2px strip at y=19', () => {
+  assert.deepEqual(TH08_HUD.bossLifebar, {
+    x: 34,
+    y: 19,
+    width: 380,
+    height: 2,
+    fillColor: 0x959595ff,
+    emptyColor: 0x00001cff
+  });
+});
