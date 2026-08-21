@@ -656,13 +656,20 @@ export class StageScene implements GameHost {
         }
       });
     });
-    // Stage-intro title: stdNtxt.anm scripts 0-3 are the full vanilla
-    // presentation with positions/slides/fades baked in, in 640x480 SCREEN
-    // coordinates (the playfield sits at +32,+16 like the original):
-    // script0 = stage crest (128x128, add-blend), 1 = vertical JP title
-    // (rotated pi/2, drifts right), 2 = "Stage N", 3 = subtitle strip; the
-    // vertical BGM label rises separately via the dialogue BGM runner. All
-    // finish and self-remove by ~frame 460.
+    // Stage-intro title: the native stage-load GUI init arms the stage's
+    // stdNtxt.anm scripts 0-3 verbatim (Th08.exe v1.00d all.c:26963-26964 →
+    // FUN_00462360(gui+0x2a44, 0, 4)); positions/slides/fades are baked into
+    // the scripts, in 640x480 SCREEN coordinates (the playfield sits at
+    // +32,+16 like the original). stgNtxt.anm script roles: 0 = "Stage N"
+    // label (sprite1 @ (128,176)), 1 = the big stage title (sprite0 @
+    // (224,208)), 2 = the flavor strip (sprite2 @ (224,268), fades out at
+    // t=370-430), 3 = the stage-theme BGM credit (sprite3, slides
+    // (544,456)->(288,456) at t=200, gone by 460 — userdemo-t20's
+    // "BGM: 幻視の夜 ～ Ghostly Eyes"). MSG op7 later re-arms script 3 with
+    // sprite base+slot+3 for the boss-theme credit (dialogueBgmRunner).
+    // The demo branch instead arms script 3 alone with sprite base+3 =
+    // "Demonstration" (all.c:26966-26972) — demo-only, never normal play.
+    // All scripts finish and self-remove by ~frame 550.
     const introEntry = this.stdTxtAnm.entries[0];
     this.stageIntroRunners = (introEntry?.scriptIds ?? []).map(
       (id) =>
