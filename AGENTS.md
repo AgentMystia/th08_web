@@ -544,7 +544,39 @@ its end-snapshot comparison, as expected for the already-recorded advisory
 RNG/score convergence residual; this visual pass neither promotes that job
 nor conceals the divergence.
 
+### 2026-08-22 pre-release static audit (purely static; zero local execution)
 
+A release-readiness audit of the full 44-commit push (b070851..0f53d7a +
+audit fixes), run statically per the zero-local-execution mandate — three
+read-only sweeps (src hygiene, ship-safety, CI config) plus targeted
+verification of every flagged item. **0 blockers.**
+
+Confirmed clean: no isolation hacks (no early-return/debugger/console
+debugging in src/, no commented-out subsystems, no hardcoded live test
+state); TH07 excision complete (only allowed remnants = disassembly-provenance
+comments and the documented no-op eclvm case 20); `__TH08_TEST__` installs
+only under `?test=1` and ships nothing; every §7 approximation carries its
+inline comment; git tracks nothing under reference/, replay/, tmp/, backup/,
+dist/ (sole .rpy = the committed fixture); the browser runtime fetches only
+repo-relative `assets/` paths; the 82-image preload list is 1:1 with
+`assets/th08-img/` and test-locked; Pages stages exactly index.html +
+th08.css + the bundle + assets (whitelist in scripts/prepare-pages.mjs);
+deploy.yml's graph matches the intent (core+browser gate pages, replay is
+step-level continue-on-error so the known divergence cannot block deploys).
+
+Corrections landed with the audit: the eclvm.ts file header no longer
+self-describes as the TH07 VM with a `TH07-TODO` marker convention that no
+longer exists; loop.ts cites the real tests/engine-pacing.test.mjs; README
+refreshed to the delivered Stage 1+2 scope and the current standing
+divergences (stage 1 f2884 / stage 2 f1052).
+
+Parked advisories (harmless, no action this pass): main.ts's dormant
+`practice` branch (native practice init lives=8/power=128, menu entries
+disabled — verify against exe practice defaults before enabling the menu
+items); player.ts:541's magic sprite fallback `?? get(64)` feeding shot
+collision geometry; anm.ts's vestigial never-assigned `flipY`; the browser
+CI job re-downloads Chromium every run (no ms-playwright cache — cold-runner
+hang risk is handled by the cancel+rerun procedure).
 
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
 Border Team, dialogue, HUD, and the replay harness are all live.

@@ -9,11 +9,12 @@ import {
 import type { Rng } from '../core/rng';
 import type { GameHost, Enemy, EnemyBullet, EclState, EclContext, BulletProps, BulletExSlot, ItemType, EnemyLaser } from './types';
 
-// TH07 ECL virtual machine. Opcode semantics were derived by aligning thtk's
-// th07 signature table against the TH06 instruction set (implemented in the
-// TH06 Web runtime this project is based on), then validated instruction by
-// instruction against the thecl disassembly of the original stage scripts.
-// Approximations and open questions are marked with `TH07-TODO`.
+// TH08 ECL virtual machine (single-path since the TH07 excision, AGENTS.md
+// §0). Opcode semantics were originally derived by aligning thtk's th07
+// signature table against the TH06 instruction set of the parent runtime,
+// then re-validated per-opcode against the Th08.exe v1.00d decompilation
+// and the ECL v8 stage scripts (on-disk ins == exe case + 1). Known
+// approximations carry inline comments and are registered in AGENTS.md §7.
 
 // Th07.exe bullet pool is 0x400 = 1024 slots (FUN_00421e90 / FUN_00423480 both
 // gate on `< 0x400`; audit-bullet-motion.md D4). Was 640 (an empirical probe

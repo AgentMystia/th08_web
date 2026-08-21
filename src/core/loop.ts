@@ -7,7 +7,7 @@ export interface LoopClient {
 
 // Fixed 60 FPS timestep with bounded catch-up and a vsync snap — the
 // pacing policy itself (step counts, accumulator, snap band) is the pure
-// function in pacing.ts, unit-tested in tests/th07-pacing.test.mjs. The
+// function in pacing.ts, unit-tested in tests/engine-pacing.test.mjs. The
 // previous one-step-per-rAF loop silently ran the whole game slow on any
 // sub-60Hz delivery (reported as "player feels too slow"). Draws are
 // skipped on rAF ticks that ran no simulation step.
