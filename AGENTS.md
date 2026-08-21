@@ -26,12 +26,88 @@ the legacy TH07 text below as parent-engine history, not as format authority:
   by `N x u16` input records (v6 has NO per-frame aux word; the playback
   feed FUN_00452550 strides 2, the recorder FUN_00452310 writes one u16 per
   frame; the stride-6 feed FUN_004526c0 is for pre-v6 images only).
-- The first deliverable is Stage 1 + Reimu/Yukari Border Team + the original
-  menus/UI, aligned to `replay/th8_udLy01.rpy`. Do not spend time on TH07
-  Extra/Phantasm/Cherry behavior except where shared engine code still needs
-  to be excised safely.
+- The first deliverable is Stage 1 + Stage 2 + Reimu/Yukari Border Team +
+  the original menus/UI, aligned to `replay/th8_udLy01.rpy`. Do not spend
+  time on TH07 Extra/Phantasm/Cherry behavior except where shared engine
+  code still needs to be excised safely.
 - Runtime directories will move to `assets/th08-img`, `assets/audio/th08`,
   and `assets/sfx/th08`; nothing under `reference/` or `replay/` may ship.
+
+### 2026-08-20 delivery pass (goal pivot: fidelity delivery over frame-exact convergence; commits 996acfb..f35bd0a)
+
+The goal contract changed: frame-exact replay convergence is DEPRIORITIZED
+to a recorded residual; delivery-grade fidelity is the gate. This pass
+closed the presentation/mechanics audit checklist — every item checked
+against the v1.00d binary or native shots, then test-locked:
+
+1. **Stage Intro verified complete**: the native stage-load GUI arms stgNtxt
+   scripts 0-3 verbatim (all.c:26963-26964 → FUN_00462360(gui+0x2a44,0,4));
+   the "Demonstration" sprite is the demo-only branch (all.c:26966-26972).
+   Script roles from the stg1txt.anm dump: 0="Stage N" label, 1=title,
+   2=flavor strip, 3=the stage-theme BGM credit (the baked "BGM: 幻視の夜
+   ～ Ghostly Eyes" strip — no separate arm needed, userdemo-t20).
+   th08-intro-plate locks the [0,1,2,3] set, per-stage file binding, and
+   script 3's credit rect.
+2. **Tally rebuilt to the native row set** (FUN_0043826b,
+   all.c:26466-26606): the clear base is the per-stage table DAT_004c7158
+   (1M/1.5M/2M/2.5M/2.5M/3M/4M/6M/6.66M — stage 2 was underpaid 500k); the
+   extreme-gauge score trickle (+10 live score/frame past ±8000, player-tick
+   tail all.c:37597-37614) plus the "over-80%"/"over 80%" ratio rows; the
+   Player Penalty row; the trailing night-clock text rows ("PM11:00 >>
+   PM11:30", strings from .rdata 0x4b4d54/58/60, minutes = slot*30+660 per
+   all.c:24838) with the 60-frame-beat then +1min/frame (+4 with Z/Ctrl)
+   count-up (all.c:25485-25503); native gap structure 32/16/40 from (120,96)
+   (floats 0x4b42c4/cc/d4, 0x4b432c); the invented row-by-row reveal removed
+   (the exe draws every row each frame). Native quirk reproduced: the
+   Phantasm rank line prints "*2.0" but has no multiplier arm.
+3. **HUD row geometry from DrawGameScene (FUN_0043625d)**: HiScore y=40
+   ABOVE Score y=56 (the layout table had them swapped); the power bar is a
+   single 16px fill quad (488,136)-(488+power,152), 0xe0e0e0ff→0x80e0e0ff,
+   no background track; Point/Time split positions follow the digit count
+   (slash half-scale, +6px); the Time row tints 0xfffff0c0 once the quota is
+   met; the difficulty tag moved to its native slot — ascii.anm script 25,
+   sprite 283+difficulty corner-anchored at (552,200), fading in over stage
+   frames 60-80 (all.c:26916-26923). The bottom-right pause.png tag was an
+   invention.
+4. **Dialogue native pace** (native-verified by /proc/pid/mem polling of
+   RunMsg state, tmp/native-msg-trace.mjs): RunMsg init defaults
+   skippable=1 and the confirm threshold 6 (all.c:24649-24650) — the port's
+   skippable=false default ran every op4(500) wait full-length, so the
+   pre-boss chat overran the stage's frame budget entirely. The Ctrl warp
+   happens once per update at the loop head (one @block per frame,
+   gui-run-msg.c:33-35) with the wait bodies bypassed; the Z-edge confirm
+   releases at counter>=threshold measured from the text op (6 init, 8 after
+   a confirm, 30 after a timeout). Native demo reference: the stage-1 chat
+   completes in 132 frames (f5552-5684) inside the recorded Ctrl window;
+   the port reproduces the structure (th08-dialogue tests).
+5. **Spell background sheets armed natively** (FUN_004152a0,
+   all.c:9093-9095): two eff0N.anm VMs (archive scripts 0/1) at every spell
+   start, faded in over 60 frames then tile-wrapped with their authored
+   op26/27 UV scroll (eff01b v+0.008333/frame, eff01 v-0.002083/frame). ANM
+   ops 26/27 now accumulate scroll offsets on the VM; oversize
+   corner-anchored sheets draw through a repeat-pattern fill (canvas has no
+   GPU UV wrap). The TH07 hand-rolled per-stage spellbg path is deleted.
+   th08-spell-bg locks the arm/fade/scroll/remove cycle for both stages.
+6. **The stage-2 boss-stall root fix**: ins_135 sub-ECL contexts now carry
+   PRIVATE call stacks. The shared stack let Sub61's trailing ins_53 steal
+   the main Sub32→Sub58 call frame — the sub-context became a second Sub32
+   re-calling Sub58 every frame (hp refilled every ~410 frames, then the
+   spell re-declared every frame; Mystia's first spell never ended). A
+   return with an empty private stack parks the context until re-armed.
+   Regression: tests/th08-subcontext.test.mjs.
+7. **New ops from the binary**: ins_136(n) = call builtin n from the rdata
+   table 0x4c6cb0 (case 0x87; slot 0 = FUN_00423390 globals sync, slot 1 =
+   FUN_004233d0's 21-frame type-1 screen shake); ins_142(n)/ins_168(n) =
+   the phase-clear scatter showers (cases 0x8d/0xa7: ±64/axis, 2 rand01
+   draws per item; 142 tiers powerBig→powerSmall, all point at full power).
+8. **Stage chaining**: clearing stage 1 hands the RunCarry into stage 2
+   (previously the run returned to the title after stage 1); practice stays
+   one-stage native.
+
+**Verifier state**: formal replay earliest divergence — stage 1 f2884,
+stage 2 f1052 (the auto-fire RNG-lottery residual, deprioritized by the
+goal pivot; both stages complete under `replay-verify-th08.mjs --stage N
+--clear-check`). npm run check/build/test green (148/148).
 
 ### 2026-08-20 convergence pass (goal: Stage1+2 replay convergence + fidelity)
 
@@ -1320,8 +1396,30 @@ TH08-slice additions (2026-08-17, all with inline comments at the site):
 - TH08 bullet-command queue: 0x400000/0x800000/0x1000000 (timer-arm /
   homing-ish / child-spawn) are unused by stage 1 and warn-only.
 - Effect-51 visuals use the generic spark fallback; only its lifetime
-  (241f) and draw cost (10 u16) are modeled. UV-scroll ops 80/81 record
-  but do not scroll (canvas renderer).
+  (241f) and draw cost (10 u16) are modeled. UV-scroll: ops 26/27 now
+  accumulate and the eff0N spell sheets tile-wrap (2026-08-20 delivery
+  pass); the TH08 v3 continuous-scroll ops 80/81 still record but do not
+  scroll (canvas renderer).
+
+Delivery-pass additions (2026-08-20, inline comments at the sites):
+- ins_136 builtin table (0x4c6cb0): slot 0 (FUN_00423390) exports two ECL
+  context floats to DAT_004e3d28/24 — no mapped consumer in the slice, so
+  the port treats it as inert bookkeeping; slot 1's screen shake keeps the
+  authored 21-frame duration with a zero magnitude ramp (the native
+  ScreenEffect struct's magnitude/duration fields are unrecovered in the
+  partial export).
+- The HUD's trailing "%1d" digit after each score row (0x4b4ce4; reads
+  gm+0x29 / gm+6) has unrecovered semantics and draws 0 in normal play —
+  not ported.
+- The native fps counter (bottom-right "60.00fps") is absent: the
+  fixed-timestep loop has no measured-fps plumbing, and hardcoding "60"
+  would be fabrication.
+- The practice-mode tag keeps its long-standing bottom-right (344,428)
+  pause.png slot; the native practice marker's position is unrecovered
+  (the difficulty tag itself moved to the proven sidebar slot).
+- The tally rows are canvas text approximating the AsciiManager bitmap
+  font (glyph metrics unrecovered); row text/order/colors/positions are
+  exe-exact, the face is not. CI browser pixel gates are the backstop.
 
 ## 7. Approximations registry (known, flagged, improvable)
 
