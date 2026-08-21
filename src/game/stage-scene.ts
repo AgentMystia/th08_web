@@ -442,9 +442,10 @@ export class StageScene implements GameHost {
   // The declaration portrait runner (face_stNN entry 0, armed at spell
   // start; see startBossSpell).
   private spellDeclPortraitRunner: AnmRunner | null = null;
-  // The declaration rune ring (etama archive script 76, PlayerEffects
-  // handle; released at spell end).
-  private spellRingHandle: { release(): void } | null = null;
+  // Effect 39's declaration ring. Its etama script 76 supplies a 16x768
+  // repeated strip, while FUN_004272e0 bends the strip into the native 3D
+  // ring; Canvas needs a dedicated segmented draw (drawSpellRing).
+  private spellRing: { x: number; y: number } | null = null;
   private spellBanner = 0;
   // Spell-card capture popup (spec-ui-stageclear.md §4): label + value on
   // success only. Failure draws nothing (exe skips FUN_004264e3 entirely).
@@ -1825,15 +1826,9 @@ export class StageScene implements GameHost {
     // the spell's duration. FUN_004152a0 arms it at the boss's position
     // (all.c:9110-9126); released at spell end. Zero RNG cost (the script
     // carries no ins_59/60 ops — EFFECT_DRAW_COST[39] = 0).
-    this.spellRingHandle?.release();
-    this.spellRingHandle = null;
+    this.spellRing = null;
     const boss = this.bossActive;
-    if (boss) {
-      this.spellRingHandle = this.th08Effects.spawnHandle({
-        scriptId: archiveScript(this.assets.anms.etama, 76).localId,
-        x: boss.x, y: boss.y, ttl: Infinity
-      });
-    }
+    if (boss) this.spellRing = { x: boss.x, y: boss.y };
     // The declaration portrait runs the stage face file's entry-0 script
     // verbatim (face_st01/face_st02 entry 0: the 254x510 portrait slides
     // (160,-112)->(160,144) over 180 frames at alpha 192, holds 90, fades
@@ -1843,9 +1838,9 @@ export class StageScene implements GameHost {
     const declScript = faceEntry?.scriptIds[0];
     this.spellDeclPortraitRunner = declScript == null ? null
       : new AnmRunner(this.faceAnm, declScript, { entryIndex: 0, spriteIndexOffset: faceEntry.spriteBase });
-    const tally = this.spellHistory.get(spellId) ?? { seen: 0, got: 0 };
-    tally.seen++;
-    this.spellHistory.set(spellId, tally);
+    // The native history row excludes the attempt currently in progress
+    // (first-attempt native demo reads 0/0 through the whole card).
+    if (!this.spellHistory.has(spellId)) this.spellHistory.set(spellId, { seen: 0, got: 0 });
     this.playSfx(14);
     // Th07.exe (v1.00b) FUN_0040ee30 @ 0x40ee30 allocates one template-0x19
     // spell-presentation entity here. It does not request the generic id-3
@@ -1860,6 +1855,8 @@ export class StageScene implements GameHost {
     // enemies a second time. Stage 4 PRE16236 is the fixed-slot witness: the
     // false sweep duplicated two Sub77 trails into 14 extra cherry items.
     const hadActiveSpell = this.spellcard !== null;
+    const tally = this.spellcard ? this.spellHistory.get(this.spellcard.id) : undefined;
+    if (tally) tally.seen++;
     if (this.spellcard?.capturing) {
       // Th07.exe FUN_0040f340 @ 0x40f340: award = decayed base + graze
       // additions; the banner shows the full value while the score field
@@ -1868,7 +1865,6 @@ export class StageScene implements GameHost {
       const bonus = this.spellcard.bonus;
       this.addScore(bonus);
       this.runState.spellcardsCaptured++;
-      const tally = this.spellHistory.get(this.spellcard.id);
       if (tally) tally.got++;
       // Duration 280 frames (0x117+1 @ all.c:18302-18304). Failure path
       // arms nothing — no banner, no score credit (all.c:6639-6692).
@@ -1879,8 +1875,7 @@ export class StageScene implements GameHost {
     this.spellcard = null;
     this.spellBackgroundRunners = [];
     this.spellDeclPortraitRunner = null;
-    this.spellRingHandle?.release();
-    this.spellRingHandle = null;
+    this.spellRing = null;
     // Exe FUN_0040f340: the scored phase-end field sweep only runs when the
     // spell did not time out (DAT_012f40a8 still 1). Getting HIT during the
     // spell voids the bonus but NOT the sweep.
@@ -4756,6 +4751,13 @@ export class StageScene implements GameHost {
       const oy = PLAYFIELD.y + this.shakeY;
       this.drawBackground(r, ox, oy);
       this.drawSpellBackground(r);
+      // Native declaration presentation is a world layer: the authored
+      // portrait, rune ring, and spell-name/bonus row all sit behind the
+      // boss and danmaku (native s1 f3415..3540 / f3700 captures). The
+      // regular player/effect layer remains above bullets below.
+      this.drawSpellRing(r, ox, oy);
+      this.drawSpellDeclaration(r);
+      this.drawSpellOverlay(r);
       this.markPass('background');
       for (const p of this.particles) {
         // Effect 62 (option afterimages) is pool-pressure only: the native
@@ -4936,14 +4938,12 @@ export class StageScene implements GameHost {
         r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
         r.ctx.restore();
       }
-      this.drawSpellDeclaration(r, ox, oy);
       this.markPass('player+fx');
     });
     this.drawFrame(r);
     this.drawSidebar(r);
     this.drawModeTags(r);
     if (this.stageResultsActive) this.drawStageClearPresentation(r);
-    this.drawSpellOverlay(r);
     this.drawTh08Dialogue(r);
     this.drawStageTitle(r);
     if (this.bonusPopup) this.drawSpellBonusPopup(r);
@@ -5637,24 +5637,12 @@ export class StageScene implements GameHost {
     ctx.restore();
   }
 
-  // Declaration-time effects drawn over the playfield entities: the teal
-  // flash (capture.anm scr0: full-playfield quad, color 0x10c0e0, 30-frame
-  // fade in/out — its runtime '@' texture is not extractable, so a flat
-  // tint approximates it) and the authored declaration portrait VM
-  // (face_stNN entry 0, armed at spell start).
-  private drawSpellDeclaration(r: Renderer, ox: number, oy: number): void {
-    const sc = this.spellcard;
-    if (!sc) return;
-    const t = sc.declAge;
-    const ctx = r.ctx;
-    if (t < 60) {
-      const flash = (t < 30 ? t / 30 : 1 - (t - 30) / 30) * 0.5;
-      ctx.save();
-      ctx.globalAlpha = flash;
-      ctx.fillStyle = 'rgb(16,192,224)';
-      ctx.fillRect(ox, oy, PLAYFIELD.width, PLAYFIELD.height);
-      ctx.restore();
-    }
+  // Enemy spell declaration portrait (face_stNN entry 0). Native captures
+  // at stage-1 f3415..3540 show no teal full-playfield flash: the old flat
+  // capture.anm stand-in was a visible invention, so only authored art is
+  // drawn here.
+  private drawSpellDeclaration(r: Renderer): void {
+    if (!this.spellcard) return;
     // The authored declaration portrait VM (face_stNN entry 0) replaces the
     // hand-rolled sweep: sprite/position/alpha/timing all data-driven; it
     // self-removes at the authored 150-frame end.
@@ -5662,19 +5650,76 @@ export class StageScene implements GameHost {
     if (frame) r.drawAnmFrame(frame, 0, 0);
   }
 
+  // Effect 39 (DAT_004c6d30[39] -> etama archive script 76) is not an
+  // ordinary sprite. The script selects sprite221: a 16x768 surface over a
+  // 16x128 texture (six vertical repeats), while its FUN_004272e0 callback
+  // bends that strip around the boss. Native stage-1 captures f3415..3540
+  // show the initial radial streaks and the ring settling to radius ~240;
+  // script76 supplies the 70f alpha ramp and its 192->15 scale tween ends at
+  // 120f (15*16 = the settled 240px radius).
+  private drawSpellRing(r: Renderer, ox: number, oy: number): void {
+    const ring = this.spellRing;
+    const sc = this.spellcard;
+    const img = r.image('etama3');
+    if (!ring || !sc || !img) return;
+    const age = Math.max(0, sc.declAge);
+    const settle = Math.min(1, age / 120);
+    // The special 3D callback maps the authored 192->15 strip scale to the
+    // measured ~600->240px screen radius during the settle.
+    const radius = 240 + 360 * (1 - settle);
+    const alpha = Math.min(1, age / 70);
+    if (alpha <= 0) return;
+    const cx = ox + ring.x;
+    const cy = oy + ring.y;
+    const ctx = r.ctx;
+    const repeats = 6; // sprite221 height 768 / etama3 height 128
+    const segmentsPerRepeat = 16;
+    const segments = repeats * segmentsPerRepeat;
+    const sliceH = 128 / segmentsPerRepeat;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = alpha;
+    // Before the annulus reaches the playfield, the same texture is stretched
+    // into the radial rays visible in native f3430..3505.
+    if (age < 120) {
+      ctx.globalAlpha = alpha * (1 - age / 120) * 0.65;
+      for (let i = 0; i < repeats * 8; i++) {
+        const angle = (i / (repeats * 8)) * Math.PI * 2 + age * 0.0025;
+        const sy = (i % segmentsPerRepeat) * sliceH;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        ctx.drawImage(img, 0, sy, 16, sliceH, 16, -1.5, Math.max(1, radius - 16), 3);
+        ctx.restore();
+      }
+      ctx.globalAlpha = alpha;
+    }
+    const arc = (Math.PI * 2 * radius) / segments + 1;
+    for (let i = 0; i < segments; i++) {
+      const angle = (i / segments) * Math.PI * 2 + age * 0.0025;
+      const sy = (i % segmentsPerRepeat) * sliceH;
+      ctx.save();
+      ctx.translate(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
+      ctx.rotate(angle);
+      ctx.drawImage(img, 0, sy, 16, sliceH, -8, -arc / 2, 16, arc + 1);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
   private drawSpellOverlay(r: Renderer): void {
     if (!this.spellName) return;
     const sc = this.spellcard;
     const declAge = sc?.declAge ?? 999;
     const ctx = r.ctx;
-    // Declaration window: the name rides a red ribbon banner in the lower
-    // third, with Bonus / History beneath (text.anm's pre-rendered banner
-    // textures are not extractable — r.text over a gradient approximates
-    // the original look); afterwards it rests top-right under the HP bar.
-    const declPhase = Math.min(1, Math.max(0, (declAge - 120) / 30));
+    // Declaration window: the runtime text surface is unavailable, but the
+    // native f3430/f3445 captures pin its presentation — two thin red lines
+    // (not a solid ribbon), muted red name, white ungrouped Bonus/history.
+    // It moves to the top between declaration ages 90..120.
+    const declPhase = Math.min(1, Math.max(0, (declAge - 90) / 30));
     const slideIn = Math.min(1, declAge / 20);
     const bannerY = PLAYFIELD.y + 300;
-    const restY = PLAYFIELD.y + 22;
+    const restY = PLAYFIELD.y + 12;
     const y = bannerY + (restY - bannerY) * declPhase;
     const xRest = PLAYFIELD.x + PLAYFIELD.width - 12;
     const xBanner = PLAYFIELD.x + PLAYFIELD.width - 16 + (1 - slideIn) * 120;
@@ -5682,21 +5727,23 @@ export class StageScene implements GameHost {
     if (declPhase < 1) {
       const bannerAlpha = (1 - declPhase) * slideIn;
       const grad = ctx.createLinearGradient(PLAYFIELD.x, 0, PLAYFIELD.x + PLAYFIELD.width, 0);
-      grad.addColorStop(0, 'rgba(160,16,16,0)');
-      grad.addColorStop(0.55, 'rgba(190,24,24,0.75)');
-      grad.addColorStop(1, 'rgba(120,8,8,0.9)');
+      grad.addColorStop(0, 'rgba(128,48,48,0)');
+      grad.addColorStop(0.48, 'rgba(192,112,112,0.35)');
+      grad.addColorStop(1, 'rgba(232,176,176,0.8)');
       ctx.save();
       ctx.globalAlpha = bannerAlpha;
       ctx.fillStyle = grad;
-      ctx.fillRect(PLAYFIELD.x, y - 13, PLAYFIELD.width, 18);
+      ctx.fillRect(PLAYFIELD.x, y + 3, PLAYFIELD.width, 1);
+      ctx.fillRect(PLAYFIELD.x, y + 7, PLAYFIELD.width, 1);
       ctx.restore();
     }
-    r.text(this.spellName, x, y, { size: 13, color: '#fee', align: 'right' });
+    r.text(this.spellName, x + 1, y + 1, { size: 15, color: 'rgba(24,8,12,0.85)', align: 'right' });
+    r.text(this.spellName, x, y, { size: 15, color: '#d89898', align: 'right' });
     if (sc) {
       const tally = this.spellHistory.get(sc.id);
       const history = tally ? `  history ${tally.got}/${tally.seen}` : '';
-      const bonusText = sc.capturing ? `Bonus ${sc.bonus.toLocaleString('en-US')}${history}` : `Bonus failed${history}`;
-      r.text(bonusText, x, y + 18, { size: 11, color: sc.capturing ? '#adf' : '#977', align: 'right' });
+      const bonusText = sc.capturing ? `Bonus ${Math.round(sc.bonus)}${history}` : `Bonus failed${history}`;
+      r.text(bonusText, x, y + 18, { size: 11, color: sc.capturing ? '#fff' : '#977', align: 'right' });
     }
   }
 

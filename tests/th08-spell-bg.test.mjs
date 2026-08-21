@@ -111,11 +111,55 @@ test('the phase timer counts the armed deadline down in seconds, top-right', () 
   assert.equal(probe.calls.text.filter((c) => /^[0-9]+$/.test(c.txt)).length, 0);
 });
 
-test('the declaration ring (etama script 76) rides the spell and releases at its end', () => {
+test('the declaration ring uses etama3 script-76 strip geometry and releases at spell end', () => {
   const scene = makeScene(1);
   scene.bossActive = { x: 192, y: 96, ecl: { timerCallbackThreshold: -1, bossTimer: 0 } };
   scene.startBossSpell(1, 100000, 1000, 'test');
-  assert.ok(scene.spellRingHandle, 'ring armed at spell start');
+  assert.deepEqual(scene.spellRing, { x: 192, y: 96 }, 'ring anchored at declaration position');
+  scene.spellcard.declAge = 120;
+  const slices = [];
+  const ctx = {
+    save() {}, restore() {}, translate() {}, rotate() {},
+    drawImage: (...args) => slices.push(args),
+    globalCompositeOperation: '', globalAlpha: 1
+  };
+  scene.drawSpellRing({ image: (key) => key === 'etama3' ? {} : null, ctx }, 32, 16);
+  assert.equal(slices.length, 96, 'six 128px texture repeats, 16 segments each');
+  assert.ok(slices.every((args) => args[1] === 0 && args[3] === 16),
+    'segments sample etama3 sprite221 x=0 width=16');
   scene.endBossSpell();
-  assert.equal(scene.spellRingHandle, null, 'released at spell end');
+  assert.equal(scene.spellRing, null, 'released at spell end');
+});
+
+test('enemy declaration art has no invented teal flash and is layered below danmaku', () => {
+  const scene = makeScene(1);
+  scene.bossActive = { x: 192, y: 96, ecl: { timerCallbackThreshold: -1, bossTimer: 0 } };
+  scene.startBossSpell(1, 100000, 1000, 'test');
+  scene.spellcard.declAge = 30;
+  const fills = [];
+  scene.drawSpellDeclaration({
+    ctx: { fillRect: (...args) => fills.push(args) },
+    drawAnmFrame() {}
+  });
+  assert.deepEqual(fills, [], 'native f3415..3540 has no teal full-playfield fill');
+
+  const source = readFileSync('src/game/stage-scene.ts', 'utf8');
+  const declaration = source.indexOf('this.drawSpellDeclaration(r);');
+  const worldRing = source.indexOf('this.drawSpellRing(r, ox, oy);');
+  const enemies = source.indexOf("this.markPass('enemies');");
+  const bullets = source.indexOf("this.markPass('bullets');");
+  assert.ok(declaration >= 0 && declaration < enemies,
+    'portrait is drawn before enemies');
+  assert.ok(worldRing >= 0 && worldRing < declaration && worldRing < bullets,
+    'declaration ring is drawn below danmaku');
+  assert.ok(source.indexOf('this.drawSpellOverlay(r);') < bullets,
+    'spell name/bonus row is drawn below danmaku');
+});
+
+test('spell history excludes the live attempt and commits at spell end', () => {
+  const scene = makeScene(1);
+  scene.startBossSpell(7, 100000, 1000, 'test');
+  assert.deepEqual(scene.spellHistory.get(7), { seen: 0, got: 0 });
+  scene.endBossSpell();
+  assert.deepEqual(scene.spellHistory.get(7), { seen: 1, got: 1 });
 });
