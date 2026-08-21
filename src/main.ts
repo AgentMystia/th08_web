@@ -168,10 +168,15 @@ async function boot(): Promise<void> {
       sessionHiScore = Math.max(sessionHiScore, s.hiScore);
       startStage(difficulty, team, s.mode === 'arcade' ? 1 : stageNumber, null, practice);
     };
-    // The delivered vertical slice ends after Stage 1; return to the native
-    // title flow instead of constructing unavailable later-stage data.
+    // Stage 1's tally hands the run to Stage 2 through RunCarry. The
+    // delivered slice ends after Stage 2 (later stages ship no data), so a
+    // Stage-2 clear returns to the native title flow.
     s.onStageComplete = (c) => {
       sessionHiScore = Math.max(sessionHiScore, c.hiScore);
+      if (stageNumber < 2 && !practice) {
+        startStage(difficulty, team, stageNumber + 1, c);
+        return;
+      }
       stage = null;
       menu = createMenu();
       audio.preloadBgm(['th08_01']);
