@@ -738,8 +738,13 @@ export interface Th08EclState {
   spellDecay: number;
   // ins_135 persistent sub-ECL contexts (up to 4, "ECLInt" 0x24b0 blocks):
   // each keeps its own cursor + frame-scope var block, ticked by the
-  // interpreter round-robin alongside the main context.
-  subContexts: { ctx: EclContext; vars: Float64Array }[];
+  // interpreter round-robin alongside the main context. Each ALSO carries
+  // its own call stack: sharing the enemy's main stack let a sub-context's
+  // ins_53 steal the main caller's frame (stage-2 Mystia's Sub61 return
+  // popped the Sub32→Sub58 call frame, so the sub-context re-entered Sub32
+  // and re-called Sub58 EVERY frame — boss hp refilled per cycle, then the
+  // spell re-declared per frame).
+  subContexts: { ctx: EclContext; vars: Float64Array; stack: EclFrame[] }[];
 }
 
 export interface BulletProps {

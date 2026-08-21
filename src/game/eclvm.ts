@@ -1011,11 +1011,15 @@ export class StageRuntime {
     const s = e.ecl;
     const mainCtx = s.ctx;
     const mainVars = s.vars;
+    const mainStack = s.stack;
     const rate = game.slowRate ?? 1;
     for (const sub of s.th08!.subContexts) {
       if (!sub) continue;
       s.ctx = sub.ctx;
       s.vars = sub.vars;
+      // The sub-context ticks with its OWN call stack: a callee's ins_53
+      // must never pop the main context's frames.
+      s.stack = sub.stack;
       let ended = false;
       let waited = false;
       for (let guard = 0; guard < 64; guard++) {
@@ -1049,13 +1053,21 @@ export class StageRuntime {
             ended = true;
             break;
           }
+          // A RETURN with an empty private stack ends the context: park it
+          // (the native round-robin fetcher finds nothing to run) until a
+          // future ins_135 re-arms the slot with a fresh context.
+          if (action === 'restart') {
+            ended = true;
+            break;
+          }
           if (action === 'flow') continue;
         }
         s.ctx.index++;
       }
       if (ended) {
-        sub.ctx.index = 0;
-        sub.ctx.time = 0;
+        // Park past the end: subsequent ticks find no instruction and stay
+        // dormant (no auto-restart; the slot revives only via ins_135).
+        sub.ctx.index = this.ecl.sub(sub.ctx.subId).length;
       } else if (!waited) {
         // The instruction clock freezes while the ins_2 wait timer runs
         // (the native pass head Subtracts it once, canceling the tail tick).
@@ -1064,6 +1076,7 @@ export class StageRuntime {
     }
     s.ctx = mainCtx;
     s.vars = mainVars;
+    s.stack = mainStack;
   }
 
   private updateHighSpellBombCollisionGate(game: GameHost, e: Enemy): void {
@@ -3948,8 +3961,51 @@ export class StageRuntime {
         }
         t.subContexts[slot] = {
           ctx: { subId: sub, index: 0, time: 0, timeFrac: 0, waitTimer: 0 },
-          vars: s.vars.slice()
+          vars: s.vars.slice(),
+          // A context-private call stack (see the type note): the native
+          // sub-context is a full ECL context, call stack included.
+          stack: []
         };
+        return null;
+      }
+      case 136: {
+        // ins_136(n) = call builtin n from the rdata table PTR_FUN_004c6cb0
+        // (exe case 0x87). Slice usage: Sub50/Sub60 call 0 every frame
+        // (FUN_00423390: export two ECL-context floats to DAT_004e3d28/24 —
+        // bookkeeping; no mapped consumer in the slice, §7) and Sub58 calls
+        // 1 once (FUN_004233d0: a 21-frame type-1 screen shake at the ring
+        // burst, FUN_0045b8b0(1, 0xffffffff, 0, 0x15); the native struct's
+        // magnitude fields are unrecovered — the port keeps the authored
+        // duration with a zero ramp, §7).
+        const index = gi(0);
+        if (index === 1) game.startScreenShake?.(0x15, 0, 0);
+        // index 0: globals export, inert here (no consumer).
+        // Other table entries have no slice user; warn keeps new uses loud.
+        else if (index !== 0) warnOnce(`ins136-${index}`, `unhandled TH08 ECL builtin ${index} (ins_136)`);
+        return null;
+      }
+      case 142: {
+        // ins_142(n) (exe case 0x8d): scatter n items around the enemy —
+        // item 0 is powerBig, the rest powerSmall, ALL point at full power
+        // (FUN_00422480 >= 128). Each item draws rand01*128-64 per axis
+        // (2x FUN_0043ed50 = 4 u16) then FUN_004400a0(type).
+        const count = gi(0);
+        for (let i = 0; i < count; i++) {
+          const ox = game.rng.f() * 128 - 64;
+          const oy = game.rng.f() * 128 - 64;
+          const type = game.power >= 128 ? 'point' : i === 0 ? 'powerBig' : 'powerSmall';
+          game.spawnItem(type, e.x + ox, e.y + oy);
+        }
+        return null;
+      }
+      case 168: {
+        // ins_168(n) (exe case 0xa7): the same scatter, always point items.
+        const count = gi(0);
+        for (let i = 0; i < count; i++) {
+          const ox = game.rng.f() * 128 - 64;
+          const oy = game.rng.f() * 128 - 64;
+          game.spawnItem('point', e.x + ox, e.y + oy);
+        }
         return null;
       }
       case 139:

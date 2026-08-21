@@ -38,6 +38,11 @@ if (dumpFrame != null && (!Number.isInteger(dumpFrame) || dumpFrame < 0)) {
   process.exit(2);
 }
 const diagnostic = args.includes('--diagnostic');
+// --clear-check: liveness diagnostic. Replays the recorded inputs with the
+// player pinned invulnerable, then idles Z until the stage tally latches —
+// answers "does the stage still complete" without the RNG-lottery phantom
+// hits stopping the run. Not a fidelity gate (fidelity = the formal mode).
+const clearCheck = args.includes('--clear-check');
 const nativeTracePath = optionValue('--native-trace');
 const traceKinds = (() => {
   const raw = optionValue('--trace-kinds');
@@ -93,7 +98,7 @@ const scene = new mod.StageScene(
 // The formal gate uses the real replay death path and stops at the first
 // unexpected hit. Skipping the continue/game-over consequence is available
 // only as an explicitly requested diagnostic run.
-scene.mode = diagnostic ? 'test' : 'replay';
+scene.mode = diagnostic || clearCheck ? 'test' : 'replay';
 
 // Minimal native T8RP stage-entry restore: score/graze/lives/bombs/power
 // plus the TH08 run-state fields. The entry score is the PREVIOUS stage's
@@ -196,14 +201,25 @@ scene.runtime.killEnemy = (game, e, bombContact) => {
 };
 
 let modeCounter = 0;
-for (let f = 0; f < frames; f++) {
+let clearedAt = -1;
+if (clearCheck) {
+  scene.playerObj.invulnFrames = 999999;
+  scene.playerObj.bombInvuln = 999999;
+}
+const simFrameCap = clearCheck ? frames + 20000 : frames;
+for (let f = 0; f < simFrameCap; f++) {
   // Native replay slowdown (recorded per 30 frames): the recorded cadence
-  // bucket decides whether this replay input advances the simulation.
-  const recordedFps = stage.slowdown[Math.floor(f / 30)] & 0x7f;
+  // bucket decides whether this replay input advances the simulation. Past
+  // the recording (clear-check's idle tail), every frame advances.
+  const recordedFps = f < frames ? stage.slowdown[Math.floor(f / 30)] & 0x7f : 127;
   const advances = recordedFps >= 60 || replaySlowdownAdvancesLocal(recordedFps, ++modeCounter);
   if (!advances) continue;
   currentFrame = f;
-  const word = inputs[f];
+  const word = f < frames ? inputs[f] : 0x1;
+  if (clearCheck) {
+    scene.playerObj.invulnFrames = 999999;
+    scene.playerObj.bombInvuln = 999999;
+  }
   scene.update(inputBits(word));
   if (firstHitReplayFrame == null && scene.hitLog.length > 0) firstHitReplayFrame = f;
   // Spawn stream census; the kill stream comes from the killEnemy hook above.
@@ -271,9 +287,22 @@ for (let f = 0; f < frames; f++) {
       }))
     };
   }
-  if (!diagnostic && scene.hitLog.length > 0) {
+  if (clearCheck && scene.stageClear) {
+    clearedAt = f;
+    break;
+  }
+  if (!diagnostic && !clearCheck && scene.hitLog.length > 0) {
     stoppedEarly = true;
     break;
+  }
+}
+
+if (clearCheck) {
+  if (clearedAt >= 0) {
+    console.log(`clear-check: STAGE ${stageNumber} CLEARED at replay frame ${clearedAt} (recorded length ${frames})`);
+    console.log(`clear-check end: score=${scene.score} lives=${scene.playerObj.lives} bombs=${scene.playerObj.bombs} clock=${scene.runState?.clockTime}`);
+  } else {
+    console.log(`clear-check: STAGE ${stageNumber} NOT CLEARED within ${simFrameCap} frames`);
   }
 }
 
