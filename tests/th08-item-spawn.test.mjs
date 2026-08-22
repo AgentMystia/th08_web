@@ -25,7 +25,7 @@ test('the first native item allocation consumes slot zero and advances the curso
   const item = pool.spawn({ x: 192, y: 240, type: 'point', rng: rng() });
   assert.equal(item.poolSlot, 0);
   assert.equal(item.active, true);
-  assert.deepEqual([item.vx, item.vy, item.vz], [0, Math.fround(-2.1875), 0]);
+  assert.deepEqual([item.vx, item.vy, item.vz], [0, Math.fround(-2.2), 0]);
   assert.equal(pool.nextIndex, 1);
 });
 
@@ -49,8 +49,9 @@ test('full power converts power drops to small point items', () => {
 test('time items force native state three and randomized death-drop motion', () => {
   const seed = 0x1234;
   const expected = rng(seed);
-  // FUN_004400a0 param_4==3: vy = -2.0 - rng01*0.1, vx = signed rng01*0.6.
-  const vy = Math.fround(Math.fround(-2) - Math.fround(expected.range(0.1)));
+  // FUN_004400a0 param_4==3: 0x3e4ccccd is 0.2f, so
+  // vy = -2.0 - rng01*0.2 and vx = signed rng01*0.6.
+  const vy = Math.fround(Math.fround(-2) - Math.fround(expected.range(0.2)));
   const vx = Math.fround(Math.fround(Math.fround(expected.f() * 2) - 1) * 0.6);
 
   const pool = new Th08ItemSpawnPool();

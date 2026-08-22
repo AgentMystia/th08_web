@@ -95,6 +95,55 @@ export const TH08_HUD = {
   }
 } as const;
 
+// Th08.exe GuiImpl::Initialize (all.c:26916-26923) selects embedded sprite
+// 283+difficulty from ascii.anm. Those sprites belong to ascii.anm's THIRD
+// entry, whose texture is pause.png; the coordinates happen to look valid in
+// ascii.png too, but point at digits/Japanese UI fragments rather than the
+// Easy/Normal/Hard/Lunatic tags.
+export const TH08_DIFFICULTY_TAG = {
+  imageKey: 'pause',
+  position: { x: 552, y: 200 },
+  rects: [
+    [192, 0, 64, 16],
+    [192, 16, 64, 16],
+    [128, 0, 64, 16],
+    [128, 16, 64, 16],
+    [192, 192, 64, 16],
+    [192, 208, 64, 16]
+  ]
+} as const;
+
+// ascii.anm entry 0 scripts 5-8 (FUN_00402600 @ 0x402600). Script 5 is
+// the authored 128x16 gauge plate at (32,449); scripts 6/7 are the human
+// and youkai limit markers. Their x coordinates start at 88 in the ANM and
+// are shifted by the configured +/-10000 limits over the 56px half-span,
+// producing 32/144. Script 8 is center-anchored and follows the live value.
+export const TH08_FORM_GAUGE = {
+  imageKey: 'ascii',
+  plate: { rect: [0, 224, 128, 16], position: { x: 32, y: 449 } },
+  human: { rect: [160, 208, 16, 16], position: { x: 32, y: 449 } },
+  youkai: { rect: [176, 208, 16, 16], position: { x: 144, y: 449 } },
+  cursor: { rect: [128, 208, 8, 12], centerY: 453 },
+  centerX: 88,
+  halfSpan: 56,
+  percentY: 437,
+  pointValueCenterX: 96,
+  pointValueY: 453
+} as const;
+
+export function formGaugeCursorX(gauge: number): number {
+  const clamped = Math.max(-10000, Math.min(10000, gauge));
+  return TH08_FORM_GAUGE.centerX + clamped * TH08_FORM_GAUGE.halfSpan / 10000;
+}
+
+export function formGaugePercentX(gauge: number, glyphCount: number): number {
+  const width = Math.max(0, glyphCount) * 8;
+  const wanted = formGaugeCursorX(gauge) - width / 2;
+  const left = TH08_FORM_GAUGE.plate.position.x;
+  const right = left + TH08_FORM_GAUGE.plate.rect[2];
+  return Math.max(left, Math.min(right - width, wanted));
+}
+
 export function hudValuePosition(field: keyof typeof TH08_HUD_FIELDS): Th08HudPoint {
   return { ...TH08_HUD_FIELDS[field].valuePosition };
 }

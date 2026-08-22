@@ -23,7 +23,7 @@ export const CHARACTERS = {
 } as const;
 
 export interface PlayerBullet {
-  // Stable slot in Th08.exe's 96-entry player-shot pool. Each firing pass
+  // Stable slot in Th08.exe's 128-entry player-shot pool. Each firing pass
   // scans from slot 0, so slots freed by movement are reusable immediately.
   poolSlot: number;
   x: number;
@@ -33,6 +33,10 @@ export interface PlayerBullet {
   angle: number;
   speed: number;
   damage: number;
+  // SHT i16@+0x1e. A negative value marks human-form shots that may emit a
+  // time item when the per-enemy hit accumulator crosses its threshold
+  // (FUN_00451670 @ 0x451858-0x451897).
+  timeOrbEligible: boolean;
   // ShtShot.funcs[0], the spawn-time behavior selector. Border Team uses
   // 1 to aim at the cached target at spawn (FUN_00450240).
   behaviorFunc: number;
@@ -127,28 +131,45 @@ export class Player {
   bombs = 3;
   power = 0;
   // TH08 Border Team focused option (Yukari's shikigami familiar): the exe
-  // runs a per-frame 0.2-lerp toward (player.x, max(32, player.y - 96))
+  // runs a damped pursuit toward (player.x, max(32, player.y - 96))
   // (FUN_0044e770) and snaps to that anchor on the focus-in intro state
   // (FUN_0044e3a0 state 1). Option-sourced SHT records spawn from this live
   // position (player+0x6b0 read in the FUN_0044fb70 spawner).
   th08OptionX = 0;
   th08OptionY = 0;
+  private th08OptionVx = 0;
+  private th08OptionVy = 0;
+  private th08OptionAge = 0;
+  // FUN_0044e3a0's VM+0x2cc direction/lunge sub-state: 0 neutral,
+  // 1 moving left, 2 moving right, 3 pursuing the cached enemy.  Keeping
+  // only a lunge boolean loses a deliberate one-tick orientation handoff
+  // when a target disappears and another is published in the same manager
+  // pass (Stage-2 native f922-925).
+  private th08OptionSubstate = 0;
   th08OptionLive = false;
   // The familiar's own ANM VM (player00 script 18), live only while focused.
   th08OptionRunner: AnmRunner | null = null;
   // The enemy-lunge (FUN_0044e3a0 sub-state 3, entered from FUN_0044e770's
-  // tail when the shot cycle is armed, its counter >= 10, and the enemy
-  // manager's pointer cache 0x18b89b4 holds a target): the option's anchor
+  // tail when the shot cycle is armed, the OPTION actor's timer is >= 10,
+  // and the enemy manager's pointer cache 0x18b89b4 holds a target): the option's anchor
   // switches to (enemy.x, max(32, enemy.y + 32)) via FUN_0044e8d0 — Ran
   // herself flies onto the enemy while her needles pour out point-blank.
   th08OptionLunge = false;
   // Live anchor fed by the scene each frame from the enemy manager's pointer
   // cache (the |x-224|<=64, upper-most enemy pick at 0x42d4a6).
   th08LungeTarget: { x: number; y: number } | null = null;
-  // Frames since the last focus toggle (Timer player+0xe2ae8, Selected 0 at
-  // each transition, 0x44b1b1/0x44b404): drives the gauge fire-rate ramp
-  // (<=300 -> 20/frame, then counter/15, 0x44be67).
+  // Focus-stability counter at player+8. This flips the live form byte and
+  // gates the gauge block after 30 stable frames; it is distinct from both
+  // ZunTimers below.
   th08FocusFrames = 0;
+  // player+0xe2ad0: the shot-idle timer. While the shot cycle is disarmed it
+  // rises to 30; while armed it counts back to zero before firing can move
+  // the gauge (0x44be3e-0x44be62 / 0x44bef9-0x44c00d).
+  th08ShotIdleTimer = 0;
+  // player+0xe2ae8: firing-side gauge ramp. Focus edges and four idle frames
+  // reset it; otherwise it advances once per armed tick after the idle timer
+  // has drained. The gauge amount is derived from its PRE-tick value.
+  th08GaugeFireTimer = 0;
   // TH08 human(0)/youkai(1) form byte — exe player+5, read by FUN_0040bc40.
   // Teams flip it from the focus key through a stability gate: the native
   // counter (player+8, reset at each toggle) must exceed 6 first
@@ -170,22 +191,27 @@ export class Player {
   // TH08 bomb type (player+0xfe0): 0 human / 1 youkai / 2|3 deathbomb (the
   // side INVERTS before +2, 0x44c7f7). Latched by tryBomb.
   th08BombType: 0 | 1 | 2 | 3 = 0;
+  // A deathbomb trigger leaves the native player state byte at 2 for the
+  // trigger boundary. The selected callback releases it on the next player
+  // tick, when the 999 sentinel becomes the authored duration.
+  pendingDeathbombRescue = false;
+  // FUN_0044cba0 latches the bomb callback's side into player+3. During an
+  // active Border bomb this overrides the raw focus key until cleanup.
+  th08BombFocusOverride: boolean | null = null;
   invulnFrames = 0;
   // Player state-3's timer is the native {integer current, f32 fraction}
   // pair at +0x16a08/+0x16a04, retreated through FUN_00436a06. Keeping one
   // JS double made 1/3 slowmo retain a tiny positive tail for three extra
   // wall frames and shifted the player-shot collision gate in Stage 5.
   invulnFrac = 0;
-  // Persistent deathbomb meter, exe player+0x23f8 (site enumeration in
-  // recon exe-player-hit.md): seeded to SHT.deathbombWindow at spawn and at
-  // the materialize->invuln handoff (0x43e2c7), zeroed while materializing
-  // (0x43e237), decremented once per WALL-CLOCK frame while in the hit
-  // state (0x43dcd9, no slow-rate term), and bumped min(N, meter+6) on
-  // EVERY successful bomb (0x43dc4f-0x43dc7f). It doubles as the universal
-  // bomb gate: the trigger fails outright while it reads 0 (0x43db08).
+  // TH08 player+0xe2a68 preDeadCount. Init/respawn seed it from the SHT, but
+  // FUN_0044ab40 RECOMPUTES it on every actual hit from bomb stock, the Time
+  // quota state, boss presence and the team modifier. It decrements once per
+  // WALL-CLOCK frame during state 2 and successful bombs add 6, capped by
+  // the SHT value. It also doubles as the universal bomb gate.
   deathbombMeter = 0;
   // Exe player state 2 while the meter is still nonzero: hit taken, the
-  // deathbomb window is running. A hit never reloads the meter.
+  // deathbomb window is running.
   hitState = false;
   // -1 when idle; 0..DEATH_SQUISH_FRAMES during the post-death squish (exe
   // state 2 with meter==0, fcn.0043dca0): scaleX=1-t, scaleY=1+3t, in place
@@ -273,48 +299,18 @@ export class Player {
   // `rate` = global slow-motion rate: movement scales directly, the
   // player-side timers accumulate fractionally (spec-slowmo.md §3.1/§3.2).
   update(input: InputFrame, rate = 1, allowShotArm = true): void {
-    this.updateFocusGlide(input.held.has('focus'), rate);
-    this.th08FocusFrames++;
-    // FUN_0044aec0 tails: the form byte flips once the stable counter
-    // passes 6 (player+8; 1-based here -> flip at 8). th08FocusFrames
-    // was zeroed on the toggle frame and incremented right above, so
-    // the flip lands on the 8th frame counting the toggle itself.
-    if (this.th08FocusFrames > 7) this.th08Form = this.focusHeld ? 1 : 0;
-    // The focused option follows its anchor with the exe's 0.2 lerp
-    // (FUN_0044e770); on focus-in it snaps to the anchor first. While the
-    // lunge trigger holds (FUN_0044e770 tail: cycle armed, counter >= 10,
-    // pointer-cache target alive) the anchor is the ENEMY (FUN_0044e8d0:
-    // enemy pos with y+32, clamped >= 32) instead of the player.
-    const lunging = this.focusHeld && this.th08OptionLive && this.th08LungeTarget != null &&
-      this.shooting && this.fireFrame >= 10;
-    if (this.focusHeld) {
-      const anchorX = lunging ? this.th08LungeTarget!.x : this.x;
-      const anchorY = lunging
-        ? Math.max(32, Math.fround(this.th08LungeTarget!.y + 32))
-        : Math.max(32, Math.fround(this.y - 96));
-      if (lunging !== this.th08OptionLunge) {
-        this.th08OptionLunge = lunging;
-        // FUN_00407120(3) on entry, (1) on retreat — the familiar's spin
-        // interrupts (player00.anm script 18 labels).
-        this.th08OptionRunner?.interrupt(lunging ? 3 : 1);
-      }
-      if (!this.th08OptionLive) {
-        this.th08OptionX = anchorX;
-        this.th08OptionY = anchorY;
-        this.th08OptionLive = true;
-        // The familiar (FUN_0044e3a0 state 1) runs player00.anm script 18 —
-        // the ghostly Yukari hover cycle (sprites 22-28) floating at the
-        // option anchor. It is a separate ANM VM from the main sprite.
-        if (this.anm.hasScript(18)) this.th08OptionRunner = new AnmRunner(this.anm, 18);
-      } else {
-        const k = Math.fround(Math.fround(0.2) * Math.fround(rate));
-        this.th08OptionX = Math.fround(this.th08OptionX + Math.fround((anchorX - this.th08OptionX) * k));
-        this.th08OptionY = Math.fround(this.th08OptionY + Math.fround((anchorY - this.th08OptionY) * k));
-      }
-    } else {
-      this.th08OptionLive = false;
-      this.th08OptionRunner = null;
-      this.th08OptionLunge = false;
+    // FUN_0044aec0 is skipped by Player::OnUpdate while the state byte is 2
+    // (deathbomb window) or 1 (death squish). State 3 materialize does run
+    // it. This keeps focus/form/option state frozen through the trigger
+    // boundary of a deathbomb.
+    if (!this.hitState && this.dyingFrame < 0) {
+      this.updateFocusGlide(this.th08BombFocusOverride ?? input.held.has('focus'), rate);
+      this.th08FocusFrames++;
+      // FUN_0044aec0 tails: the form byte flips once the stable counter
+      // passes 6 (player+8; 1-based here -> flip at 8). th08FocusFrames
+      // was zeroed on the toggle frame and incremented right above, so
+      // the flip lands on the 8th frame counting the toggle itself.
+      if (this.th08FocusFrames > 7) this.th08Form = this.focusHeld ? 1 : 0;
     }
     if (this.invulnFrames > 0) {
       const rateF32 = Math.fround(rate);
@@ -352,6 +348,10 @@ export class Player {
       }
     }
     if (this.controllable) this.move(input, rate);
+    // The option actor is a separate callback after the player's main
+    // movement job.  It therefore pursues this tick's player position; doing
+    // this before move() left its Stage-2 f907 source y exactly one frame old.
+    if (!this.hitState && this.dyingFrame < 0) this.updateTh08Option(input, rate);
     this.shooting = input.held.has('shoot') && this.controllable;
     // Shot-cycle ARM (exe FUN_0043a930): holding shoot re-arms the counter
     // to 0 only while it is DISARMED (< 0). A re-press mid-cycle does NOT
@@ -373,6 +373,117 @@ export class Player {
     this.th08OptionRunner?.update(rate);
   }
 
+  private updateTh08Option(input: InputFrame, rate: number): void {
+    // The focused option is a second-order pursuit, not a direct 0.2 lerp:
+    //   desired velocity = (anchor - position) / 16
+    //   velocity += (desired velocity - velocity) * 0.2
+    //   position += velocity
+    // (FUN_0044e770/FUN_0044e8d0 @ 0x44e7c8-0x44e849).  The difference
+    // is combat-significant: a direct lerp put Yukari on a Stage-2 fairy at
+    // replay f912 and made her focused volley kill it 44 RNG draws early.
+    if (!this.focusHeld) {
+      this.th08OptionLive = false;
+      this.th08OptionRunner = null;
+      this.th08OptionLunge = false;
+      this.th08OptionVx = 0;
+      this.th08OptionVy = 0;
+      this.th08OptionAge = 0;
+      this.th08OptionSubstate = 0;
+      this.th08LungeTarget = null;
+      return;
+    }
+    if (!this.th08OptionLive) {
+      this.th08OptionX = this.x;
+      this.th08OptionY = Math.max(32, Math.fround(this.y - 96));
+      this.th08OptionVx = 0;
+      this.th08OptionVy = 0;
+      // The actor's ZunTimer is ticked by the ANM owner on the activation
+      // pass: native state 2 already reads timer=1 immediately after the
+      // state-1 snap.  This makes the >=10 lunge gate land on the authored
+      // tick after every focus-in, not one callback late.
+      this.th08OptionAge = 1;
+      this.th08OptionLunge = false;
+      this.th08OptionSubstate = 0;
+      // FUN_0044e3a0 state 1 clears the shared DAT_018b89b4 pointer on
+      // every focus-in activation.
+      this.th08LungeTarget = null;
+      this.th08OptionLive = true;
+      // The familiar (FUN_0044e3a0 state 1) runs player00.anm script 18 —
+      // the ghostly Yukari hover cycle floating at the option anchor.
+      if (this.anm.hasScript(18)) this.th08OptionRunner = new AnmRunner(this.anm, 18);
+      return;
+    }
+
+    const target = this.th08LungeTarget;
+    const oldSubstate = this.th08OptionSubstate;
+    // State 3 runs its enemy pursuit once before testing retreat. If the
+    // pointer vanished, this callback only returns to sub-state 0; ordinary
+    // player pursuit resumes on the next frame.
+    if (oldSubstate !== 3 || target) {
+      const lunging = oldSubstate === 3;
+      const anchorX = lunging ? target!.x : this.x;
+      const anchorY = lunging
+        ? Math.max(32, Math.fround(target!.y + 32))
+        : Math.max(32, Math.fround(this.y - 96));
+      const desiredVx = Math.fround(Math.fround(anchorX - this.th08OptionX) / 16);
+      const desiredVy = Math.fround(Math.fround(anchorY - this.th08OptionY) / 16);
+      const accelX = Math.fround(Math.fround(desiredVx - this.th08OptionVx) * Math.fround(0.2));
+      const accelY = Math.fround(Math.fround(desiredVy - this.th08OptionVy) * Math.fround(0.2));
+      this.th08OptionVx = Math.fround(this.th08OptionVx + accelX);
+      this.th08OptionVy = Math.fround(this.th08OptionVy + accelY);
+      this.th08OptionX = Math.fround(this.th08OptionX + this.th08OptionVx);
+      this.th08OptionY = Math.fround(this.th08OptionY + this.th08OptionVy);
+      // Both FUN_0044e770 and FUN_0044e8d0 apply the same |vx| dead zone
+      // after integration (0x44e83a / 0x44e99d).  It is visible on the
+      // second Stage-2 lunge, whose target stays almost directly below Ran.
+      if (Math.abs(this.th08OptionVx) < 0.05) {
+        this.th08OptionVx = 0;
+      }
+    }
+
+    if (oldSubstate === 3) {
+      const retreat = target == null || (this.fireFrame < 0 && !input.held.has('shoot'));
+      if (retreat) {
+        this.th08OptionSubstate = 0;
+        this.th08LungeTarget = null;
+        this.th08OptionRunner?.interrupt(1);
+      }
+    } else {
+      // FUN_0044e770 may request sub-state 3 at its tail. The enclosing
+      // switch then performs its direction transition using the sub-state
+      // from callback entry. In state 0 a nonzero vx overwrites that request
+      // with state 1/2, intentionally delaying the lunge by one tick.
+      let next = oldSubstate;
+      const lungeRequested = target && this.fireFrame >= 0 && this.th08OptionAge >= 10;
+      if (lungeRequested) {
+        next = 3;
+      } else {
+        // FUN_0044e770's fall-through clears DAT_018b89b4 whenever its
+        // lunge gate does not return early. The enemy pass may publish a new
+        // pointer later in this same scheduler tick.
+        this.th08LungeTarget = null;
+      }
+      if (oldSubstate === 0) {
+        if (this.th08OptionVx < 0) next = 1;
+        else if (this.th08OptionVx > 0) next = 2;
+      } else if (oldSubstate === 1) {
+        if (this.th08OptionVx === 0) next = 0;
+        else if (this.th08OptionVx > 0) next = 2;
+      } else if (oldSubstate === 2) {
+        if (this.th08OptionVx === 0) next = 0;
+        else if (this.th08OptionVx < 0) next = 1;
+      }
+      this.th08OptionSubstate = next;
+    }
+    this.th08OptionLunge = this.th08OptionSubstate === 3;
+    if (oldSubstate !== 3 && this.th08OptionSubstate === 3) {
+      // The >=10 gate is option+0x2e0, not the cycling shot timer. Entry
+      // changes substate only; enemy pursuit begins next tick.
+      this.th08OptionRunner?.interrupt(3);
+    }
+    this.th08OptionAge += rate;
+  }
+
   private updateFocusGlide(focused: boolean, rate: number): void {
     let advancedOnReverse = false;
     if (focused !== this.focusHeld) {
@@ -382,8 +493,10 @@ export class Player {
       // `3 < counter` on the 0-based player+8, i.e. five held frames.
       const prevHeld = this.th08FocusFrames;
       // Timer player+0xe2ae8 (the gauge fire-rate clock) re-arms to 0 at
-      // every focus transition (0x44b1b1/0x44b404).
+      // every focus transition (0x44b1b1/0x44b404). player+8 is the separate
+      // form-stability counter reset by the adjacent writes.
       this.th08FocusFrames = 0;
+      this.th08GaugeFireTimer = 0;
       // The human/youkai sprite swap is immediate with the focus flip (no
       // glide between different characters); refresh the pose runner here
       // since pose changes key off direction.
@@ -413,6 +526,31 @@ export class Player {
     if (!advancedOnReverse && this.focusGlideFrame < GLIDE_FRAMES) {
       this.focusGlideFrame = Math.min(GLIDE_FRAMES, this.focusGlideFrame + rate);
     }
+  }
+
+  // Advances player+0xe2ad0/e2ae8 in the order used by FUN_0044aec0,
+  // which runs before FUN_00451500 advances/expires the actual shot cycle.
+  // A non-null fireTimer means this tick should apply firing gauge drift;
+  // idleReady means the 30-frame return-to-center branch is live.
+  tickTh08GaugeTimers(armed: boolean, rate = 1): {
+    fireTimer: number | null;
+    idleReady: boolean;
+  } {
+    if (armed) {
+      if (Math.trunc(this.th08ShotIdleTimer) > 0) {
+        this.th08ShotIdleTimer = Math.max(0, this.th08ShotIdleTimer - rate);
+        return { fireTimer: null, idleReady: false };
+      }
+      const fireTimer = this.th08GaugeFireTimer;
+      this.th08GaugeFireTimer += rate;
+      return { fireTimer, idleReady: false };
+    }
+    if (Math.trunc(this.th08ShotIdleTimer) >= 4) this.th08GaugeFireTimer = 0;
+    if (Math.trunc(this.th08ShotIdleTimer) >= 30) {
+      return { fireTimer: null, idleReady: true };
+    }
+    this.th08ShotIdleTimer += rate;
+    return { fireTimer: null, idleReady: false };
   }
 
   private move(input: InputFrame, rate = 1): void {
@@ -539,11 +677,11 @@ export class Player {
     if (!this.anm.hasScript(scriptId)) return null;
     const runner = new AnmRunner(this.anm, scriptId);
     const rect = this.anm.sprites.get(scriptId) ?? this.anm.sprites.get(64);
-    // Option-sourced records (src >= 1) spawn from the focused option's
-    // live trail position (player+0x6b0, FUN_0044fb70); unfocused records
-    // are all src 0 (the player center). The exe reads the live option-trail
-    // struct; this port anchors to the player-relative option position.
-    const source = shot.orb >= 1 && this.th08OptionLive
+    // Option-sourced records (source >= 1) spawn from the focused option's
+    // live trail position (player+0x6b0, FUN_0044fb70); the unfocused Border
+    // table uses source 0 (the player center). The exe reads the live option
+    // actor; this port anchors to the player-relative option position.
+    const source = shot.source >= 1 && this.th08OptionLive
       ? { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) }
       : { x: 0, y: 0 };
     // TH08 impact: the settle path (all.c:40427-40431) re-arms the shot VM
@@ -563,6 +701,7 @@ export class Player {
       angle: shot.angle,
       speed: shot.speed,
       damage: shot.damage,
+      timeOrbEligible: shot.unknown30 < 0,
       behaviorFunc: shot.funcs[0],
       tickFunc: shot.funcs[1],
       hitboxW: shot.hitboxW,
@@ -578,11 +717,19 @@ export class Player {
     };
   }
 
-  hit(): 'deathbomb-window' | 'invulnerable' {
+  hit(options: { timeQuotaMet?: boolean; bossActive?: boolean } = {}): 'deathbomb-window' | 'invulnerable' {
     if (this.invulnFrames > 0 || this.bombInvuln > 0 || this.hitState) return 'invulnerable';
-    // Exe FUN_0043bd60: entering state 2 does NOT reload the meter — the
-    // window length is whatever the persistent meter currently holds (a
-    // recent late deathbomb leaves a shortened window).
+    // FUN_0044ab40 (all.c:36889-36915): bombs*6, +7 once Time quota is met,
+    // cap 15; double (cap 30) while a boss is registered; Border Team then
+    // applies *9/5. Native Stage-2 replay: stock 3 -> 27 at f677. This is
+    // deliberately independent of the normal SHT seed (18 for ply00a).
+    let preDeadCount = this.bombs * 6;
+    if (options.timeQuotaMet) preDeadCount += 7;
+    preDeadCount = Math.min(preDeadCount, 15);
+    if (options.bossActive) preDeadCount = Math.min(preDeadCount * 2, 30);
+    // This slice supports team 0 only; its table arm is integer *9/5.
+    preDeadCount = Math.trunc(preDeadCount * 9 / 5);
+    this.deathbombMeter = preDeadCount;
     this.hitState = true;
     return 'deathbomb-window';
   }
@@ -632,8 +779,16 @@ export class Player {
     const base = this.th08Form;
     this.th08BombType = (deathbomb ? 3 - base : base) as 0 | 1 | 2 | 3;
     this.bombs -= deathbomb ? Math.min(this.bombs, 2) : 1;
-    this.hitState = false; // deathbomb rescue
-    this.deathbombMeter = Math.min(Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6);
+    if (deathbomb) {
+      // The trigger boundary still reports native state 2. The callback's
+      // next tick completes the rescue and pays the +6 meter tail.
+      this.pendingDeathbombRescue = true;
+    } else {
+      this.hitState = false;
+      this.deathbombMeter = Math.min(
+        Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6
+      );
+    }
     // The frozen flag (player+0xfdc) owns invulnerability for exactly the
     // bomb's duration; the duration comes from the cast helper (0x40be30:
     // 260/200/260/300 by type) and is applied by the scene.
@@ -641,8 +796,18 @@ export class Player {
     return true;
   }
 
+  completePendingDeathbombRescue(): void {
+    if (!this.pendingDeathbombRescue) return;
+    this.pendingDeathbombRescue = false;
+    this.hitState = false;
+    this.deathbombMeter = Math.min(
+      Math.trunc(this.unfocused.deathbombWindow), this.deathbombMeter + 6
+    );
+  }
+
   die(): void {
     this.hitState = false;
+    this.pendingDeathbombRescue = false;
     // Materialize holds the meter at 0 (0x43e237); it reloads at the
     // state-1 -> state-3 handoff in update().
     this.deathbombMeter = 0;

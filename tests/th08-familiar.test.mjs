@@ -58,6 +58,29 @@ test('form byte flips 7 frames after the focus edge (stability gate > 6)', () =>
   assert.equal(p.th08Form, 0);
 });
 
+test('gauge clocks preserve the native 30-frame idle drain and separate fire ramp', () => {
+  const p = new Player('reimuYukari', anms);
+  for (let i = 0; i < 30; i++) {
+    const tick = p.tickTh08GaugeTimers(false);
+    assert.equal(tick.idleReady, false);
+  }
+  assert.equal(p.th08ShotIdleTimer, 30);
+  assert.equal(p.tickTh08GaugeTimers(false).idleReady, true);
+
+  for (let i = 0; i < 30; i++) {
+    const tick = p.tickTh08GaugeTimers(true);
+    assert.equal(tick.fireTimer, null, `armed drain ${i + 1}`);
+  }
+  assert.equal(p.th08ShotIdleTimer, 0);
+  assert.equal(p.tickTh08GaugeTimers(true).fireTimer, 0, 'fire ramp begins only after idle drains');
+  assert.equal(p.tickTh08GaugeTimers(true).fireTimer, 1);
+
+  for (let i = 0; i < 4; i++) p.tickTh08GaugeTimers(false);
+  assert.equal(p.th08GaugeFireTimer, 2, 'reset gate observes the pre-tick idle current');
+  p.tickTh08GaugeTimers(false);
+  assert.equal(p.th08GaugeFireTimer, 0, 'the fifth idle callback enters with current=4');
+});
+
 test('a short focus blip never flips the form and plays no transition tint', () => {
   const p = new Player('reimuYukari', anms);
   for (let i = 0; i < 4; i++) p.update(inputOf(['focus']), 1);
@@ -101,7 +124,10 @@ test('deathbomb inverts the side AND adds 2 (all.c:37720-37742)', () => {
   assert.ok(p.tryBomb());
   assert.equal(p.th08BombType, 3, 'unfocused deathbomb = (1 - 0) + 2');
   assert.equal(p.bombs, 1, 'deathbomb costs 2 when stocked');
-  assert.equal(p.hitState, false, 'deathbomb rescue clears the hit state');
+  assert.equal(p.hitState, true, 'trigger boundary retains native state 2');
+  assert.equal(p.pendingDeathbombRescue, true);
+  p.completePendingDeathbombRescue();
+  assert.equal(p.hitState, false, 'next callback tick clears the hit state');
   // Focused cast (form youkai, base 1): table[2] — 夢想封印　瞬.
   const q = new Player('reimuYukari', anms);
   q.bombs = 3;

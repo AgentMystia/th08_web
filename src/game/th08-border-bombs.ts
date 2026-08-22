@@ -34,13 +34,39 @@ export interface Th08BombHost {
    * Returns the damage actually settled against live enemies (the slot
    * consumer's +0x30 accumulation).
    */
-  addAttackSlot(x: number, y: number, radius: number, damage: number): number;
+  addAttackSlot(
+    x: number,
+    y: number,
+    radius: number,
+    damage: number,
+    cadenceCounter?: number,
+    cadenceDivisor?: number
+  ): number;
+  /** FUN_0044dfa0 oriented rectangle from the boundary-wave callback. */
+  addBoxAttackSlot(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    angle: number,
+    damage: number,
+    cadenceCounter?: number,
+    cadenceDivisor?: number
+  ): number;
   /** Clear enemy bullets inside the circle (FUN_0044df00 pools / 0x40be30). */
   clearBullets(x: number, y: number, radius: number): void;
+  /** Oriented FUN_0044de60 clear paired with each boundary beam. */
+  clearBulletsBox(x: number, y: number, width: number, height: number, angle: number): void;
   /** Shared gameplay RNG float used by the no-target deathbomb fallback. */
   randomFloat(): number;
   /** Effect VM request (FUN_00425430(script, pos, scale, color)). */
   effectVm(script: number, x: number, y: number, scale: number, color: number): void;
+  /** Main effect-pool allocation paired with the authored VM request. */
+  effectParticles(effectId: number, x: number, y: number, count: number, color: number): void;
+  /** FUN_0045b8b0 type 1: independently scheduled camera shake. */
+  startScreenShake(duration: number, from: number, to: number): void;
+  /** FUN_0045b8b0 type 3: independently scheduled full-screen tint. */
+  startScreenFlash(duration: number, repeats: number, argb: number): void;
   /**
    * Orb VM request (FUN_004069f0(slotVm, script) on the 0x16f0-strided
    * pool). x/y are the spawn position — the bombardment slots (16/17)
@@ -79,12 +105,21 @@ const SEEK_START_SPEED = 8;
 const SEEK_MAX_SPEED = 10;
 const SEEK_MIN_SPEED = 1;
 const SEEK_DIVISOR = 8; // _DAT_004b4300
-// 0x40c010: seek auras track each orb (r64 dmg 200 pool entry + the r128
-// clear pool entry); an orb detonates once its aura settles 200 damage.
-const ORB_AURA_DAMAGE = 200;
+// 0x40c010: FUN_0044e040(pos, r64, growth0, damage5, life200), then the
+// slot's +0x34 threshold is overwritten to 200. Multiple live enemies can
+// contribute five each in one pass; the old damage=200 transcription made
+// every orb detonate on its first contact.
+const ORB_AURA_DAMAGE = 5;
+const ORB_AURA_THRESHOLD = 200;
 // Detonation slots (0x40c010 / 0x40c910 burst writes).
 const BURST_DAMAGE_NORMAL = 500;
 const BURST_DAMAGE_DEATHBOMB = 50; // 0x32
+const BURST_ATTACK_GROWTH_NORMAL = F32(12.8); // 0x414ccccd
+const BURST_ATTACK_GROWTH_DEATHBOMB = F32(8.533333); // 0x41088889
+const BURST_ATTACK_FRAMES_NORMAL = 12;
+const BURST_ATTACK_FRAMES_DEATHBOMB = 15;
+const BURST_CLEAR_GROWTH = F32(4.266667); // 0x40888889
+const BURST_CLEAR_FRAMES = 30;
 const ORB_COUNT = 16;
 const CHARGE_RELEASE_FRAME = 40; // 0x28 gate in both orb bombs
 
@@ -101,8 +136,18 @@ interface BombOrb {
   anchorX: number;
   anchorY: number;
   burstAge: number;
+  burstDamage: number;
   auraDamage: number;
   dead: boolean;
+}
+
+interface BoundaryBeam {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  angle: number;
+  age: number;
 }
 
 export class Th08BorderBomb {
@@ -116,6 +161,13 @@ export class Th08BorderBomb {
   // Next bombardment slot index (16+, the 0x40c910 latch at bombmgr+0x14).
   private bombardments = 0;
   private castOrigin = { x: 0, y: 0 };
+  // 0x410c40/0x410fe0 allocate four independent expanding r100 fields.
+  // They live in the native player+0xb8834 / +0xbb834 pools after the
+  // callback returns; keep their ages here and republish their current
+  // circles to the frame-local collision facade.
+  private fieldAttacks: { age: number; life: number; x: number; y: number }[] = [];
+  private fieldClears: { age: number; life: number; x: number; y: number }[] = [];
+  private boundaryBeams: BoundaryBeam[] = [];
 
   constructor(type: Th08BombType, castX: number, castY: number) {
     this.type = type;
@@ -140,6 +192,7 @@ export class Th08BorderBomb {
     if (this.type === 0 || this.type === 2) {
       // FUN_00425430(0xc = effect 12): DAT_004c6d30[12] → archive script 44.
       host.effectVm(44, x, y, 1, 0xff4040ff);
+      host.effectParticles(12, x, y, 1, 0xff4040ff);
       let angle = F32(-Math.PI);
       for (let i = 0; i < ORB_COUNT; i++) {
         // 0x40c010/0x40c910: orb VM script 0x13, ring at -pi + i*pi/8.
@@ -151,23 +204,33 @@ export class Th08BorderBomb {
           angle, speed,
           vx: 0, vy: 0,
           anchorX: F32(x), anchorY: F32(y),
-          burstAge: 0,
+          burstAge: 0, burstDamage: 0,
           auraDamage: 0,
           dead: false
         });
         angle = F32(angle + PI_OVER_8);
-        // FUN_0044df00's cast pool is r96; the r64 damage aura is the
-        // separate FUN_0044e040 allocation. All sixteen pools overlap at
-        // cast, but fixed-pool identity remains per orb in the executable.
-        host.clearBullets(x, y, 96);
-        host.addAttackSlot(x, y, 64, ORB_AURA_DAMAGE);
+        // The persistent r96 clear and r64/dmg5 aura are represented by the
+        // state-1 publication below. The callback continues into that loop
+        // on the cast frame, so allocating them here would duplicate it.
       }
       return;
     }
-    // 0x410c40 / 0x410fe0: the r100 field (0x42c80000) around the player.
-    const first = this.type === 1 ? 0x28 : 100; // dmg-slot arg (dword +0x24)
-    host.addAttackSlot(x, y, 100, 70); // 0x4e040 field slot (kind 5)
-    host.addAttackSlot(x, y, 100, first); // 0x4df00 pool entry
+    // 0x410c40 / 0x410fe0: one expanding r100 damage field (growth 1,
+    // damage 70, life 40) plus the matching clear field. Deathbomb type 3's
+    // first clear lives 100 frames; its damage field is still only 40.
+    // The cast callback publishes the raw r100 records after the current
+    // item/bullet manager pass.  They are already visible at the replay
+    // boundary (Stage-2 f697), but cannot be consumed by an ordinary bullet
+    // until the following manager pass.  Keep age=1 for the next callback's
+    // r101 publication and publish age zero synchronously here.
+    this.fieldAttacks.push({ age: 1, life: 40, x: F32(x), y: F32(y) });
+    this.fieldClears.push({
+      age: 1,
+      life: this.type === 1 ? 40 : 100,
+      x: F32(x),
+      y: F32(y)
+    });
+    host.addAttackSlot(x, y, 100, 70, 40, 5);
     host.clearBullets(x, y, 100);
     // First wave VM 0x24/0x25 at angle 0x3f490fdb.
     // Effect ids 0x24/0x25 map through DAT_004c6d30 to archive scripts
@@ -239,6 +302,7 @@ export class Th08BorderBomb {
           orb.speed = F32(orb.speed + SPIRAL_GROW);
         }
       } else if (orb.state === 2) {
+        this.publishBurstAreas(host, orb);
         orb.burstAge++;
         if (orb.burstAge > 29) orb.dead = true; // dword 1 > 0x1d
       }
@@ -249,6 +313,10 @@ export class Th08BorderBomb {
         continue;
       }
       if (orb.state === 1) {
+        // Cast-time r96/200 clear follows the orb throughout state 1; before
+        // frame 40 the callback additionally publishes a one-pass r128
+        // clear at the same location, which subsumes it spatially.
+        host.clearBullets(orb.x, orb.y, t < CHARGE_RELEASE_FRAME ? 128 : 96);
         if (t < CHARGE_RELEASE_FRAME) {
           orb.x = F32(orb.x + orb.vx);
           orb.y = F32(orb.y + orb.vy);
@@ -256,7 +324,7 @@ export class Th08BorderBomb {
         // Aura settles >= 200 damage (slot +0x30 vs +0x34): the aura's
         // per-frame addAttackSlot feeds auraDamage.
         orb.auraDamage += host.addAttackSlot(orb.x, orb.y, 64, ORB_AURA_DAMAGE);
-        if (orb.state === 1 && orb.auraDamage >= ORB_AURA_DAMAGE) {
+        if (orb.state === 1 && orb.auraDamage >= ORB_AURA_THRESHOLD) {
           this.burstOrb(host, orb, BURST_DAMAGE_NORMAL);
         }
       }
@@ -279,12 +347,15 @@ export class Th08BorderBomb {
         if (t >= CHARGE_RELEASE_FRAME) {
           orb.speed = F32(orb.speed + ((i & 1) === 0 ? CHARGE_ACCEL_EVEN : CHARGE_ACCEL_ODD));
         }
+        host.clearBullets(orb.x, orb.y, 96);
+        host.addAttackSlot(orb.x, orb.y, 64, ORB_AURA_DAMAGE);
         // Staggered forced burst at duration-0x28-i (220-i).
         if (t >= this.duration - 0x28 - i) {
           this.burstOrb(host, orb, BURST_DAMAGE_DEATHBOMB);
           continue;
         }
       } else if (orb.state === 2) {
+        this.publishBurstAreas(host, orb);
         orb.burstAge++;
         if (orb.burstAge > 29) orb.dead = true;
       }
@@ -308,6 +379,8 @@ export class Th08BorderBomb {
       // Effect ids 0x31/0x37 map to archive scripts 0x56/0x57.
       host.effectVm(0x56, fallback.x, fallback.y, 1, 0);
       host.effectVm(0x57, fallback.x, fallback.y, 1, 0);
+      host.effectParticles(0x31, fallback.x, fallback.y, 1, 0xffffffff);
+      host.effectParticles(0x37, fallback.x, fallback.y, 1, 0xffffffff);
       host.addAttackSlot(fallback.x, fallback.y, 64, 400);
       host.playSfx(0x0f, fallback.x);
       this.bombardments++;
@@ -325,10 +398,25 @@ export class Th08BorderBomb {
       { at: 30, script: this.type === 1 ? 0x5b : 0x5f, angle: 0x3ffb53d2 }
     ];
     for (const w of waves) {
-      if (t === w.at) {
-        host.addAttackSlot(playerX, playerY, 100, 70);
-        host.addAttackSlot(playerX, playerY, 100, this.type === 1 ? 0x28 : 100);
-        host.clearBullets(playerX, playerY, 100);
+      // The native ZunTimer is already current=1 on the first dispatched
+      // callback: its 10/20/30 predicates therefore fire on this simulator's
+      // zero-based callback frames 9/19/29.
+      if (t + 1 === w.at) {
+        this.fieldAttacks.push({
+          age: 0,
+          life: 40,
+          x: F32(playerX),
+          y: F32(playerY)
+        });
+        // 0x410c40 uses 40 for every clear. 0x410fe0 uses 40/100/100 at
+        // t10/t20/t30 (all.c:7277-7370).
+        const clearLife = this.type === 1 || w.at === 10 ? 40 : 100;
+        this.fieldClears.push({
+          age: 0,
+          life: clearLife,
+          x: F32(playerX),
+          y: F32(playerY)
+        });
         // The wave rings are etama VMs (archive scripts 0x59-0x5f), not
         // player00 orb art. Native creates effect id 0x24/0x25 and replaces
         // that same VM's base 0x58/0x5c script immediately; spawning both
@@ -336,8 +424,98 @@ export class Th08BorderBomb {
         host.effectVm(w.script, playerX, playerY, 1, 0xffffffff);
       }
     }
-    // The field persists around the live player for the whole duration.
-    host.addAttackSlot(playerX, playerY, 100, 70);
+    // FUN_004117b0 is installed on the cast VM (scale 4) and the three
+    // wave VMs (scales 5/6/7). On their timer-50 edge it publishes four
+    // long oriented attack boxes through FUN_0044dfa0. The VM callback has
+    // already executed 51 angle steps and its size fields still contain the
+    // timer-49 interpolation, which is why the first native Stage-2 group
+    // appears at replay f747 with width 1085.247 and height 38.4.
+    if (t >= 49 && t <= 79 && (t - 49) % 10 === 0) {
+      this.armBoundaryBeamGroup(host, (t - 49) / 10);
+    }
+    for (const field of this.fieldAttacks) {
+      // FUN_0044e040 copies the player's position only when allocating the
+      // persistent record. Callback 1/3 then sets record+0x38=5, so the
+      // enemy collision scan settles damage only when its remaining-life
+      // counter (+0x24) is divisible by five.
+      host.addAttackSlot(
+        field.x,
+        field.y,
+        F32(100 + field.age),
+        70,
+        field.life - field.age,
+        5
+      );
+      field.age++;
+    }
+    this.fieldAttacks = this.fieldAttacks.filter((field) => field.age < field.life);
+    for (const field of this.fieldClears) {
+      host.clearBullets(field.x, field.y, F32(100 + field.age));
+      field.age++;
+    }
+    this.fieldClears = this.fieldClears.filter((field) => field.age < field.life);
+    for (const beam of this.boundaryBeams) {
+      // FUN_004117b0 publishes both native records on the timer-50 callback.
+      // That callback runs after the enemy manager but before the bullet
+      // manager: age zero can clear bullets immediately, while enemies must
+      // not consume its damage until a later frame. StageScene's host runs
+      // before both managers, so defer only the attack projection by one
+      // tick and publish the paired clear box below without that delay.
+      const attackRemaining = 100 - beam.age;
+      if (beam.age > 0 && attackRemaining > 0) {
+        host.addBoxAttackSlot(
+          beam.x, beam.y, beam.width, beam.height, beam.angle,
+          60, attackRemaining, 2
+        );
+      }
+      // The paired FUN_0044de60 record uses half the attack width, the same
+      // 38.4px height and a 150-frame lifetime. The active bomb ends before
+      // that clear record, but retaining it for this callback's lifetime is
+      // sufficient for the delivered Stage-1/2 player state machine.
+      host.clearBulletsBox(
+        beam.x, beam.y, F32(beam.width / 2), beam.height, beam.angle
+      );
+      beam.age++;
+    }
+    this.boundaryBeams = this.boundaryBeams.filter((beam) => beam.age < 150);
+  }
+
+  private armBoundaryBeamGroup(host: Th08BombHost, group: number): void {
+    // FUN_004117b0 calls FUN_0045b8b0 twice before publishing the boxes:
+    // type 1 is a 16-frame 8->0 camera shake and type 3 is the authored
+    // purple, eight-frame overlay. ScreenInf jobs are registered at priority
+    // 0x15, after this effect-manager callback, so their first update is the
+    // following frame. The shake's FUN_0045bdc0 callback advances its timer
+    // before sampling and consumes two FUN_00406ef0(3) u32 draws at timer
+    // values 1..15; overlapping groups remain independent scheduler jobs.
+    host.startScreenShake(16, 8, 0);
+    host.startScreenFlash(8, 1, 0x8f6060f0);
+    const scale = 4 + group;
+    // FUN_004117b0's timer-49 size interpolation followed by its sqrt(1/2)
+    // radial projection. Keep the intermediate f32 stores: they reproduce
+    // the native widths 1085.247/1266.194/1447.141/1628.088.
+    const phase = F32(1 - F32(49 / 50));
+    const outer = F32(group * 32 + 384);
+    const base = F32(group * 32 + 192);
+    const authoredRadius = F32(base - F32(outer * F32(phase * phase)));
+    const radius = F32(authoredRadius * F32(Math.SQRT1_2));
+    const width = F32(radius * 8);
+    const height = F32(F32(88 - F32(F32(49 * 80) / 50)) * 4);
+
+    // Initial angles are pi/4, 3pi/8, pi/2, 5pi/8. Even VM scales rotate
+    // -pi/80 and odd scales +pi/80 once per callback, including the timer-50
+    // edge; the box direction is another +pi/2 from its radial position.
+    let vmAngle = F32(F32(PI_F / 4) + F32(group * F32(PI_F / 8)));
+    const spin = (scale & 1) === 0 ? F32(-PI_F / 80) : F32(PI_F / 80);
+    for (let i = 0; i < 51; i++) vmAngle = normalizeAngle(vmAngle, spin);
+    let radial = normalizeAngle(vmAngle, F32(PI_F / 4));
+    for (let i = 0; i < 4; i++) {
+      const x = F32(this.castOrigin.x + F32(Math.cos(radial) * radius));
+      const y = F32(this.castOrigin.y + F32(Math.sin(radial) * radius));
+      const angle = normalizeAngle(radial, F32(PI_F / 2));
+      this.boundaryBeams.push({ x, y, width, height, angle, age: 0 });
+      radial = angle;
+    }
   }
 
   private burstOrb(host: Th08BombHost, orb: BombOrb, damage: number): void {
@@ -346,9 +524,30 @@ export class Th08BorderBomb {
     // FUN_00425430(6 = effect 6): DAT_004c6d30[6] → archive script 38; the
     // settle plays sfx id 15 with the orb x as its pan value (0x40c667).
     host.effectVm(38, orb.x, orb.y, 8, 0xffffffff);
+    host.effectParticles(6, orb.x, orb.y, 8, 0xffffffff);
     host.playSfx(0x0f, orb.x);
     orb.state = 2;
     orb.burstAge = 0;
+    orb.burstDamage = damage;
+  }
+
+  private publishBurstAreas(host: Th08BombHost, orb: BombOrb): void {
+    const deathbomb = orb.burstDamage === BURST_DAMAGE_DEATHBOMB;
+    const attackFrames = deathbomb
+      ? BURST_ATTACK_FRAMES_DEATHBOMB
+      : BURST_ATTACK_FRAMES_NORMAL;
+    const attackGrowth = deathbomb
+      ? BURST_ATTACK_GROWTH_DEATHBOMB
+      : BURST_ATTACK_GROWTH_NORMAL;
+    // burstOrb published age zero synchronously. State 2 starts on the next
+    // callback, so publish ages 1..N-1 here for the native total lifetime.
+    const age = orb.burstAge + 1;
+    if (age < BURST_CLEAR_FRAMES) {
+      host.clearBullets(orb.x, orb.y, F32(64 + BURST_CLEAR_GROWTH * age));
+    }
+    if (age < attackFrames) {
+      host.addAttackSlot(orb.x, orb.y, F32(64 + attackGrowth * age), orb.burstDamage);
+    }
   }
 
   /**

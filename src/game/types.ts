@@ -299,6 +299,10 @@ export interface GameHost {
    * enemy FIRE aims at where the player ended the previous frame. */
   playerPosAtFrameStart?: { x: number; y: number };
   th08PlayerForm?(): 0 | 1;
+  // FUN_00406d10/FUN_00406d70: true while the youkai gauge is beyond
+  // either effects threshold. Native enemy deaths use this to emit one
+  // state-1 time item from their common tail.
+  th08GaugeExtreme?(): boolean;
   // TH08 op 184's receiver is the GLOBAL side mirror (singleton 0x4ea670
   // dword bit 11, `mov ecx,0x4ea670` @ 0x41e7da) — not the running enemy.
   th08SetSideMirror?(value: 0 | 1): void;
@@ -457,7 +461,7 @@ export interface EclState {
   // The +0x8f4 flag: the next op42 exports the live vars to the stash.
   periodicExportArmed: boolean;
   // Pending interrupt-table index (exe +0x2b08), written by op109/timeline
-  // op10/op145 and drained through the op108 table at frame/interpreter top.
+  // op8 and drained through the op108 table at frame/interpreter top.
   pendingInterrupt: number;
   // op153 secondary shot-collision extent triple (exe +0x2b48/4c/50).
   hitbox2: { x: number; y: number; z: number } | null;
@@ -682,13 +686,20 @@ export interface Th08EclState {
   // +0x3034: captured raw FIRE instruction (11 dwords) while flags bit 17 is
   // set (ins_107), replayed by the auto-fire tick.
   capturedFire: Int32Array | null;
+  // Variable bank of the ECL context that captured the template. Native
+  // auto-fire continues resolving VAR operands through that context; an
+  // ins_135 private frame must not fall back to the main frame's locals.
+  capturedFireVars: Float64Array | null;
   // +0x3060: auto-fire deadline (ins_105/106); 0 = disarmed. The native
   // timer fires when its elapsed reaches the deadline, then resets elapsed
   // (FUN_004065f0(0) after FUN_00422720 in FUN_00423150, all.c:16287-16291)
   // — a PERIODIC emitter: every `interval` frames.
   autoFireDeadline: number;
-  // Next ctx.time the auto-fire is due (armed = deadline + arming time).
-  autoFireNext: number;
+  // +0x3064 ZunTimer's integer/fractional elapsed halves. This timer is
+  // independent of the active ECL context clock: ins_2 WAIT freezes ctx.time
+  // but FUN_00423150 still advances this timer once per enemy-core tick.
+  autoFireElapsed: number;
+  autoFireElapsedFrac: number;
   // Enemy position at the ECL loop head (the +0x2d88 sync at 0x418520,
   // refreshed before every dispatch). The auto-fire re-execution (bullet
   // manager phase, after the enemy's movement) rebuilds its template origin
@@ -777,9 +788,12 @@ export interface Enemy {
   // spell-card /7, op-142 shield /9) — see StageScene#settlePendingDamage.
   pendingShotDmg: number;
   pendingBombDmg: number;
-  // HP actually removed by the most recent per-frame settle — exposed to ECL
-  // as var 10061 (Th07.exe enemy+0x2e4c, zeroed each frame at all.c:14173;
-  // the Prismrivers poll it cross-slot via op43 for damage sharing).
+  // TH08 enemy+0x2e10: raw player-attack damage accumulated toward the next
+  // human-form hit time item. Fresh enemies start at the global threshold,
+  // so their first eligible hit performs one threshold check immediately.
+  timeOrbDamageAccumulator: number;
+  // HP actually removed by the most recent per-frame settle. In TH08 this is
+  // enemy+0x3354 / ECL var 10083 (the TH07 var-10061 mapping does not apply).
   damageThisFrame?: number;
   score: number;
   frame: number;

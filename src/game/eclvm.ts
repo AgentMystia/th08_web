@@ -338,9 +338,6 @@ export class StageRuntime {
   // flag written by sub op 175 and OR-ed into the timeline boss gate.
   private timelineLatches = [-1, -1, -1, -1];
   private timelineSpawnSuppress = 0;
-  // TH08 ECL-manager timer (+0x5354), written by ins_160; see the case-160
-  // comment in executeTh08.
-  private th08ManagerTimer = 0;
   // Th07.exe DAT_012f40a8: GLOBAL spell-card-active state (op90 sets 1,
   // op91 clears). Every enemy's FIRE — boss AND op92/93 helpers — skips the
   // non-spell rank count/speed scaling while it is set. This was previously
@@ -393,7 +390,6 @@ export class StageRuntime {
     this.bossRegistered = false;
     this.timelineLatches = [-1, -1, -1, -1];
     this.timelineSpawnSuppress = 0;
-    this.th08ManagerTimer = 0;
     this.spellActive = false;
     this.currentSpellId = -1;
     this.slowCounterExtraStep = false;
@@ -402,15 +398,14 @@ export class StageRuntime {
     this.std.reset();
   }
 
-  initializeRandomCounters(_rng: Rng): void {
-    // TH08's drop counters (DAT_00f54ce0 the 1-in-3 phase, DAT_00f54ce2
-    // the 32-entry table cursor) are BSS zero-init globals that simply
-    // persist across stages — no per-stage RNG reseed exists in the exe
-    // (no writes anywhere but the use site at all.c:20977-20985). Drawing
-    // them from the stream here desynced every later random read by two
-    // u16s and started the drop cycle at a random phase.
-    this.randomSpawnIndex = 0;
-    this.randomItemIndex = 0;
+  initializeRandomCounters(rng: Rng): void {
+    // EnemyManager::AddedCallback (FUN_0042ebf0, all.c:22280-22283) seeds
+    // the two death-drop cursors after the replay stage seed is restored:
+    // DAT_00f54ce0 = FUN_00410c00(3), DAT_00f54ce2 = FUN_00410c00(8).
+    // The native stage-2 trace confirms exactly two draws before the first
+    // 16-particle effect-51 arm (418 total versus its 416-draw cost).
+    this.randomSpawnIndex = rng.u16InRange(3);
+    this.randomItemIndex = rng.u16InRange(8);
   }
 
   isTimelineComplete(): boolean {
@@ -547,16 +542,26 @@ export class StageRuntime {
         return this.isEnemyActive(game, boss) ? 'hold' : null;
       }
       case 13: {
-        // Consume a parallel-timeline latch; park (hold) while it is absent.
-        const idx = this.timelineLatches.indexOf(evt.i0 ?? 0);
-        if (idx < 0) return 'hold';
-        this.timelineLatches[idx] = -1;
-        return null;
+        // Consume every matching parallel-timeline latch; park while none
+        // exists. FUN_0042a8a0 scans all four DAT_00f54e1c slots and clears
+        // every match before testing the accumulated match count. op14 can
+        // deliberately duplicate one id into several free slots.
+        const id = evt.i0 ?? 0;
+        let consumed = 0;
+        for (let i = 0; i < this.timelineLatches.length; i++) {
+          if (this.timelineLatches[i] !== id) continue;
+          this.timelineLatches[i] = -1;
+          consumed++;
+        }
+        return consumed === 0 ? 'hold' : null;
       }
       case 14: {
-        // Release a parallel timeline: insert into the first free latch slot.
-        const free = this.timelineLatches.indexOf(-1);
-        if (free >= 0) this.timelineLatches[free] = evt.i0 ?? 0;
+        // Release parallel timelines by filling every currently-free slot,
+        // matching the native loop (there is no break after the first write).
+        const id = evt.i0 ?? 0;
+        for (let i = 0; i < this.timelineLatches.length; i++) {
+          if (this.timelineLatches[i] < 0) this.timelineLatches[i] = id;
+        }
         return null;
       }
       case 16:
@@ -587,20 +592,18 @@ export class StageRuntime {
       id: game.id++,
       poolSlot: -1,
       x, y, z,
-      // Timeline spawns run the synchronous t0 core at the template-default
-      // hp — measured on the native replay: a wave fairy whose sub has no
-      // t0 hp-setter (stage-1 Sub13 has no ins_57/op110) reads hp=0 there,
-      // so its t0 ins_96 is blocked by the fire gate `if (0 < hp)` and the
-      // machine-gun only ever re-fires through the auto-fire deadline
-      // (native volley at spawn+52 vs our direct volley at spawn+2). The
-      // timeline life is applied AFTER the core (below), clobbering any
-      // ins_57 placeholder the same way the native post-t0 assignment does.
-      // !hasLife spawns keep the life=1 placeholder through t0 (boss entry
-      // subs set their real HP via op110 inside the cascade).
-      hp: hasLife ? 0 : 1,
+      // FUN_0042a4e0 writes param_4 to enemy+0x2dfc BEFORE calling the
+      // synchronous ECL core (all.c:20098-20112). Native f530/f533 shows
+      // Stage-1 Sub1 consequently emits both its clock-30 ring and captured
+      // clock-34 5x3 volley; running t0 at zero HP incorrectly deletes the
+      // latter and only appears to improve survival by removing danmaku.
+      hp: hasLife ? life | 0 : 1,
       maxHp: hasLife ? life | 0 : 1,
       pendingShotDmg: 0,
       pendingBombDmg: 0,
+      // DAT_018b8a24 is 40 in the v1.00d Border-Team replay runtime; the
+      // constructor copies it verbatim to enemy+0x2e10 (FUN_0042a1f4).
+      timeOrbDamageAccumulator: 40,
       score: 100,
       frame: 0,
       ecl
@@ -632,14 +635,6 @@ export class StageRuntime {
       enemySlot: e.poolSlot, sub: subId,
       data: { x: e.x, y: e.y, mirrored, parentId: parent?.id ?? null }
     });
-    // Apply the timeline life/score AFTER the synchronous t0 core (native
-    // order, all.c:13395-13412): the core runs at the template default so a
-    // sub without its own t0 hp-setter stays hp=0 through its first cascade
-    // (its t0 FIRE is blocked, exactly as measured natively). Subs that DO
-    // set hp at t0 (ins_57/op110) are clobbered by the timeline life here,
-    // matching the native post-t0 assignment (wave masters read 150/400,
-    // not ins_57's 48).
-    if (hasLife) e.hp = e.maxHp = life | 0;
     // Both native allocators execute one complete FUN_0040f6c0 core tick
     // synchronously, including the movement controller, but do not run the
     // enemy manager's position integrator, regular ANM update,
@@ -843,10 +838,12 @@ export class StageRuntime {
         fireRankCount2Low: 0,
         fireRankCount2High: 0,
         capturedFire: null,
+        capturedFireVars: null,
         loopHeadX: 0,
         loopHeadY: 0,
         autoFireDeadline: 0,
-        autoFireNext: 0,
+        autoFireElapsed: 0,
+        autoFireElapsedFrac: 0,
         transformType: -1,
         deathDropA: 0,
         deathDropB: 0,
@@ -854,7 +851,14 @@ export class StageRuntime {
         deathEffectId: 0,
         dropEffectId: 0,
         deathByte2: 0,
-        flags: mirrored ? 0x40000 : 0,
+        // FUN_00429e00 initializes every enemy template with collision,
+        // damage and player-shot contact enabled (raw bits 2, 3 and 6).
+        // Scripts such as Stage-2 Sub1 start with ins_80(2), which clears
+        // body contact only and deliberately leaves shot contact / HP damage
+        // live. Keeping only the legacy semantic booleans true was not
+        // enough: the first raw flag sync turned all three back off, leaving
+        // whole waves invulnerable and starving their native death effects.
+        flags: 0x4c | (mirrored ? 0x40000 : 0),
         flags2: 0,
         familiar: false,
         sideBit: 0,
@@ -2232,22 +2236,30 @@ export class StageRuntime {
     }
   }
 
-  // TH08 auto-fire (FUN_00423150, all.c:16278): while the bullet pool
-  // (enemy HP) is live and a deadline is armed, the ECL clock reaching the
-  // deadline re-executes the raw FIRE instruction captured at +0x3034 by
-  // ins_107 — every frame at/after the deadline, until the pool empties.
-  // TH08's deadline is a frame count from arming (the ZunTimer at the
-  // enemy's ECL clock); the port models it against ctx.time, which the
-  // dispatcher advances once per core tick.
+  // TH08 auto-fire (FUN_00423150, all.c:16278): while HP is live and a
+  // deadline is armed, advance the dedicated ZunTimer at enemy+0x3064 and
+  // re-execute the raw FIRE instruction captured at +0x3034 by ins_107 when
+  // its elapsed integer reaches the deadline. This is NOT the ECL context
+  // clock: it keeps advancing through ins_2 WAIT, then resets to zero after
+  // every volley (0x423175-0x4231bd).
   private updateTh08AutoFire(game: GameHost, e: Enemy): void {
     const s = e.ecl;
     const t = s.th08!;
-    if (e.hp <= 0 || t.autoFireDeadline <= 0 || !t.capturedFire) return;
-    // Periodic: fire each time the clock crosses the next deadline, then
-    // advance by the interval (FUN_00423150's fire+reset pair).
-    while (t.autoFireNext > 0 && s.ctx.time >= t.autoFireNext) {
-      this.fireTh08Raw(game, e, t.capturedFire);
-      t.autoFireNext += t.autoFireDeadline;
+    if (e.hp <= 0 || t.autoFireDeadline <= 0) return;
+    const rate = Math.fround(game.slowRate ?? 1);
+    if (rate > 0.99) {
+      t.autoFireElapsed++;
+    } else {
+      t.autoFireElapsedFrac = Math.fround(t.autoFireElapsedFrac + rate);
+      if (t.autoFireElapsedFrac >= 1) {
+        t.autoFireElapsed++;
+        t.autoFireElapsedFrac = Math.fround(t.autoFireElapsedFrac - 1);
+      }
+    }
+    if (t.autoFireElapsed >= t.autoFireDeadline) {
+      if (t.capturedFire) this.fireTh08Raw(game, e, t.capturedFire);
+      t.autoFireElapsed = 0;
+      t.autoFireElapsedFrac = 0;
     }
   }
 
@@ -2272,21 +2284,32 @@ export class StageRuntime {
     };
     void instrLike;
     // Read the fields straight from the captured image: header dwords 0-2,
-    // then args at dwords 3..10. FUN_00422720 reads args with the paramMask
-    // still attached, so VAR-RANGE operands re-resolve against the LIVE vars
-    // at each fire (the midboss's captured fans carry [10016.0f] bases).
+    // then args at dwords 3..10. FUN_00422720 leaves VAR operands live, but
+    // resolves them through the context which captured the template.
+    const capturedVarRead = (id: number, asFloat: boolean): number => {
+      if (!t.capturedFireVars || t.capturedFireVars === s.vars) {
+        return this.varRead(game, e, id, asFloat);
+      }
+      const activeVars = s.vars;
+      s.vars = t.capturedFireVars;
+      try {
+        return this.varRead(game, e, id, asFloat);
+      } finally {
+        s.vars = activeVars;
+      }
+    };
     // Same value-range rule as the main dispatch's getInt/getFloat.
     const gi = (d: number) => {
       const rawVal = raw[3 + d] | 0;
       return rawVal >= VAR_BASE && rawVal < VAR_BASE + 100
-        ? Math.trunc(this.varRead(game, e, rawVal, false))
+        ? Math.trunc(capturedVarRead(rawVal, false))
         : rawVal;
     };
     const gf = (d: number) => {
       const val = f32FromBits(raw[3 + d]);
       const asInt = Math.trunc(val);
       return Math.abs(val - asInt) < 0.00001 && asInt >= VAR_BASE && asInt < VAR_BASE + 100
-        ? this.varRead(game, e, asInt, true)
+        ? capturedVarRead(asInt, true)
         : val;
     };
     const sprite = raw[3] & 0xffff;
@@ -2588,13 +2611,13 @@ export class StageRuntime {
     e.ecl.lastFireFrame = game.frame;
     // FUN_0043f2b0 stores both deltas as f32 before FPATAN; FUN_00423480 then
     // stores the returned aim once more as f32 before passing it by value.
-    // The enemy FIRE pass aims through the GameManager's player mirror,
-    // which holds the position as of the frame START: the calc chain runs
-    // descending (bullets 14 -> enemies 11 -> player 9), so the enemy pass
-    // sees where the player ended the previous frame. Verified empirically:
-    // aiming at the live (post-move) player produced phantom contacts at
-    // f2182/f3259 that the one-frame mirror clears.
-    const aimMirror = game.playerPosAtFrameStart ?? game.player;
+    // TH08 registers the player job ahead of the enemy FIRE pass, so aimed
+    // bullets read the player's position AFTER this frame's movement. This
+    // differs from the TH07 parent ordering represented by frameStart. The
+    // Stage-2 Sub3 slot trace is an exact witness: native slot 88 at f1278
+    // aims at x=177.373 after the replay's 4px left step (angle 1.253363);
+    // the inherited frame-start mirror used x=181.373 (angle 1.238860).
+    const aimMirror = e.ecl.th08 ? game.player : (game.playerPosAtFrameStart ?? game.player);
     const aim = nativeAngleTowardPlayer(aimMirror.x, aimMirror.y, shootX, shootY);
     // The FIRE template endpoints are raw f32 values.  Do not pre-wrap angle
     // endpoints: random modes 6/8 interpolate the authored interval first,
@@ -2896,6 +2919,27 @@ export class StageRuntime {
     if (s.isBoss) this.syncBossPresence(game);
   }
 
+  // FUN_0041ed50's retained-death latch is not permanent. At the end of
+  // each native enemy-manager pass it is cleared as soon as a callback has
+  // restored positive HP; a later hp<=0 transition can then settle exactly
+  // once. flags2 bit 6 is the separate "do not enter death" gate written by
+  // ins_79/80/81. Keeping this transition in one helper makes the ordering
+  // explicit for StageScene and gives the multi-phase boss lifecycle a
+  // focused regression seam.
+  shouldSettleEnemyDeath(e: Enemy): boolean {
+    const t = e.ecl.th08;
+    if (t && e.hp > 0 && (t.flags2 & 8) !== 0) t.flags2 &= ~8;
+    return !e.dead && e.hp <= 0 && (!t || (t.flags2 & (8 | 0x40)) === 0);
+  }
+
+  private syncTh08CollisionFlags(s: EclState): void {
+    const t = s.th08;
+    if (!t) return;
+    s.shotCollision = (t.flags & 0x40) !== 0;
+    s.collisionEnabled = (t.flags & 4) !== 0;
+    s.canTakeDamage = (t.flags & 8) !== 0;
+  }
+
   killEnemy(game: GameHost, e: Enemy, bombContactThisFrame = false): boolean {
     const s = e.ecl;
     const t = s.th08;
@@ -2935,13 +2979,32 @@ export class StageRuntime {
       // there so the kill credit isn't divided twice.
       game.addScore(e.score || 0);
     }
-    if (mode === 1) s.interactable = false;
+    if (mode === 1) {
+      if (t) {
+        // Native mode 1 retains the actor and leaves its ECL callback live;
+        // it does not have a second, permanent "interactable" switch. The
+        // raw collision/damage bits stay down until authored ins_81 rows
+        // restore them, while flags2 bit 3 prevents duplicate settlement.
+        t.flags = (t.flags | 0x800000) & ~(4 | 8 | 0x40);
+        this.syncTh08CollisionFlags(s);
+      } else {
+        s.interactable = false;
+      }
+    }
     if (mode === 3) {
       // Special boss-death transition: retain the actor at 1 HP, disable
       // damage, and make its next scripted zero-HP death a mode-0 removal.
       e.hp = 1;
-      s.canTakeDamage = false;
       s.deathMode = 0;
+      if (t) {
+        // all.c:21676-21678 clears both the damage bit and the raw ins_129
+        // mode field. Clearing only the legacy semantic deathMode left the
+        // next phase stuck in mode 3 forever.
+        t.flags &= ~(8 | 0x700000);
+        this.syncTh08CollisionFlags(s);
+      } else {
+        s.canTakeDamage = false;
+      }
     } else {
       // FUN_0041ed50's preburst and item constructor are interleaved before
       // the boss field sweep and before the common death effects. This order
@@ -2978,6 +3041,17 @@ export class StageRuntime {
       game.spawnEffectParticles(s.deathAnm2 + 4, e.x, e.y, 4, 0xffffffff);
     }
     game.spawnEnemyDeathEffect?.(e, mode);
+
+    // Common enemy-death tail (FUN_0042c420, all.c:21696-21710): unless
+    // raw flag bit 10 suppresses the generic death presentation, being past
+    // either youkai-gauge effects threshold spawns one type-7 time item in
+    // mode 1. Th08ItemSpawn forces type 7 into its state-3 scatter and
+    // consumes four u16 draws. Omitting this made the very first Stage-2
+    // kill short by exactly four draws and desynchronized every later
+    // auto-fire deadline.
+    if ((!t || (t.flags & 0x400) === 0) && game.th08GaugeExtreme?.()) {
+      game.spawnItem('time', e.x, e.y, { state: 1 });
+    }
 
     const callback = s.deathCallbackSub;
     s.deathCallbackSub = -1;
@@ -3117,14 +3191,25 @@ export class StageRuntime {
       // therefore also a two-draw read (all.c:14627, 5411-5419).
       case 10032:
         return (((game.rng.u16() << 16) | game.rng.u16()) & 0x7fffffff) >>> 0;
-      case 10033:
-        return ((game.rng.u16() << 16) | game.rng.u16()) / 4294967296;
+      case 10033: {
+        // FUN_0043ed20 returns an unsigned u32. JavaScript bitwise
+        // expressions are signed, so the explicit >>> 0 is essential when
+        // the first draw has bit 15 set: without it native [0,1) values in
+        // the upper half became [-0.5,0). Stage-2 Sub4 then lost exactly
+        // 0.5*60 = 30px from its authored vertical displacement.
+        const u32 = ((game.rng.u16() << 16) | game.rng.u16()) >>> 0;
+        return u32 / 4294967296;
+      }
       case 10034:
         return (((game.rng.u16() << 16) | game.rng.u16()) | 0);
-      case 10035:
-        return ((game.rng.u16() << 16) | game.rng.u16()) / 2147483648 - 1;
-      case 10082:
-        return (game.rng.u16() << 16 | game.rng.u16()) / 4294967296 * 6.2831854820251465 - 3.1415927410125732;
+      case 10035: {
+        const u32 = ((game.rng.u16() << 16) | game.rng.u16()) >>> 0;
+        return u32 / 2147483648 - 1;
+      }
+      case 10082: {
+        const u32 = ((game.rng.u16() << 16) | game.rng.u16()) >>> 0;
+        return u32 / 4294967296 * 6.2831854820251465 - 3.1415927410125732;
+      }
       case 10040: return game.difficulty;
       case 10041: return game.rank;
       // 10042-10044: enemy x/y/z. Writes land on the ECL position; reads see
@@ -3306,12 +3391,15 @@ export class StageRuntime {
         ctx.waitTimer = gi(0);
         return null;
       case 160:
-        // ins_160(n) = ZunTimer::SetCurrent on the ECL-MANAGER timer at
-        // +0x5354 (exe case 0x9f, th08-stage1.md) — NOT the sub's clock, so
-        // the sub flow is unaffected. The manager timer's consumer is
-        // unproven (PROBABLE: boss-entrance/stage-clock bookkeeping); the
-        // value is retained for future evidence.
-        this.th08ManagerTimer = gi(0);
+        // TH08 ins_160(n) writes this enemy's +0x5354 retreat timer
+        // (exe 0x41df97-0x41dfa0). The collision path tests that same timer
+        // at 0x42d307: while it is positive, ordinary enemies take zero
+        // damage and bosses take 1/9 damage. The manager tail consumes one
+        // tick on the arm frame, hence ins_160(8) is observed as 7 after a
+        // fresh enemy's first native pass and reaches zero at age 8. This is
+        // independent of the ctx+0x90 WAIT used by raw ins_2.
+        s.damageShield = Math.max(0, gi(0));
+        s.damageShieldFrac = 0;
         return null;
       case 10: case 11: case 12: case 13: case 14: {
         // int compound-assign (exe cases 9-0xd, all.c:10884-10944): the dest
@@ -3335,11 +3423,16 @@ export class StageRuntime {
         setFloatVar(id, Math.fround(r));
         return null;
       }
-      case 20: setIntVar(gi(0), gi(4) + gi(8)); return null;   // int a+b
-      case 21: setIntVar(gi(0), gi(4) - gi(8)); return null;   // int a-b
-      case 22: setIntVar(gi(0), gi(4) * gi(8)); return null;   // int a*b
-      case 23: setIntVar(gi(0), Math.trunc(gi(4) / gi(8))); return null; // int a/b
-      case 24: setIntVar(gi(0), gi(4) % gi(8)); return null;   // int a%b
+      // Three-operand arithmetic: arg0 is a DESTINATION var id and must be
+      // read raw. Resolving it first turns 10000 into its current value and
+      // writes to an unrelated literal id. Stage-2 Sub8's
+      // `10000 = 5 - 10096` consequently stayed zero and collapsed its
+      // Lunatic 5x3 volley to the one-column minimum.
+      case 20: setIntVar(v.i32(a), gi(4) + gi(8)); return null;   // int a+b
+      case 21: setIntVar(v.i32(a), gi(4) - gi(8)); return null;   // int a-b
+      case 22: setIntVar(v.i32(a), gi(4) * gi(8)); return null;   // int a*b
+      case 23: setIntVar(v.i32(a), Math.trunc(gi(4) / gi(8))); return null; // int a/b
+      case 24: setIntVar(v.i32(a), gi(4) % gi(8)); return null;   // int a%b
       case 25: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) + gf(8))); return null;
       case 26: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) - gf(8))); return null;
       case 27: setFloatVar(Math.trunc(v.f32(a)), Math.fround(gf(4) * gf(8))); return null;
@@ -3671,20 +3764,18 @@ export class StageRuntime {
       case 78: s.hitbox2 = { x: gf(0), y: gf(4), z: 0 }; return null;
       case 79: { // writeFlags6 (all.c:11847-11867): inverted low bits
         const arg = gi(0);
-        t.flags = (t.flags & ~(0x40 | 4 | 8))
+        t.flags = (t.flags & ~(0x40 | 4 | 8 | 0x10 | 0x10000000))
           | ((arg & 1) === 0 ? 0x40 : 0)
           | ((arg & 2) === 0 ? 4 : 0)
           | ((arg & 4) === 0 ? 8 : 0)
           | (arg & 8 ? 0x10 : 0)
           | (arg & 0x10 ? 0x10000000 : 0);
         t.flags2 = (t.flags2 & ~0x40) | (arg & 0x20 ? 0x40 : 0);
-        // The manager reads bits 6/2 through the semantic collision flags
-        // (the exe's damage gate all.c:21473 and contact gate all.c:21451):
-        // bit 6 = shootable by player shots/attack slots, bit 2 = body
-        // contact. Stage-1 familiars FIRE(16) — both re-armed at sub entry
-        // (op 92's spawn had cleared bit 2).
-        s.shotCollision = (t.flags & 0x40) !== 0;
-        s.collisionEnabled = (t.flags & 4) !== 0;
+        // Bits 6/2/3 are consumed by the manager as player-shot, body-contact
+        // and HP-damage gates respectively. Keep the semantic fast path in
+        // lockstep for all three; missing bit 3 made spell declarations
+        // damageable during their authored invulnerability window.
+        this.syncTh08CollisionFlags(s);
         return null;
       }
       case 80: case 81: { // complementary clear/set flag pairs (0x50/0x51)
@@ -3702,6 +3793,7 @@ export class StageRuntime {
             case 5: t.flags2 = on ? t.flags2 | 0x40 : t.flags2 & ~0x40; break;
           }
         }
+        this.syncTh08CollisionFlags(s);
         return null;
       }
       case 82: t.suppressRadiusSq = Math.fround(gf(0) * gf(0)); return null;
@@ -3794,11 +3886,11 @@ export class StageRuntime {
         }
         t.autoFireDeadline = iv;
         if (iv > 0 && op === 106) {
-          const phase = game.rng.u32InRange(iv);
-          t.autoFireNext = ctx.time + Math.max(1, iv - phase);
+          t.autoFireElapsed = game.rng.u32InRange(iv);
         } else {
-          t.autoFireNext = iv > 0 ? ctx.time + iv : 0;
+          t.autoFireElapsed = 0;
         }
+        t.autoFireElapsedFrac = 0;
         return null;
       }
       case 107: // capture FIREs ON (flags bit 17): ops 96-104 store their raw
@@ -4068,11 +4160,19 @@ export class StageRuntime {
         game.th08SetSideMirror?.(value);
         return null;
       }
-      case 145: {
-        // ins_145(n) = ZunTimer::Add(n) on the context's instruction clock
-        // (exe case 0x91, asm 0x41d5df-0x41d5eb: FUN_0041fdf0(ctx+4, n) =
-        // FUN_00447295). Stage 2+ uses it (107x, all ins_145(1)) to nudge
-        // the clock one tick ahead inside dense fire rows.
+      case 145:
+        // Raw ins_145 (0x91) dispatches through exe case 0x90: set bit 25
+        // of enemy+0x3324. Its consumer retriggers the per-segment ANM on
+        // live lasers (all.c:13036-13039, 21998/22014). In particular this
+        // MUST NOT advance the ECL clock: every Stage-2 familiar places it
+        // midway through its t=0 setup, before its movement instructions.
+        t.flags = (t.flags & ~0x02000000) | ((gi(0) & 1) << 25);
+        return null;
+      case 146: {
+        // Raw ins_146 (0x92), exe case 0x91, is the otherwise-unused
+        // ZunTimer::Add instruction. No shipped stage ECL invokes it, but
+        // retaining it under the correct raw opcode prevents the adjacent
+        // ins_145 flag operation from corrupting the instruction clock.
         const n = gi(0);
         const rate = game.slowRate ?? 1;
         if (rate > 0.99) {
@@ -4223,6 +4323,10 @@ export class StageRuntime {
       const base = instr.args - 12; // absolute instruction start
       for (let i = 0; i < 11; i++) raw[i] = this.ecl.view.i32(base + i * 4);
       t.capturedFire = raw;
+      // Stage-2 Sub7's private Sub8 sets local 10000=5 before capturing its
+      // FIRE. Native therefore keeps emitting 5x3; resolving the raw marker
+      // against the restored main frame read zero and collapsed it to 1x3.
+      t.capturedFireVars = s.vars;
       return null;
     }
     // Var-resolve order is RNG-load-bearing (spec 0x5f §96-104): sprite,
@@ -4356,9 +4460,10 @@ export class StageRuntime {
     // tiers on the VM's +0x30 sprite-size field (the same field FUN_0042fea0
     // compares against the 16/48 .rdata thresholds): v<=8 -> 4 (cat 5);
     // 8<v<=16 -> rice-family scripts {2,4,5,6,106,107,108,111,112} = 4,
-    // DEFAULT 12.0 (cat 3); 16<v<=48 -> {8,113,114,115} = 5, {9,109,110}
-    // = 8, default 10; v>48 -> 24 (cat 0). Only types 1 and 3 (16px
-    // non-rice sprites) differ from the old table (6 -> 12).
+    // DEFAULT 6.0 (cat 3); 16<v<=48 -> {8,113,114,115} = 5, {9,109,110}
+    // = 8, default 10; v>48 -> 24 (cat 0). Native Stage-2 slot tracing
+    // directly reads +0xd34=6 for type-1's 16px non-rice pair; that field is
+    // the full AABB width and FUN_0044a230 divides it by 2 at contact.
     if (h > 48) return 24;
     if (h > 16) {
       if (s === 8 || s === 113 || s === 114 || s === 115) return 5;
@@ -4367,7 +4472,7 @@ export class StageRuntime {
     }
     if (h > 8) {
       if (s === 2 || s === 4 || s === 5 || s === 6 || s === 106 || s === 107 || s === 108 || s === 111 || s === 112) return 4;
-      return 12;
+      return 6;
     }
     return 4;
   }

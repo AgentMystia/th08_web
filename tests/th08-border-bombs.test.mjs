@@ -14,27 +14,46 @@ const { Th08BorderBomb, TH08_BOMB_INVULN } = mod;
 // A recording host: attack slots settle damage immediately against a
 // configurable enemy list; every other request lands in a log.
 function makeHost(enemies = [], targetPos = null) {
-  const log = { slots: [], clears: [], effects: [], orbs: [], sfx: [] };
+  const log = {
+    slots: [], boxes: [], clears: [], clearBoxes: [], effects: [], orbs: [],
+    sfx: [], shakes: [], flashes: []
+  };
   return {
     log,
     targetPos,
-    addAttackSlot(x, y, radius, damage) {
+    addAttackSlot(x, y, radius, damage, cadenceCounter = 0, cadenceDivisor = 1) {
       let settled = 0;
       for (const e of enemies) {
         const dx = e.x - x, dy = e.y - y;
         if (dx * dx + dy * dy <= radius * radius) settled += damage;
       }
-      log.slots.push({ x, y, radius, damage, settled });
+      log.slots.push({
+        x, y, radius, damage, settled, cadenceCounter, cadenceDivisor
+      });
       return settled;
+    },
+    addBoxAttackSlot(x, y, width, height, angle, damage, cadenceCounter = 0, cadenceDivisor = 1) {
+      log.boxes.push({ x, y, width, height, angle, damage, cadenceCounter, cadenceDivisor });
+      return 0;
     },
     clearBullets(x, y, radius) {
       log.clears.push({ x, y, radius });
+    },
+    clearBulletsBox(x, y, width, height, angle) {
+      log.clearBoxes.push({ x, y, width, height, angle });
     },
     randomFloat() {
       return 0.5;
     },
     effectVm(script, x, y, scale, color) {
       log.effects.push({ script, x, y, scale, color });
+    },
+    effectParticles() {},
+    startScreenShake(duration, from, to) {
+      log.shakes.push({ duration, from, to });
+    },
+    startScreenFlash(duration, repeats, argb) {
+      log.flashes.push({ duration, repeats, argb });
     },
     orbVm(index, script, x, y) {
       log.orbs.push({ index, script, x, y });
@@ -62,11 +81,12 @@ test('type 0 cast spawns the sixteen-orb ladder at -pi + i*pi/8', () => {
   const bomb = new Th08BorderBomb(0, 192, 200);
   const host = makeHost();
   bomb.cast(host, 192, 200);
+  bomb.tick(host, 192, 200, true);
   // Sixteen orb VMs on script 0x13 (0x40c010's FUN_004069f0 calls).
   assert.equal(host.log.orbs.filter(o => o.script === 0x13).length, 16);
-  // Cast-frame r96 clear + red flash (effect 12 → archive script 44,
-  // DAT_004c6d30) + cast sfx.
-  assert.ok(host.log.clears.some(c => c.radius === 96));
+  // The seek callback publishes r128 (which spatially subsumes the authored
+  // r96 field) + red flash (effect 12 → archive script 44) + cast sfx.
+  assert.ok(host.log.clears.some(c => c.radius === 128));
   assert.ok(host.log.effects.some(e => e.script === 44));
   assert.ok(host.log.sfx.some(s => s.id === 0x0d));
 });
@@ -101,7 +121,7 @@ test('type 0 releases the spiral at frame 40 and bursts on settled aura', () => 
   const bomb2 = new Th08BorderBomb(0, 192, 200);
   bomb2.cast(burstHost, 192, 200);
   burstHost.log.slots.length = 0;
-  bomb2.tick(burstHost, 192, 200, true);
+  for (let i = 0; i < 40; i++) bomb2.tick(burstHost, 192, 200, true);
   assert.ok(burstHost.log.slots.some(s => s.damage === 500));
   assert.equal(bomb2.orbAt(0).state, 2);
   for (let i = 0; i < 31; i++) bomb2.tick(burstHost, 192, 200, true);
@@ -177,15 +197,59 @@ test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () 
     const host = makeHost();
     bomb.cast(host, 192, 200);
     const waveScripts = type === 1 ? [0x59, 0x5a, 0x5b] : [0x5d, 0x5e, 0x5f];
-    for (let i = 0; i < 31; i++) bomb.tick(host, 192, 200, true);
+    for (let i = 0; i < 31; i++) bomb.tick(host, 192 + i, 200 + i, true);
     // The wave rings ride the etama effect layer by archive script index.
     const effectScripts = host.log.effects.map(e => e.script);
     assert.ok(effectScripts.includes(type === 1 ? 0x58 : 0x5c), 'mapped cast effect');
     for (const s of waveScripts) assert.ok(effectScripts.includes(s), `wave ${s.toString(16)} for type ${type}`);
     assert.ok(!effectScripts.includes(type === 1 ? 0x24 : 0x25), 'raw effect id is not an archive script');
-    // The field aura follows the player at r100 with damage 70.
-    assert.ok(host.log.slots.some(s2 => s2.radius === 100 && s2.damage === 70));
+    // Each field stays at its allocation coordinate. The cast callback first
+    // publishes the raw r100/life40 record at the manager tail; the first
+    // ordinary callback then publishes r101/life39. The t10 record starts at
+    // the then-current player coordinate and remaining life 40.
+    assert.deepEqual(
+      host.log.slots[0],
+      {
+        x: 192, y: 200, radius: 100, damage: 70, settled: 0,
+        cadenceCounter: 40, cadenceDivisor: 5
+      }
+    );
+    assert.deepEqual(
+      host.log.slots[1],
+      {
+        x: 192, y: 200, radius: 101, damage: 70, settled: 0,
+        cadenceCounter: 39, cadenceDivisor: 5
+      }
+    );
+    assert.ok(host.log.slots.some(s2 =>
+      s2.x === 201 && s2.y === 209 && s2.radius === 100 &&
+      s2.damage === 70 && s2.cadenceCounter === 40 && s2.cadenceDivisor === 5
+    ));
   }
+});
+
+test('type 3 wave VMs publish the native timer-50 oriented beam group', () => {
+  const bomb = new Th08BorderBomb(3, 172, 126);
+  const host = makeHost();
+  bomb.cast(host, 172, 126);
+  for (let i = 0; i < 50; i++) bomb.tick(host, 172, 86, true);
+  assert.equal(host.log.boxes.length, 0, 'age-zero attack waits past the enemy manager');
+  assert.equal(host.log.clearBoxes.length, 4, 'age-zero clear reaches the bullet manager');
+  bomb.tick(host, 172, 86, true);
+  assert.equal(host.log.boxes.length, 4);
+  const first = host.log.boxes[0];
+  assert.ok(Math.abs(first.x - 295.1949462890625) < 1e-6);
+  assert.ok(Math.abs(first.y - 69.20628356933594) < 1e-6);
+  assert.ok(Math.abs(first.width - 1085.2471923828125) < 1e-6);
+  assert.ok(Math.abs(first.height - 38.399993896484375) < 1e-6);
+  assert.ok(Math.abs(first.angle - 1.138826847076416) < 1e-6);
+  assert.equal(first.damage, 60);
+  assert.equal(first.cadenceCounter, 99);
+  assert.equal(first.cadenceDivisor, 2);
+  assert.equal(host.log.clearBoxes.length, 8);
+  assert.ok(Math.abs(host.log.clearBoxes[0].width - 542.6235961914062) < 1e-6);
+  assert.deepEqual(host.log.shakes, [{ duration: 16, from: 8, to: 0 }]);
+  assert.deepEqual(host.log.flashes, [{ duration: 8, repeats: 1, argb: 0x8f6060f0 }]);
 });
 
 test('the machine pays the gauge +-26000/param_4 each frame (0x44c81b)', () => {
