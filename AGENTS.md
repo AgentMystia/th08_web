@@ -675,6 +675,30 @@ coordinates, RNG seeds at specific frames).
    human/youkai gauge is ascii.anm scripts 5-8 verbatim (plate, limit
    icons, center-anchored cursor, 8x12 gauge glyphs).
 
+**Standing residual of this pass — the stage-2 f680..1237 8-draw gap.**
+The pacing test's f1237 seed checkpoint (native 18767) reads
+ours = native + 8 u16 draws (LFSR-walk-verified; 0.05% of the window's
+17.6k draws). The gauge trajectory still matches exactly through f1276,
+so gameplay events are unchanged; the error is purely in the draw
+economy. CI per-source profiling of the window decomposes our 17602
+draws as: 16976 spawnEffectParticles (ambient fireflies at exactly
+1/frame = 560 arms x 26, kill/drop/impact particles), 240 ScreenFx
+shake ticks (4 groups x 15 x 4 — matches the modeled boundary-beam
+groups), 192 collect checksums (48 paying collects), 96 auto-fire phase
+arms (48 ins_106 executions = fairy spawns), 88 state-3 scatter pairs
+(22 item spawns), 8 bomb-trigger integrity, 2 aura arm. Every one of
+these consumer costs is individually exe-verified; the residual is a
+COUNT difference (4 u32 calls) in one of the small families — most
+likely ins_105/106 spawn arms vs the authored timeline, or in-window
+shot impacts — and oscillates downstream (+4/-4/+16... with one kill
+shifted a few frames; gauge re-syncs to exact at f2218). Pinning it
+needs a native per-frame draw profile (wine — unavailable on this
+host). The test keeps f1237/f1276 as hard checkpoints and records the
+downstream deltas as logged residuals; the replay job's advisory
+divergence (stage 1 f3192 / stage 2 f3367 first unexpected hits under
+the new stricter oracle) is the same class of cascade. Do NOT close
+this by clamping draw counts or special-casing frames.
+
 **2026-08-19 full TH08-ification (commits 4855d94..605d359): the TH07 path
 is REMOVED.** The engine is single-path: `runState` (Th08RunState) is
 unconditional in StageScene, Border Team is the only character, formats are
