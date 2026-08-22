@@ -565,6 +565,7 @@ test('Stage-2 graze, familiar death and overlapping clear quads stay replay-alig
   let diagFrame = -1;
   const diagPerFrame = [];
   const diagTally = new Map();
+  const diagEvents = [];
   const origU16 = scene.rng.u16.bind(scene.rng);
   let diagDraws = 0;
   scene.rng.u16 = () => {
@@ -580,13 +581,30 @@ test('Stage-2 graze, familiar death and overlapping clear quads stay replay-alig
         .filter(Boolean)
         .join(' <- ') || 'unknown';
       diagTally.set(src, (diagTally.get(src) ?? 0) + 1);
+      if (!src.includes('spawnEffectParticles')) diagEvents.push(`${diagFrame}|${src.split(' <- ')[0]}`);
     }
     return value;
+  };
+  const origCollect = scene.collectItem.bind(scene);
+  scene.collectItem = (it) => {
+    if (diagFrame >= DIAG_FROM && diagFrame <= DIAG_TO) {
+      diagEvents.push(`${diagFrame}|collect:${it.type}:slot${it.poolSlot}`);
+    };
+    return origCollect(it);
   };
   const dumpDiag = (tag) => {
     const lines = [...diagTally.entries()].sort((a, b) => b[1] - a[1])
       .map(([src, n]) => `    ${String(n).padStart(6)}  ${src}`);
     console.log(`DIAG ${tag} total=${diagDraws}\n${lines.join('\n')}`);
+    const byFrame = new Map();
+    for (const ev of diagEvents) {
+      const [f, s] = ev.split('|');
+      const k = `${f}|${s}`;
+      byFrame.set(k, (byFrame.get(k) ?? 0) + 1);
+    }
+    console.log(`DIAG non-particle draw events (frame|source|count):\n      ${
+      [...byFrame.entries()].sort((a, b) => Number(a[0].split('|')[0]) - Number(b[0].split('|')[0]))
+        .map(([k, n]) => `${k}|${n}`).join('\n      ')}`);
   };
   for (let frame = 0; frame <= 2218; frame++) {
     diagFrame = frame;
