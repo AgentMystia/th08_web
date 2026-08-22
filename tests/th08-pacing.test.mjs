@@ -559,8 +559,39 @@ test('Stage-2 graze, familiar death and overlapping clear quads stay replay-alig
     [1808, [-8665, 27796]],
     [2218, [-9156, 28334]]
   ]);
+  // TEMPORARY CI diagnostic (remove before main): per-frame draw profile and
+  // per-caller-source tally over the native-divergence window f680..1237.
+  const DIAG_FROM = 680, DIAG_TO = 1237;
+  let diagFrame = -1;
+  const diagPerFrame = [];
+  const diagTally = new Map();
+  const origU16 = scene.rng.u16.bind(scene.rng);
+  let diagDraws = 0;
+  scene.rng.u16 = () => {
+    const value = origU16();
+    if (diagFrame >= DIAG_FROM && diagFrame <= DIAG_TO) {
+      diagDraws++;
+      const src = new Error().stack?.split('\n')[2]?.trim().replace(/^at\s+/, '') ?? 'unknown';
+      diagTally.set(src, (diagTally.get(src) ?? 0) + 1);
+    }
+    return value;
+  };
+  const dumpDiag = (tag) => {
+    const lines = [...diagTally.entries()].sort((a, b) => b[1] - a[1])
+      .map(([src, n]) => `    ${String(n).padStart(6)}  ${src}`);
+    console.log(`DIAG ${tag} total=${diagDraws}\n${lines.join('\n')}`);
+  };
   for (let frame = 0; frame <= 2218; frame++) {
+    diagFrame = frame;
+    const before = diagDraws;
     scene.update(inputBits(stage.inputs[frame]));
+    if (frame >= DIAG_FROM && frame <= DIAG_TO && diagDraws !== before) {
+      diagPerFrame.push(`${frame}:${diagDraws - before}`);
+    }
+    if (frame === DIAG_TO) {
+      dumpDiag('f680..1237 by source');
+      console.log(`DIAG per-frame draws f${DIAG_FROM}..${DIAG_TO}: ${diagPerFrame.join(' ')}`);
+    }
     const expected = checkpoints.get(frame);
     if (expected) {
       assert.equal(scene.runState.youkaiGauge, expected[0], `gauge at sim f${frame}`);
