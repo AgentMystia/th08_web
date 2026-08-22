@@ -581,6 +581,72 @@ hang risk is handled by the cancel+rerun procedure).
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
 Border Team, dialogue, HUD, and the replay harness are all live.
 
+### 2026-08-23 second pass — four user-visible fidelity fixes + pool/phase alignment
+
+Four reported deviations from the original, each root-caused against the
+v1.00d binary/data and fixed at the engine level (no presentation clamps):
+
+1. **终符使魔不发弹 / boss-fight frame drops — the bullet pool was still
+   TH07's.** `ENEMY_BULLET_CAP`/`ENEMY_BULLET_POOL_CAP` were 0x400 (1024,
+   the TH07 parent engine) while TH08's manager (@0xf54e90) is 0x600 =
+   1536 slots (native slot trace, the 2026-08-20 entry). During Wriggle's
+   final card + Last Spell the port saturated at 1024; the census veto
+   silently dropped the familiars' whole volleys while the boss (earlier
+   slot) kept firing. Both caps raised to 0x600. Draw-side costs fixed
+   with it: `drawWrappedFrame` now caches its CanvasPattern per image,
+   `drawSpellRing` pre-renders the settled annulus once (96 rotated quads
+   per frame for the whole card was the top per-frame cost — §7 flags the
+   bake's premultiplied composite), and FUN_0042b490/FUN_0042b930's
+   phase-jump free of ALL ins_135 sub-contexts is implemented (the H/L
+   midboss previously carried Sub16's Sub17 nonspell volley into the
+   螢符 spell; re-specs th08-ecl-ops-0x5f-0x8f.md §2). FIRE count1 floors
+   at 0, not 1: FUN_00422720's `for (i < count1)` means Sub48's ins_30
+   decay of [10039] to 0 is the authored Last-Spell fan shutdown; the
+   Math.max(1,...) clamp kept firing 1-bullet volleys forever.
+2. **道中击破后魔法阵残留 — leaked familiar marker VMs.** Every TH08
+   familiar arms a ttl-Infinity marker (FUN_00425b70 → etama 48, the rune
+   circle under 使魔) in tickTh08FamiliarSync, but only the DAMAGE-death
+   settlement released it. Self-deleting familiars (stage-1 Sub10/Sub12/
+   Sub46 all end with ins_1) bypass that settlement, so every timed-out
+   familiar left an immortal rune circle at its last position — dozens by
+   the midboss kill, and 6 more per 290 frames through the final card
+   (also draw load). Native teardown (FUN_0042bcf0 → FUN_0042a820)
+   destroys every effect VM a removed enemy owns; the port now releases
+   markers at the removal chokepoint (§7: instant cull vs the native
+   <=15-frame destroy fade). Mode-1 deaths now consume the 0x800000 hide
+   flag (all.c:21650 — the retained actor walks its callback invisibly,
+   native behavior), and ins_127(-1) clears the enemy's ins_57 slot VMs
+   (FUN_0042a820 at the unregister tail).
+3. **Stage 2 BGM.** The mapping table was correct; the audio bundle only
+   shipped the title + Stage 1 pair, and audio.ts's parity fallback
+   silently replayed 幻視の夜/蠢々秋月 over Stage 2. th08_04.ogg (夜雀の
+   歌声) and th08_05.ogg (もう歌しか聞こえない) are extracted with the
+   pipeline's exact parameters (thbgm.fmt PCM table: start 49606672/76005392,
+   len 26398720/16978176 → 149.54s/96.34s), the shipped-set and the
+   splitter whitelist updated, and a ship-safety test now fails if any
+   slice track is missing from assets/audio/th08/.
+4. **对话不显示立绘.** The MSG machine was faithful but the presenter
+   dropped everything: no 'active-slot' case (op15 — the workhorse; msg1a
+   uses ~15 op15 vs 3 op17, and Wriggle never gets an op17), a
+   `!portrait.active` guard ate op1 before a runner could start, and
+   op2/15/17's args were fired as interrupt LABELS when they are
+   SetSprite ORDINALS (FUN_0045e430 — archive-flattened sprite table,
+   implemented as AnmRunner#setSpriteOrdinal). Fixed presenter: op1
+   creates the slot's expression runner and fires label 1 (the authored
+   30-frame slide-in; the engine site that releases the parked ins_23 is
+   outside the exported Gui functions — §7), SetSprite ordinals swap
+   expressions without touching script flow, and the position codes 3/4/
+   5/6 map to their matching face-script labels (active/dim/far/exit —
+   the label bodies match the codes one-to-one; §7 for the trigger-site
+   caveat). Stage-2 faces resolve via TH08_DATA.stages[N].faceAnms.
+   The op1/op2 per-slot Y-offset compensation tables (-112/-80/-208 by
+   texture height, gui-run-msg.c:61-96) are applied at the draw.
+
+Verifier expectation: the pool cap, sub-context free, and count floor are
+sim-visible past f3193/f1051-class windows only (the fixture's hard
+checkpoints f1237/f1276 sit before every affected site), so the pacing
+test stays intact while the advisory whole-stage numbers may move.
+
 ### 2026-08-23 scheduler-boundary + item/damage economy pass
 
 The interrupted follow-up to the 999b644 movement rework, rebuilt from
@@ -1644,6 +1710,25 @@ Delivery-pass additions (2026-08-20, inline comments at the sites):
 Each also has an inline comment at its code site. Do not silently "fix"
 gameplay to taste — improve these only with better evidence (Ghidra, frame
 comparisons against real play).
+
+Second-pass additions (2026-08-23, inline comments at the sites):
+- Dialogue portrait ENTER/EMPHASIS triggers: the face expression scripts
+  park hidden at ins_23 and their labels 1/3/4/5/6 implement the slide-in/
+  active/dim/far/exit animations, but no exported Gui function ever writes
+  the portrait VMs' pending-interrupt field (RunMsg calls only
+  SetScript/SetSprite/tick; grep of every FUN_00407120 caller). The port
+  fires label 1 at op1 and maps position codes 3/4/5/6 to their labels;
+  the exact native trigger site (likely an unexported Gui updater) is the
+  open question.
+- The settled spell ring (effect 39 past its 120-frame settle) is
+  pre-rendered once into an offscreen canvas and blitted rotated. The bake
+  composites the 96 segments with 'lighter' INSIDE the offscreen, so
+  overlaps accumulate in premultiplied sRGB rather than against the live
+  playfield — visually equivalent for this annulus, not byte-identical to
+  the live segmented draw.
+- Familiar marker release at the removal chokepoint is an instant cull;
+  the native FUN_0042a820 destroy-flag path fades the VM out over <=15
+  manager ticks first. Same for ins_127(-1)'s ins_57 slot sweep.
 
 - Frame tiling positions (exact-fit math, engine placement not literal).
 - HUD star icon x positions; spell-timer and fps exact placement.

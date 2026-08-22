@@ -404,6 +404,27 @@ export class AnmRunner {
     };
   }
 
+  // FUN_0045e430 (Th08.exe v1.00d): swap the displayed sprite by its
+  // ARCHIVE-FLATTENED ordinal — `spriteRecords + N*0x44` walks the whole
+  // file's sprite table in file order, independent of the script cursor and
+  // the entry-scoped id offset. TH08 dialogue MSG ops 2/15/17 pass
+  // expression ids in exactly this form while the portrait VM sits parked
+  // at its hold label. Like the native function, this touches no
+  // script-flow or visibility state.
+  setSpriteOrdinal(ordinal: number): boolean {
+    let index = ordinal;
+    for (const entry of this.anm.entries) {
+      if (index < entry.spriteIds.length) {
+        const sprite = this.anm.sprites.get(entry.spriteIds[index]);
+        if (!sprite) return false;
+        this.rect = sprite;
+        return true;
+      }
+      index -= entry.spriteIds.length;
+    }
+    return false;
+  }
+
   interrupt(label: number): boolean {
     const v = this.anm.view;
     let off = this.scriptStart;

@@ -154,7 +154,11 @@ const ENEMY_POOL_CAP = 0x1e0;
 // smaller 0x60 pool; retaining that parent-engine limit made long-lived
 // impact VMs reject valid Border-Team volleys and under-damage midbosses.
 const PLAYER_BULLET_POOL_CAP = 0x80;
-const ENEMY_BULLET_POOL_CAP = 0x400;
+// Th08.exe bullet manager @ 0xf54e90: 1536 slots (0x600) at stride 0x10b8
+// (asm 0x431254/0x4312b7 — native slot trace). The TH07-era 0x400 pool
+// saturated during Wriggle's final card and silently vetoed the familiars'
+// volleys.
+const ENEMY_BULLET_POOL_CAP = 0x600;
 const BOMB_CLEAR_REGION_CAP = 0x60;
 const EFFECT_POOL_CAP = 400;
 // TH08's effect pool is 512 slots (FUN_00425430's 0x200-slot scan with 0xd8
@@ -402,7 +406,14 @@ export class StageScene implements GameHost {
   hiScore = 100000;
   // TH08 dialogue (timeline ins_6): the committed Th08DialogueMachine plus
   // four portrait-slot AnmRunners.
-  th08Dialogue: { machine: Th08DialogueMachine; runners: (AnmRunner | null)[] } | null = null;
+  th08Dialogue: {
+    machine: Th08DialogueMachine;
+    runners: (AnmRunner | null)[];
+    // Per-slot draw Y offsets stored by MSG ops 1/2 (gui+0x21abc family)
+    // and the last applied position code per slot (see updateTh08Dialogue).
+    portraitOffsets: number[];
+    lastPositions: number[];
+  } | null = null;
   private dialogueResume = false;
   stageFrame = 0;
   stageClear = false;
@@ -1626,7 +1637,9 @@ export class StageScene implements GameHost {
     }));
     this.th08Dialogue = {
       machine: new Th08DialogueMachine(instructions, { ownershipSide: 0 }),
-      runners: [null, null, null, null]
+      runners: [null, null, null, null],
+      portraitOffsets: [0, 0, 0, 0],
+      lastPositions: [4, 4, 4, 4]
     };
     this.dialogueBossIntroLine = null;
     // The enemy-death -> dialogue path (0x42b1e5) pulls the gauge one
@@ -1728,39 +1741,69 @@ export class StageScene implements GameHost {
     const events = dlg.machine.update(bits);
     for (const event of events) {
       switch (event.type) {
-        case 'portrait-init':
-        case 'portrait-interrupt':
-        case 'slot-update': {
+        case 'portrait-init': {
+          // op1 = SetScript on the slot's portrait VM (gui-run-msg.c case 1
+          // -> FUN_004069f0): the expression script begins parked hidden at
+          // (-224,128) alpha 0. The enter label (1) releases the authored
+          // 30-frame slide-in + alpha ramp; RunMsg itself never touches the
+          // VM interrupt, so the engine site that fires label 1 sits outside
+          // the exported Gui functions — firing it at init reproduces the
+          // native portrait entrance (§7 approximation for the trigger
+          // site). Slot-to-face mapping: 0 = human side (face_rm00), 1 =
+          // youkai side (face_yk00), 2/3 = the stage NPC (face_stNN).
           const slot = event.slot;
           if (slot < 0 || slot > 3) break;
-          // Portrait-slot to face-ANM mapping (PROBABLE, flagged): the
-          // Border Team's two speakers read face_rm00/face_yk00; stage-NPC
-          // slots read the stage face ANM (face_st01 for Wriggle). The
-          // portrait script indexes the anm's ENTRIES (one expression
-          // script each: rm00 -172..-164, yk00 -163..-155).
           const faceKey = slot === 0 ? 'face_rm00'
             : slot === 1 ? 'face_yk00'
               : this.stageDataFaceKey();
           const faceAnm = (this.assets.anms as Record<string, Anm>)[faceKey];
           if (!faceAnm) break;
-          const portrait = dlg.machine.state.portraits[slot];
-          if (!portrait.active) {
-            dlg.runners[slot] = null;
-            break;
-          }
-          let runner = dlg.runners[slot];
-          const entryIndex = Math.max(0, Math.min(faceAnm.entries.length - 1, portrait.script));
+          const entryIndex = Math.max(0, Math.min(faceAnm.entries.length - 1, event.script));
           const entry = faceAnm.entries[entryIndex];
           const scriptId = entry?.scriptIds[0];
           if (scriptId == null) break;
-          if (!runner || runner.scriptId !== scriptId) {
-            runner = new AnmRunner(faceAnm, scriptId, {
-              entryIndex,
-              spriteIndexOffset: entry?.spriteBase ?? 0
-            });
-            dlg.runners[slot] = runner;
+          const runner = new AnmRunner(faceAnm, scriptId, {
+            entryIndex,
+            spriteIndexOffset: entry?.spriteBase ?? 0
+          });
+          dlg.runners[slot] = runner;
+          // The op1 tail stores a per-slot draw offset from the face's
+          // texture height (gui-run-msg.c:61-66): <=128px -> 0, taller ->
+          // -112. The script's synchronous first tick has already set the
+          // sprite when the native reads the height; read the entry's
+          // first sprite directly for the same value.
+          const faceHeight = faceAnm.sprites.get(entry.spriteIds[0])?.h ?? 0;
+          dlg.portraitOffsets[slot] = faceHeight <= 128 ? 0 : -112;
+          runner.interrupt(1);
+          break;
+        }
+        case 'portrait-interrupt': {
+          // op2 = SetSprite(vm, ordinal) (gui-run-msg.c case 2 ->
+          // FUN_0045e430): swap the displayed expression sprite; no
+          // script-flow change. The tail refreshes the per-slot offset from
+          // the NEW sprite's height (<=128 -> 0, <=256 -> -80, else -208).
+          const runner = dlg.runners[event.slot];
+          if (runner && event.interrupt >= 0 && runner.setSpriteOrdinal(event.interrupt)) {
+            const h = runner.spriteSize()?.h ?? 0;
+            dlg.portraitOffsets[event.slot] = h <= 128 ? 0 : h <= 256 ? -80 : -208;
           }
-          if (portrait.interrupt >= 0) runner.interrupt(portrait.interrupt);
+          break;
+        }
+        case 'active-slot': {
+          // op15 = the active-speaker switch: position codes 3/4/6 land on
+          // every slot (consumed by the position sync below) and each >=0
+          // int is a SetSprite ordinal for that slot (gui-run-msg.c:254-265
+          // — the same FUN_0045e430 as op2, applied slot-by-slot).
+          for (let i = 0; i < 4; i++) {
+            const ordinal = event.interrupts[i];
+            if (ordinal >= 0) dlg.runners[i]?.setSpriteOrdinal(ordinal);
+          }
+          break;
+        }
+        case 'slot-update': {
+          // op17 = SetSprite on the new active slot only
+          // (gui-run-msg.c:295-326).
+          if (event.interrupt >= 0) dlg.runners[event.slot]?.setSpriteOrdinal(event.interrupt);
           break;
         }
         case 'sound':
@@ -1807,6 +1850,24 @@ export class StageScene implements GameHost {
           break;
       }
     }
+    // Position codes drive the emphasis labels: 3 = active (full color,
+    // centered at (48,128)), 4 = same-side rest (dim, shrunk toward
+    // (24,136)), 6 = far-side rest (color-dimmed), 5 = the exit slide that
+    // fades the portrait out and ends its script. The face scripts' label
+    // bodies match the codes one-to-one (face_rm00.anm entry scripts,
+    // labels 1..6), and the msg streams close with op5(slot,5) rows. The
+    // engine consumer of the position codes sits outside the exported Gui
+    // functions (RunMsg only writes them) — mapping a code to its label
+    // interrupt here reproduces the native presentation (§7).
+    const portraitState = dlg.machine.state;
+    for (let slot = 0; slot < 4; slot++) {
+      const runner = dlg.runners[slot];
+      const position = portraitState.portraits[slot].position;
+      if (runner && position !== dlg.lastPositions[slot] && position >= 3 && position <= 6) {
+        runner.interrupt(position);
+      }
+      dlg.lastPositions[slot] = position;
+    }
     for (const runner of dlg.runners) runner?.update();
     if (dlg.machine.state.done) {
       this.th08Dialogue = null;
@@ -1816,7 +1877,8 @@ export class StageScene implements GameHost {
   }
 
   private stageDataFaceKey(): string {
-    const faceAnms = (TH08_DATA.stages as unknown as { 1?: { faceAnms?: readonly string[] } })[1]?.faceAnms;
+    const stages = TH08_DATA.stages as unknown as Record<number, { faceAnms?: readonly string[] }>;
+    const faceAnms = stages[this.stageNumber]?.faceAnms;
     return faceAnms?.[2] ?? 'face_st01';
   }
 
@@ -4153,6 +4215,7 @@ export class StageScene implements GameHost {
       this.runtime.tickEnemyManagerTail(this, e);
       if (e.dead && this.enemySlots[slot] === e) {
         this.enemySlots[slot] = null;
+        this.releaseTh08EnemyVisuals(e);
         this.runtime.releaseEnemy(this, e);
       }
     }
@@ -4162,10 +4225,29 @@ export class StageScene implements GameHost {
       const slot = e.poolSlot;
       if (slot >= 0 && slot < ENEMY_POOL_CAP && this.enemySlots[slot] === e) {
         this.enemySlots[slot] = null;
+        this.releaseTh08EnemyVisuals(e);
         this.runtime.releaseEnemy(this, e);
       }
     }
     this.compactLive(this.enemies);
+  }
+
+  // Native slot teardown (FUN_0042bcf0 -> FUN_0042a820, all.c:20203-20216)
+  // destroys every effect VM a removed enemy owns — the familiar marker
+  // (FUN_00425b70's etama-48 VM, armed with ttl Infinity by the familiar
+  // sync) included, fading it out over <=15 manager ticks. Self-deleting
+  // familiars (stage-1 Sub10/Sub12/Sub46 all end with ins_1) bypass the
+  // damage-death settlement, so their markers must be released here at the
+  // removal chokepoint — otherwise every timed-out familiar leaves an
+  // immortal rune circle at its last position (the midboss 魔法阵残留 and
+  // part of the boss-fight draw load). Instant cull; the native <=15-frame
+  // destroy fade is the only difference.
+  private releaseTh08EnemyVisuals(e: Enemy): void {
+    const t8 = e.ecl.th08;
+    if (!t8?.markerHandle) return;
+    t8.markerHandle.release();
+    t8.markerHandle = null;
+    t8.markerActor = null;
   }
 
   private tickSpellBonusDecay(e: Enemy): void {
@@ -6284,11 +6366,19 @@ export class StageScene implements GameHost {
   // tile-wraps its texture (the eff0N spell sheets). scrollU/V are
   // texture-fraction UV shifts: +v moves the sample window down, i.e. the
   // content moves UP on screen.
+  // CanvasPatterns are immutable per source image — creating one per frame
+  // per spell sheet is pure allocator churn during every spell.
+  private wrapPatternCache = new Map<string, CanvasPattern | null>();
+
   private drawWrappedFrame(r: Renderer, frame: AnmFrame): void {
     const img = r.image(frame.imageKey);
     if (!img) return;
     const ctx = r.ctx;
-    const pattern = ctx.createPattern(img, 'repeat');
+    let pattern = this.wrapPatternCache.get(frame.imageKey);
+    if (pattern === undefined) {
+      pattern = ctx.createPattern(img, 'repeat');
+      this.wrapPatternCache.set(frame.imageKey, pattern);
+    }
     if (!pattern) return;
     ctx.save();
     ctx.globalAlpha = frame.alpha / 255;
@@ -6336,6 +6426,30 @@ export class StageScene implements GameHost {
     const cx = ox + ring.x;
     const cy = oy + ring.y;
     const ctx = r.ctx;
+    const spin = age * 0.0025;
+    // Past the settle the radius is constant and only the spin advances:
+    // blit a pre-rendered annulus instead of 96 rotated quads per frame
+    // (the top per-frame draw cost of long cards). §7: the bake composites
+    // the segments with 'lighter' INSIDE the offscreen, so overlaps
+    // accumulate in premultiplied sRGB rather than against the live
+    // playfield — visually equivalent for this annulus, not byte-identical.
+    if (settle >= 1) {
+      let cache = this.spellRingCache;
+      if (!cache) {
+        cache = this.bakeSpellRing(img);
+        this.spellRingCache = cache;
+      }
+      if (cache) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(spin);
+        ctx.drawImage(cache, -cache.width / 2, -cache.height / 2);
+        ctx.restore();
+      }
+      return;
+    }
     const repeats = 6; // sprite221 height 768 / etama3 height 128
     const segmentsPerRepeat = 16;
     const segments = repeats * segmentsPerRepeat;
@@ -6348,7 +6462,7 @@ export class StageScene implements GameHost {
     if (age < 120) {
       ctx.globalAlpha = alpha * (1 - age / 120) * 0.65;
       for (let i = 0; i < repeats * 8; i++) {
-        const angle = (i / (repeats * 8)) * Math.PI * 2 + age * 0.0025;
+        const angle = (i / (repeats * 8)) * Math.PI * 2 + spin;
         const sy = (i % segmentsPerRepeat) * sliceH;
         ctx.save();
         ctx.translate(cx, cy);
@@ -6360,7 +6474,7 @@ export class StageScene implements GameHost {
     }
     const arc = (Math.PI * 2 * radius) / segments + 1;
     for (let i = 0; i < segments; i++) {
-      const angle = (i / segments) * Math.PI * 2 + age * 0.0025;
+      const angle = (i / segments) * Math.PI * 2 + spin;
       const sy = (i % segmentsPerRepeat) * sliceH;
       ctx.save();
       ctx.translate(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
@@ -6369,6 +6483,35 @@ export class StageScene implements GameHost {
       ctx.restore();
     }
     ctx.restore();
+  }
+
+  private spellRingCache: HTMLCanvasElement | null = null;
+
+  private bakeSpellRing(img: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement | null {
+    const radius = 240;
+    const size = Math.ceil(radius + 24) * 2;
+    const surface = document.createElement('canvas');
+    surface.width = size;
+    surface.height = size;
+    const c = surface.getContext('2d');
+    if (!c) return null;
+    c.translate(size / 2, size / 2);
+    c.globalCompositeOperation = 'lighter';
+    const repeats = 6;
+    const segmentsPerRepeat = 16;
+    const segments = repeats * segmentsPerRepeat;
+    const sliceH = 128 / segmentsPerRepeat;
+    const arc = (Math.PI * 2 * radius) / segments + 1;
+    for (let i = 0; i < segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      const sy = (i % segmentsPerRepeat) * sliceH;
+      c.save();
+      c.translate(Math.cos(angle) * radius, Math.sin(angle) * radius);
+      c.rotate(angle);
+      c.drawImage(img, 0, sy, 16, sliceH, -8, -arc / 2, 16, arc + 1);
+      c.restore();
+    }
+    return surface;
   }
 
   private drawSpellOverlay(r: Renderer): void {
@@ -6411,26 +6554,28 @@ export class StageScene implements GameHost {
     }
   }
 
-  // TH08 dialogue presentation: the four portrait slots at their authored
-  // positions (the machine's position codes 3/4/6 map left/right/back like
-  // the native GuiImpl layout) plus the current speaker's two text lines.
-  // Text is canvas-rendered (flagged approximation until the msg text VM
-  // art is decoded, same trade the TH07 dialogue made).
+  // TH08 dialogue presentation: the four portrait VMs draw themselves from
+  // their authored scripts (corner-anchored, screen-space positions), each
+  // side's pair ordered by VM Y like the native FUN_0043542b, with the
+  // per-slot height compensation stored by MSG ops 1/2. Text is
+  // canvas-rendered (flagged approximation until the msg text VM art is
+  // decoded, same trade the TH07 dialogue made).
   private drawTh08Dialogue(r: Renderer): void {
     const dlg = this.th08Dialogue;
     if (!dlg) return;
     const state = dlg.machine.state;
-    const slotX = [80, 464, 272, 272];
-    for (let slot = 0; slot < 4; slot++) {
-      const runner = dlg.runners[slot];
-      if (!runner) continue;
-      const portrait = state.portraits[slot];
-      if (!portrait.active) continue;
-      const frame = runner.spriteFrame();
-      if (!frame) continue;
-      // Position codes: 3 = left active, 4 = side rest, 6 = opposite rest.
-      const x = portrait.position === 3 ? 80 : portrait.position === 6 ? 420 : slotX[slot];
-      r.drawAnmFrame(frame, x + frame.w / 2, 240);
+    for (const [a, b] of ([[0, 1], [2, 3]] as const)) {
+      const frameA = dlg.runners[a]?.spriteFrame() ?? null;
+      const frameB = dlg.runners[b]?.spriteFrame() ?? null;
+      // FUN_0043542b compares the two VMs' Y positions and draws the
+      // smaller one first so the lower sprite overlaps in front.
+      const aBehind = !frameB || (!!frameA && frameA.vmY <= frameB.vmY);
+      const ordered: [AnmFrame | null, number][] = aBehind
+        ? [[frameA, a], [frameB, b]]
+        : [[frameB, b], [frameA, a]];
+      for (const [frame, slot] of ordered) {
+        if (frame) r.drawAnmFrame(frame, 0, 0, { offsetY: dlg.portraitOffsets[slot] });
+      }
     }
     const ctx = r.ctx;
     ctx.save();

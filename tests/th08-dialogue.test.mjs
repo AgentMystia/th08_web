@@ -13,6 +13,76 @@ const {
   TH08_DIALOGUE_INPUT_BITS
 } = await import('../tests/.build/th08-dialogue.mjs');
 
+// Presenter-side portrait machinery (the runner-level behavior the stage
+// host consumes for MSG ops 1/2/15/17). The face expression scripts park
+// hidden at ins_23, enter through interrupt label 1, swap expressions via
+// archive-flattened SetSprite ordinals, and exit through label 5.
+execSync(
+  'npx esbuild src/formats/anm.ts src/data/th08-data.ts --bundle --format=esm ' +
+  '--outdir=tests/.build/th08-face --out-extension:.js=.mjs --log-level=silent'
+);
+const { Anm, AnmRunner } = await import('../tests/.build/th08-face/formats/anm.mjs');
+const { TH08_DATA } = await import('../tests/.build/th08-face/data/th08-data.mjs');
+
+function enterFaceRunner() {
+  const faceAnm = new Anm(Buffer.from(TH08_DATA.anm.face_rm00, 'base64'), 'face_rm00');
+  const entry = faceAnm.entries[1];
+  const runner = new AnmRunner(faceAnm, entry.scriptIds[0], {
+    entryIndex: 1,
+    spriteIndexOffset: entry.spriteBase
+  });
+  return { faceAnm, runner };
+}
+
+test('face expression scripts park hidden and slide in via the enter label', () => {
+  const { runner } = enterFaceRunner();
+  runner.update();
+  // The script head parks at ins_23 (hide + wait for interrupt): nothing
+  // draws until the enter label fires.
+  assert.equal(runner.spriteFrame(), null);
+  assert.ok(runner.interrupt(1));
+  for (let i = 0; i < 30; i++) runner.update();
+  const frame = runner.spriteFrame();
+  assert.ok(frame, 'portrait is visible after the 30-frame slide-in');
+  assert.equal(frame.anchorTopLeft, true);
+  assert.ok(Math.abs(frame.vmX - 48) < 0.01, `vmX settled at 48, got ${frame.vmX}`);
+  assert.equal(frame.vmY, 128);
+  assert.equal(frame.alpha, 255);
+});
+
+test('SetSprite ordinals swap the expression sprite without touching VM state', () => {
+  const { runner } = enterFaceRunner();
+  assert.ok(runner.interrupt(1));
+  for (let i = 0; i < 30; i++) runner.update();
+  const before = runner.spriteFrame();
+  // Ordinal 6 = the 7th sprite in file order: entry0 carries sprite
+  // ordinals 0-1 (the big declaration portrait), entries 1..8 one
+  // expression sprite each — so 6 selects entry5's face texture.
+  assert.ok(runner.setSpriteOrdinal(6));
+  const after = runner.spriteFrame();
+  assert.ok(after);
+  assert.notEqual(after.imageKey, before.imageKey);
+  assert.equal(after.w, 126);
+  assert.equal(after.h, 254);
+  assert.equal(after.alpha, 255);
+  assert.equal(after.vmX, before.vmX);
+  assert.equal(after.vmY, before.vmY);
+});
+
+test('the exit label fades the portrait out and ends its script', () => {
+  const { runner } = enterFaceRunner();
+  assert.ok(runner.interrupt(1));
+  for (let i = 0; i < 30; i++) runner.update();
+  assert.ok(runner.spriteFrame());
+  assert.ok(runner.interrupt(5));
+  let removed = false;
+  for (let i = 0; i < 40 && !removed; i++) {
+    runner.update();
+    removed = runner.spriteFrame() === null;
+  }
+  assert.ok(removed, 'portrait removed after the exit slide');
+});
+
 function updateMany(machine, frames, input = 0) {
   const events = [];
   for (let frame = 0; frame < frames; frame++) {

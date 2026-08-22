@@ -9,9 +9,10 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const source = join(root, 'reference');
 const outDir = join(root, 'assets/audio/th08');
 
-// The vertical slice needs title, Stage 1, and Wriggle. Keep the parser aware
+// The slice ships the title theme plus both Stage 1+2 stage/boss pairs
+// (Stage 1: th08_00/th08_03, Stage 2: th08_04/th08_05). Keep the parser aware
 // of every track so the data test can lock the complete original loop table.
-export const TRACK_WHITELIST = new Set(['th08_01', 'th08_00', 'th08_03']);
+export const TRACK_WHITELIST = new Set(['th08_01', 'th08_00', 'th08_03', 'th08_04', 'th08_05']);
 
 export function parseThbgmFmt(buf) {
   const tracks = [];

@@ -58,9 +58,13 @@ pointItems/gauge/clock/RNG 残差）。CI 以 advisory（非阻塞）方式运�
   f2884/f1052 口径不可直接比较）；其上游是 Stage 2 f680..1237 窗口内
   一次 8-u16 的抽签经济残差（占该窗口 17.6k 抽的 0.05%，事件面完全
   对齐），根因候选与完整分析记录在 `AGENTS.md` §0 与 `HANDOFF.md`。
+  2026-08-23 第二轮修复了弹幕池上限（TH07 1024 → TH08 原生 1536）、
+  相位跳转释放 ins_135 子上下文、FIRE count=0 的发射钳位等 exe 对齐
+  问题——advisory 数字可能因此移动。
   playable 路径本身（弹幕、对话、HUD、炸弹、Boss 呈现）由 th08-* 回归
   测试与 CI 浏览器启动检查守护。
-- 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序等）。
+- 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序、对话
+  立绘的入场/位置码触发点等）。
 
 ## 资产生成 / Regenerating embedded data
 

@@ -13,11 +13,12 @@ interface BgmTrackInfo {
 
 const BGM_VOLUME = 0.65;
 
-// The vertical-slice audio bundle ships exactly these .ogg files (see
-// scripts/split-th08-bgm.mjs); every other table track resolves to the
-// stage-1 pair by parity (even = stage theme, odd = boss theme) so neither
-// preload nor play issues a doomed fetch for the unshipped files.
-const SHIPPED_BGM_TRACKS = new Set(['th08_01', 'th08_00', 'th08_03']);
+// The shipped audio bundle carries exactly these .ogg files (see
+// scripts/split-th08-bgm.mjs): the title theme plus the full stage/boss pairs
+// for the Stage 1+2 slice. Every other table track resolves to the stage-1
+// pair by parity (even = stage theme, odd = boss theme) so neither preload
+// nor play issues a doomed fetch for the unshipped files.
+const SHIPPED_BGM_TRACKS = new Set(['th08_01', 'th08_00', 'th08_03', 'th08_04', 'th08_05']);
 
 function resolveBgmTrackName(name: string): string {
   if (SHIPPED_BGM_TRACKS.has(name)) return name;

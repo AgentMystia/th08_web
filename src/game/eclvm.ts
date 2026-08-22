@@ -16,10 +16,13 @@ import type { GameHost, Enemy, EnemyBullet, EclState, EclContext, BulletProps, B
 // and the ECL v8 stage scripts (on-disk ins == exe case + 1). Known
 // approximations carry inline comments and are registered in AGENTS.md §7.
 
-// Th07.exe bullet pool is 0x400 = 1024 slots (FUN_00421e90 / FUN_00423480 both
-// gate on `< 0x400`; audit-bullet-motion.md D4). Was 640 (an empirical probe
-// ceiling), which starved the densest Lunatic patterns ~384 bullets early.
-const ENEMY_BULLET_CAP = 1024;
+// Th08.exe bullet pool is 0x600 = 1536 slots (bullet manager @ 0xf54e90,
+// array mgr+0x1a880 = 1536 x 0x10b8, asm 0x431254/0x4312b7 — native slot
+// trace, AGENTS.md 2026-08-20). The inherited TH07 cap 0x400 saturated
+// during Wriggle's final card / Last Spell: the census veto silently
+// dropped the familiars' whole volleys while the boss (earlier slot) kept
+// firing — the "终符使魔不发弹" report.
+const ENEMY_BULLET_CAP = 1536;
 const NATIVE_QUARTER_PI_F32 = 0.7853981852531433;
 const NATIVE_SIXTH_PI_F32 = 0.5235987901687622;
 const NATIVE_THIRD_PI_F32 = 1.0471975803375244;
@@ -1435,6 +1438,13 @@ export class StageRuntime {
     // boundaries (Yuyuko 幽曲 sub38's period-8 rice into 桜符 sub58 for its
     // first ~1020 frames — the 米弹 leak, LIFE-001/STG6-001).
     s.periodicSub = null;
+    // FUN_0042b490/FUN_0042b930 (all.c:20639/20800, re-specs
+    // th08-ecl-ops-0x5f-0x8f.md §2): a threshold or timer phase jump frees
+    // ALL FOUR ins_135 sub contexts alongside the FIRE-template reset.
+    // Without this the H/L midboss carried Sub16's Sub17 nonspell volley
+    // loop into the 螢符 spell phase (the context kept firing until
+    // Sub18's ins_1 finally killed the enemy).
+    if (s.th08) s.th08.subContexts.length = 0;
     if (s.isBoss) this.clearNonBossEnemies(game, e);
     this.enterSub(s, sub);
   }
@@ -2334,8 +2344,12 @@ export class StageRuntime {
     const rank = game.rank;
     const lerpI = (lo: number, hi: number) => Math.trunc((hi - lo) * rank / 32) + lo;
     const lerpF = (lo: number, hi: number) => Math.fround(Math.fround((hi - lo) * rank) / 32 + lo);
-    const count1 = Math.max(1, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
-    const count2 = Math.max(1, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
+    // FUN_00422720's emission loop is a plain `for (i < count1)` — a count1
+    // of 0 (Sub48's ins_30 decay of [10039] is the authored shutdown of the
+    // Last Spell fans) fires NOTHING. Flooring at 1 kept emitting one-bullet
+    // volleys forever after the decay reached zero.
+    const count1 = Math.max(0, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
+    const count2 = Math.max(0, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
     const rankSpeed = lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
     const props: BulletProps = {
       sprite,
@@ -2986,6 +3000,11 @@ export class StageRuntime {
         // raw collision/damage bits stay down until authored ins_81 rows
         // restore them, while flags2 bit 3 prevents duplicate settlement.
         t.flags = (t.flags | 0x800000) & ~(4 | 8 | 0x40);
+        // all.c:21650's 0x800000 is the render HIDE flag — a mode-1 death
+        // vanishes from the screen immediately (the death burst is the
+        // presentation) while the retained actor walks its callback
+        // invisibly. The draw/collision gates already read `invisible`.
+        s.invisible = true;
         this.syncTh08CollisionFlags(s);
       } else {
         s.interactable = false;
@@ -3994,9 +4013,10 @@ export class StageRuntime {
       case 126: t.dynCallTable[gi(4)] = gi(0); return null;
       case 127: { // boss-slot register (>=0) / unregister (<0) — DAT_00f54cc0
         // (all.c:12664-12720, spec §127). Registering also makes the enemy
-        // intangible (flags bit1) and clears its fire-suppress radius; the
-        // exe's anm-interrupt/effect-VM side effects (FUN_00422bb0/
-        // FUN_0042a820/FUN_00422be0) are visual-only and not modeled.
+        // intangible (flags bit1) and clears its fire-suppress radius; of
+        // the exe's anm-interrupt/effect-VM side effects (FUN_00422bb0/
+        // FUN_0042a820/FUN_00422be0) the unregister anm-slot sweep below
+        // is modeled, the boss-marker interrupt/parking is not.
         const arg = gi(0);
         if (s.bossSlot != null && this.bossSlots[s.bossSlot] === e) this.bossSlots[s.bossSlot] = null;
         if (arg < 0) {
@@ -4004,6 +4024,14 @@ export class StageRuntime {
           s.isBoss = false;
           t.flags &= ~2;
           t.transformType = -1;
+          // FUN_0042a820 (all.c:20203-20216, called from the unregister
+          // tail at 12672-12681): destroy every effect VM the enemy owns —
+          // its ins_57 slot VMs fade out over <=15 manager ticks. The
+          // actor itself (and its main sprite VM) stays visible for its
+          // scripted exit walk.
+          for (const slot of s.anmSlots) {
+            if (slot) slot.runner = null;
+          }
         } else {
           s.bossSlot = arg;
           s.isBoss = true;
@@ -4359,8 +4387,12 @@ export class StageRuntime {
     const rank = game.rank;
     const lerpI = (lo: number, hi: number) => Math.trunc((hi - lo) * rank / 32) + lo;
     const lerpF = (lo: number, hi: number) => Math.fround(Math.fround((hi - lo) * rank) / 32 + lo);
-    const count1 = Math.max(1, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
-    const count2 = Math.max(1, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
+    // FUN_00422720's emission loop is a plain `for (i < count1)` — a count1
+    // of 0 (Sub48's ins_30 decay of [10039] is the authored shutdown of the
+    // Last Spell fans) fires NOTHING. Flooring at 1 kept emitting one-bullet
+    // volleys forever after the decay reached zero.
+    const count1 = Math.max(0, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
+    const count2 = Math.max(0, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
     const rankSpeed = lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
     const props: BulletProps = {
       sprite,

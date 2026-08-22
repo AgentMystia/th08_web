@@ -165,3 +165,67 @@ test('ins_136(1) arms the 21-frame screen shake (builtin table slot 1)', () => {
   runTicks(runtime, game, 2);
   assert.deepEqual(game.shakeLog, [{ duration: 0x15, from: 0, to: 0 }]);
 });
+
+// TH08 phase transitions free the ins_135 sub-contexts (FUN_0042b490 /
+// FUN_0042b930, all.c:20639/20800, re-specs th08-ecl-ops-0x5f-0x8f.md §2).
+// Regression: without the free, the H/L midboss carried Sub16's Sub17
+// nonspell volley loop into the 螢符 spell phase.
+test('a life-threshold phase jump frees all ins_135 sub-contexts', () => {
+  const runtime = makeRuntime([
+    [ // Sub0: pool 100, threshold 50 -> Sub2, arm sub-context slot 0 = Sub1
+      instruction(0, 131, [i32(100)]),
+      instruction(0, 133, [i32(0), i32(50), i32(2)]),
+      instruction(0, 135, [i32(0), i32(1)]),
+      instruction(1, 2, [i32(60000)])
+    ],
+    [instruction(0, 2, [i32(60000)])], // Sub1: parked sub-context body
+    [instruction(0, 2, [i32(60000)])] // Sub2: the phase target
+  ]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });
+  game.frame = 0;
+  runtime.processEnemyCallbacks(game, enemy);
+  assert.equal(enemy.ecl.th08.subContexts.length, 1, 'sub-context armed before the jump');
+  enemy.hp = 40; // pool drops below the 50 threshold
+  game.frame = 1;
+  runtime.tickEnemyCore(game, enemy);
+  runtime.processEnemyCallbacks(game, enemy);
+  assert.equal(enemy.ecl.ctx.subId, 2, 'main context jumped to the threshold sub');
+  assert.equal(
+    enemy.ecl.th08.subContexts.length, 0,
+    'FUN_0042b490 frees all four sub contexts on the phase jump'
+  );
+});
+
+// FUN_00422720's emission loop is `for (i < count1)` — count1 0 fires
+// NOTHING. Sub48's ins_30 decay of [10039] to 0 is the authored shutdown of
+// the Last Spell fans; the old Math.max(1, ...) clamp kept firing one-bullet
+// volleys forever.
+test('FIRE with count1=0 emits no bullets', () => {
+  const runtime = makeRuntime([
+    [instruction(0, 96, [i32(2), i32(1), i32(1), f32(1.8), f32(0.5), f32(0), f32(0.18479957), i32(515)])]
+  ]);
+  const game = makeHost();
+  runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });
+  runTicks(runtime, game, 3);
+  assert.equal(game.enemyBullets.length, 0);
+});
+
+// Th08.exe bullet pool is 0x600 = 1536 slots (manager @ 0xf54e90, native
+// slot trace). The inherited TH07 cap 0x400 saturated during Wriggle's
+// final card and the census veto silently dropped the familiars' volleys
+// (the 終符使魔不发弹 report): the boss (earlier slot) kept firing while
+// the later familiars' fires were rejected whole.
+test('the bullet pool accepts TH08-native densities past TH07\'s 0x400', () => {
+  const runtime = makeRuntime([
+    // sprite 2 (low u16), count1 = 1500 (high u16) — one 1500-bullet fan
+    [instruction(0, 96, [i32((1500 << 16) | 2), i32(1), i32(1), f32(1.0), f32(1.0), f32(0), f32(0), i32(515)])]
+  ]);
+  const game = makeHost();
+  runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });
+  runTicks(runtime, game, 3);
+  assert.equal(
+    game.enemyBullets.length, 1500,
+    'a 1500-bullet volley must fully allocate (TH07-era 1024 cap dropped 476)'
+  );
+});
