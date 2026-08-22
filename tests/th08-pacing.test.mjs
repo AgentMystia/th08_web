@@ -571,7 +571,14 @@ test('Stage-2 graze, familiar death and overlapping clear quads stay replay-alig
     const value = origU16();
     if (diagFrame >= DIAG_FROM && diagFrame <= DIAG_TO) {
       diagDraws++;
-      const src = new Error().stack?.split('\n')[2]?.trim().replace(/^at\s+/, '') ?? 'unknown';
+      const stack = new Error().stack?.split('\n') ?? [];
+      // Frames [2..4]: immediate caller + its caller + one more, so the
+      // u32-family draws attribute to their real consumers instead of
+      // collapsing into Rng.u32's internals.
+      const src = [2, 3, 4]
+        .map((i) => stack[i]?.trim().replace(/^at\s+/, '').split(' (')[0])
+        .filter(Boolean)
+        .join(' <- ') || 'unknown';
       diagTally.set(src, (diagTally.get(src) ?? 0) + 1);
     }
     return value;
