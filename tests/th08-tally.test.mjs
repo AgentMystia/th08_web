@@ -55,7 +55,10 @@ test('extreme-gauge trickle: +10 live score per non-dialogue frame past ±8000',
 test('the trickle pauses while a dialogue is present (IsDialogPresent gate)', () => {
   const scene = makeScene(1, rpy.stages[0]);
   scene.runState.youkaiGauge = 9000;
-  scene.th08Dialogue = { machine: { state: { done: false }, update: () => [] }, runners: [] };
+  scene.th08Dialogue = {
+    machine: { state: { done: false, portraits: [0, 1, 2, 3].map(() => ({ position: 4 })) }, update: () => [] },
+    runners: [], portraitOffsets: [0, 0, 0, 0], lastPositions: [4, 4, 4, 4]
+  };
   const score0 = scene.score;
   for (let f = 0; f < 5; f++) scene.update(idle());
   assert.equal(scene.score - score0, 0);

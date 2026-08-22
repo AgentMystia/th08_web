@@ -6433,7 +6433,10 @@ export class StageScene implements GameHost {
     // the segments with 'lighter' INSIDE the offscreen, so overlaps
     // accumulate in premultiplied sRGB rather than against the live
     // playfield — visually equivalent for this annulus, not byte-identical.
-    if (settle >= 1) {
+    // The settle frame itself (age exactly 120) keeps the segmented path so
+    // the boundary frame stays byte-identical, and headless node probes
+    // without a DOM fall back to the segmented draw.
+    if (age > 120 && typeof document !== 'undefined') {
       let cache = this.spellRingCache;
       if (!cache) {
         cache = this.bakeSpellRing(img);
@@ -6447,8 +6450,8 @@ export class StageScene implements GameHost {
         ctx.rotate(spin);
         ctx.drawImage(cache, -cache.width / 2, -cache.height / 2);
         ctx.restore();
+        return;
       }
-      return;
     }
     const repeats = 6; // sprite221 height 768 / etama3 height 128
     const segmentsPerRepeat = 16;

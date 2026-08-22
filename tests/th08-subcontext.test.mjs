@@ -203,7 +203,8 @@ test('a life-threshold phase jump frees all ins_135 sub-contexts', () => {
 // volleys forever.
 test('FIRE with count1=0 emits no bullets', () => {
   const runtime = makeRuntime([
-    [instruction(0, 96, [i32(2), i32(1), i32(1), f32(1.8), f32(0.5), f32(0), f32(0.18479957), i32(515)])]
+    // dword0 packs {u16 sprite=2, u16 offset}; count1 is dword 1
+    [instruction(0, 96, [i32(2), i32(0), i32(1), f32(1.8), f32(0.5), f32(0), f32(0.18479957), i32(515)])]
   ]);
   const game = makeHost();
   runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });
@@ -218,8 +219,8 @@ test('FIRE with count1=0 emits no bullets', () => {
 // the later familiars' fires were rejected whole.
 test('the bullet pool accepts TH08-native densities past TH07\'s 0x400', () => {
   const runtime = makeRuntime([
-    // sprite 2 (low u16), count1 = 1500 (high u16) — one 1500-bullet fan
-    [instruction(0, 96, [i32((1500 << 16) | 2), i32(1), i32(1), f32(1.0), f32(1.0), f32(0), f32(0), i32(515)])]
+    // dword0 = {sprite 2, offset 0}; count1 (dword 1) = 1500 — one fan
+    [instruction(0, 96, [i32(2), i32(1500), i32(1), f32(1.0), f32(1.0), f32(0), f32(0), i32(515)])]
   ]);
   const game = makeHost();
   runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });

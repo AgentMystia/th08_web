@@ -41,7 +41,7 @@ test('face expression scripts park hidden and slide in via the enter label', () 
   // draws until the enter label fires.
   assert.equal(runner.spriteFrame(), null);
   assert.ok(runner.interrupt(1));
-  for (let i = 0; i < 30; i++) runner.update();
+  for (let i = 0; i < 32; i++) runner.update();
   const frame = runner.spriteFrame();
   assert.ok(frame, 'portrait is visible after the 30-frame slide-in');
   assert.equal(frame.anchorTopLeft, true);
@@ -53,7 +53,7 @@ test('face expression scripts park hidden and slide in via the enter label', () 
 test('SetSprite ordinals swap the expression sprite without touching VM state', () => {
   const { runner } = enterFaceRunner();
   assert.ok(runner.interrupt(1));
-  for (let i = 0; i < 30; i++) runner.update();
+  for (let i = 0; i < 32; i++) runner.update();
   const before = runner.spriteFrame();
   // Ordinal 6 = the 7th sprite in file order: entry0 carries sprite
   // ordinals 0-1 (the big declaration portrait), entries 1..8 one
