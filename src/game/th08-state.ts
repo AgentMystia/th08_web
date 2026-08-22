@@ -101,14 +101,16 @@ export class Th08RunState {
     return 0;
   }
 
-  // The player update's gauge block (0x44bdf0-0x44c012). While the shot
-  // cycle is ARMED (including release inertia), the focus state has been
-  // stable >= 30 frames, no dialogue, not frozen and no bomb: the gauge
-  // moves toward the firing side at 20/frame, or focusTimer/15 once the
-  // clock since the last focus toggle passes 300 frames (0x44be67:
-  // counter <= 300 ? 20.0 : counter/15, ftol'd, negated when unfocused).
-  gaugeFireDrift(focused: boolean, focusTimer: number): number {
-    const amount = focusTimer <= 300 ? 20 : Math.trunc(focusTimer / 15);
+  // The player update's gauge block (0x44bdf0-0x44c012). Once the shot
+  // cycle is armed and the separate idle timer has counted back to zero,
+  // player+0xe2ae8 ramps the gauge contribution from zero: trunc(timer/15)
+  // through timer 300, then the fixed cap 21 (0x44be67-0x44bea8). This is
+  // NOT the player+8 focus-stability counter. The old max-like formula
+  // started at 20 and grew without bound, making the replay reach the
+  // extreme-human item-drop branch hundreds of frames too early.
+  gaugeFireDrift(focused: boolean, fireTimer: number): number {
+    const amount = fireTimer > 300 ? 21 : Math.trunc(fireTimer / 15);
+    if (amount === 0) return 0;
     return focused ? amount : -amount;
   }
 

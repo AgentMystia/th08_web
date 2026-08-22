@@ -10,12 +10,14 @@ import { BinaryView } from './bin';
 // itemRadius, pocLineY, speed, focusedSpeed, diagSpeed, diagFocusedSpeed
 // (hitbox/grazebox/speeds are FULL widths and px/frame; 1.65 is Reimu's
 // FULL hitbox — the exe halves it at the point of use, so 0.825 is the
-// half-width). Two header fields remain unnamed (u32 @ +0x20, f32 @ +0x34). Then
+// half-width). The u32 at +0x20 remains unnamed. The f32 at +0x34 is the
+// form-specific ItemManager movement multiplier (FUN_00440500 reads it from
+// the currently selected SHT and multiplies it by the global time rate). Then
 // levelCount × {u32 offset, u32 powerThreshold} at +0x38, each pointing at
 // a 56-byte shooter record:
 //   u16 interval, u16 delay, 6×f32 (x, y, hitboxW, hitboxH, angle, speed),
-//   i16 damage, i16 unknown, u8 orb (0 = player, 1/2 = option), u8
-//   shotType, i16 unknown, i16 sprite, i16 sfxId (-1 = no sound), then
+//   i16 damage, i16 visual/secondary, i16 source (0 = player, 1/2 = option),
+//   i16 shotType, i16 sprite, i16 sfxId (-1 = no sound), then
 //   4×i32 behavior function indices (func_on_init/tick/draw/hit per
 //   sht-webedit), parsed into `funcs`. funcs[0] is the spawn-time behavior
 //   selector (TH08 Border Team uses 0 = plain and 1 = aim at the cached
@@ -33,11 +35,9 @@ export interface ShtShot {
   angle: number;
   speed: number;
   damage: number;
-  orb: number; // 0 = player, 1 = left option, 2 = right option
   unknown30: number;
+  source: number; // 0 = player, 1 = left/single option, 2 = right option
   shotType: number;
-  unknown33: number;
-  unknown34: number;
   sprite: number; // player-anm script id (the spawner adds 10: FUN_0044fb70)
   sfxId: number; // sound effect id to play on fire, -1 = none (not yet wired to playback)
   funcs: [number, number, number, number]; // behavior function indices (see header comment)
@@ -69,7 +69,7 @@ export class Sht {
   readonly diagSpeed: number;
   readonly diagFocusedSpeed: number;
   readonly headerUnknown32: number;
-  readonly headerUnknown52: number;
+  readonly itemMoveRate: number;
   readonly levels: ShtLevel[] = [];
 
   constructor(source: string | Uint8Array) {
@@ -88,7 +88,7 @@ export class Sht {
     this.focusedSpeed = v.f32(40);
     this.diagSpeed = v.f32(44);
     this.diagFocusedSpeed = v.f32(48);
-    this.headerUnknown52 = v.f32(52);
+    this.itemMoveRate = v.f32(52);
     for (let i = 0; i < levelCount; i++) {
       const offset = v.u32(TABLE_OFFSET + i * 8);
       const power = v.u32(TABLE_OFFSET + i * 8 + 4);
@@ -108,10 +108,12 @@ export class Sht {
           speed: v.f32(o + 24),
           damage: v.i16(o + 28),
           unknown30: v.i16(o + 30),
-          orb: v.u8(o + 32),
-          unknown33: v.u8(o + 33),
-          unknown34: v.i16(o + 34),
-          shotType: v.u8(o + 33),
+          // FUN_0044fb70 reads source as i16@+0x20 to index the player's
+          // 0x2f4-stride option actors, then copies i16@+0x22 to the live
+          // bullet type. This direct binary use resolves the older re-spec's
+          // mistaken +0x22/+0x23 byte split.
+          source: v.i16(o + 32),
+          shotType: v.i16(o + 34),
           sprite: v.i16(o + 36),
           sfxId: v.i16(o + 38),
           funcs: [v.i32(o + 40), v.i32(o + 44), v.i32(o + 48), v.i32(o + 52)]

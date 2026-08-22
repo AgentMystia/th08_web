@@ -122,36 +122,31 @@ if (scene.runState) {
 
 // RNG budget accounting: every consumer bottoms out in u16(); the recorded
 // stage-2 seed is the original's total draw budget (mod 65536) from the
-// stage-1 seed. Count per-frame draws for earliest-divergence analysis.
-let rngDraws = 0;
-let rngBootstrapDraws = 0;
+// stage-1 seed. Native's GLOBAL diagnostic counter is not reset when the T8RP
+// seed is restored: FUN_0043b984 and the pre-stage runtime init consume 90
+// draws first. Those draws must appear in /proc counter comparisons, but MUST
+// NOT advance the replay RNG stream or enter the stage-entry seed-distance
+// oracle. StageScene construction then consumes the two native manager-cursor
+// draws from the restored stage seed before this harness can wrap u16().
+const rngPreRestoreDraws = 90;
+let rngStageDraws = 2;
+let rngDraws = rngPreRestoreDraws + rngStageDraws;
+const rngBootstrapDraws = rngDraws;
 {
   const orig = scene.rng.u16.bind(scene.rng);
-  let inBootstrap = true;
   scene.rng.u16 = () => {
-    if (inBootstrap) rngBootstrapDraws++;
-    else rngDraws++;
+    rngStageDraws++;
+    rngDraws++;
     const value = orig();
-    if (!inBootstrap && (nativeTracePath || (traceRange && currentFrame >= traceRange.from && currentFrame <= traceRange.to))) {
+    if (nativeTracePath || (traceRange && currentFrame >= traceRange.from && currentFrame <= traceRange.to)) {
       const source = new Error().stack?.split('\n')[2]?.trim().replace(/^at\s+/, '') ?? 'unknown';
       scene.traceReplayEvent({
         kind: 'rng', frame: scene.frame,
-        data: { source, draw: rngDraws, value, seed: scene.rng.seed }
+        data: { source, draw: rngDraws, stageDraw: rngStageDraws, value, seed: scene.rng.seed }
       });
     }
     return value;
   };
-  scene.rngBootstrapDone = () => { inBootstrap = false; };
-}
-
-scene.rngBootstrapDone?.();
-
-function replaySlowdownAdvancesLocal(recordedFps, counter) {
-  if (recordedFps < 20) return counter % 3 === 0;
-  if (recordedFps < 30) return counter % 2 === 0;
-  if (recordedFps < 40) return counter % 3 !== 0;
-  if (recordedFps < 50) return counter % 6 !== 0;
-  return true;
 }
 
 const inputBits = (word) => ({
@@ -170,11 +165,40 @@ const inputBits = (word) => ({
 
 const inputs = stage.inputs;
 const frames = inputs.length;
+// T8RP v6 has no per-frame auxiliary event word, so contacts cannot be
+// recovered from the replay image itself. The committed Border-Team fixture
+// deliberately contains one native Stage-2 contact followed by a successful
+// deathbomb. These checkpoints come from the frame-aligned /proc trace
+// (native counter N == sim input N-1). Treating every non-empty hitLog as an
+// error both stopped on a correct run and, worse, could not detect a missing
+// native contact. Keep this small oracle seed-scoped so alternate replays do
+// not inherit fixture-specific outcomes.
+const nativePlayerOracle = stageNumber === 2 && stage.rngSeed === 0x32fb
+  ? {
+      hits: new Map([[676, {
+        kind: 'bullet', ownerSub: 1, spawnFrame: 655, sprite: 1,
+        spriteOffset: 2, x: 168.773193359375, y: 129.134521484375,
+        deathbombMeter: 27
+      }]]),
+      checkpoints: new Map([
+        // Native counter 697 already exposes the completed rescue plus the
+        // cast-tail raw r100 record; counter 698 exposes its first ordinary
+        // r101/life39 update. The Web facade counts the authored 250 active
+        // callbacks down, while native keeps 250 in param_4 and advances a
+        // separate ZunTimer, hence 249 at the second Web checkpoint.
+        [696, { hitState: false, bombType: 3, bombs: 1, power: 128, bombTimer: 250,
+          attacks: 1, attackRadius: 100, attackDamage: 70 }],
+        [697, { hitState: false, bombType: 3, bombs: 1, power: 128, bombTimer: 249,
+          attacks: 1, attackRadius: 101, attackDamage: 70 }]
+      ])
+    }
+  : { hits: new Map(), checkpoints: new Map() };
 const spawnFrames = [];
 const killFrames = [];
 let currentFrame = -1;
 let stoppedEarly = false;
-let firstHitReplayFrame = null;
+let observedHitCount = 0;
+let playerDivergence = null;
 const traceEvery = Number(optionValue('--trace-every')) || 50;
 const trace = [];
 const eventTrace = [];
@@ -200,7 +224,6 @@ scene.runtime.killEnemy = (game, e, bombContact) => {
   return origKill(game, e, bombContact);
 };
 
-let modeCounter = 0;
 let clearedAt = -1;
 if (clearCheck) {
   scene.playerObj.invulnFrames = 999999;
@@ -208,12 +231,13 @@ if (clearCheck) {
 }
 const simFrameCap = clearCheck ? frames + 20000 : frames;
 for (let f = 0; f < simFrameCap; f++) {
-  // Native replay slowdown (recorded per 30 frames): the recorded cadence
-  // bucket decides whether this replay input advances the simulation. Past
-  // the recording (clear-check's idle tail), every frame advances.
-  const recordedFps = f < frames ? stage.slowdown[Math.floor(f / 30)] & 0x7f : 127;
-  const advances = recordedFps >= 60 || replaySlowdownAdvancesLocal(recordedFps, ++modeCounter);
-  if (!advances) continue;
+  // T8RP v6 already contains one u16 input record per gameplay update.
+  // The parallel 30-frame slowdown table records observed presentation FPS;
+  // it is telemetry, not a command to discard simulation ticks. Native
+  // /proc traces prove counter f == port state after input f-1 even in the
+  // stage-2 opening bucket (48 FPS). Skipping four of its first 30 records
+  // delayed the ECL/effect clocks, rerolled auto-fire deadlines, and created
+  // a false f588 divergence.
   currentFrame = f;
   const word = f < frames ? inputs[f] : 0x1;
   if (clearCheck) {
@@ -221,7 +245,53 @@ for (let f = 0; f < simFrameCap; f++) {
     scene.playerObj.bombInvuln = 999999;
   }
   scene.update(inputBits(word));
-  if (firstHitReplayFrame == null && scene.hitLog.length > 0) firstHitReplayFrame = f;
+  const newHits = scene.hitLog.slice(observedHitCount);
+  observedHitCount = scene.hitLog.length;
+  const expectedHit = nativePlayerOracle.hits.get(f);
+  if (!playerDivergence && expectedHit) {
+    const hit = newHits[0];
+    const b = hit?.bullet;
+    const exact = newHits.length === 1
+      && hit.kind === expectedHit.kind
+      && b?.ownerSub === expectedHit.ownerSub
+      && b?.spawnFrame === expectedHit.spawnFrame
+      && b?.sprite === expectedHit.sprite
+      && b?.spriteOffset === expectedHit.spriteOffset
+      && Math.abs(b.x - expectedHit.x) < 1e-6
+      && Math.abs(b.y - expectedHit.y) < 1e-6
+      && scene.playerObj.deathbombMeter === expectedHit.deathbombMeter;
+    if (!exact) {
+      playerDivergence = {
+        replayFrame: f, reason: 'native-player-contact',
+        ours: { hits: newHits, deathbombMeter: scene.playerObj.deathbombMeter },
+        native: expectedHit
+      };
+    }
+  } else if (!playerDivergence && newHits.length > 0) {
+    playerDivergence = {
+      replayFrame: f, reason: 'unexpected-player-hit', ours: newHits, native: null
+    };
+  }
+  const playerCheckpoint = nativePlayerOracle.checkpoints.get(f);
+  if (!playerDivergence && playerCheckpoint) {
+    const attacks = [...scene.bombEngine.activeSlots()];
+    const ours = {
+      hitState: scene.playerObj.hitState,
+      bombType: scene.playerObj.th08BombType,
+      bombs: scene.playerObj.bombs,
+      power: scene.playerObj.power,
+      bombTimer: scene.playerObj.bombTimer,
+      attacks: attacks.length,
+      attackRadius: attacks[0]?.radiusX,
+      attackDamage: attacks[0]?.damage
+    };
+    const exact = Object.entries(playerCheckpoint).every(([key, value]) => ours[key] === value);
+    if (!exact) {
+      playerDivergence = {
+        replayFrame: f, reason: 'native-player-checkpoint', ours, native: playerCheckpoint
+      };
+    }
+  }
   // Spawn stream census; the kill stream comes from the killEnemy hook above.
   for (const enemy of scene.enemies) {
     if (!seenSpawned.has(enemy.id)) {
@@ -291,7 +361,7 @@ for (let f = 0; f < simFrameCap; f++) {
     clearedAt = f;
     break;
   }
-  if (!diagnostic && !clearCheck && scene.hitLog.length > 0) {
+  if (!diagnostic && !clearCheck && playerDivergence) {
     stoppedEarly = true;
     break;
   }
@@ -310,7 +380,7 @@ console.log(`replay frames visited: ${currentFrame + 1}/${frames}`);
 console.log(`spawns: ${spawnFrames.length} (first at f${spawnFrames[0] ?? '-'}, last at f${spawnFrames.at(-1) ?? '-'})`);
 console.log(`kills: ${killFrames.length} (first at f${killFrames[0] ?? '-'})`);
 const next = rpy.stages[stageIndex + 1] ?? null;
-console.log(`final rng seed: ${scene.rng.seed} (draws ${rngDraws}, bootstrap ${rngBootstrapDraws}${next ? `; stage-${next.stage} entry seed 0x${next.rngSeed.toString(16)} = target` : ''})`);
+console.log(`final rng seed: ${scene.rng.seed} (stage draws ${rngStageDraws}; native counter ${rngDraws}, bootstrap ${rngBootstrapDraws}${next ? `; stage-${next.stage} entry seed 0x${next.rngSeed.toString(16)} = target` : ''})`);
 console.log(`end: score=${scene.score} graze=${scene.graze} enemies=${scene.enemies.length} bullets=${scene.enemyBullets.length} player=(${scene.playerObj.x},${scene.playerObj.y}) lives=${scene.playerObj.lives} bombs=${scene.playerObj.bombs}`);
 if (scene.runState) {
   console.log(`th08 runState: gauge=${scene.runState.youkaiGauge} clock=${scene.runState.clockTime} orbs=${scene.runState.currentTimeOrbs}/${scene.runState.totalTimeOrbs} pointValue=${scene.runState.pointItemValue} extends=${scene.runState.pointItemExtends}`);
@@ -351,9 +421,9 @@ if (next) {
     if (s === next.rngSeed) { rngBudget = i + 1; break; }
   }
 }
-const rngMatch = !next || (rngBudget >= 0 && rngDraws % 65536 === rngBudget % 65536);
+const rngMatch = !next || (rngBudget >= 0 && rngStageDraws % 65536 === rngBudget % 65536);
 const ranAllFrames = !stoppedEarly;
-let allPass = rngMatch && ranAllFrames && scene.hitLog.length === 0;
+let allPass = rngMatch && ranAllFrames && playerDivergence == null;
 if (ranAllFrames && next) {
   console.log(`end-of-stage vs native stage-${next.stage} entry:`);
   for (const [name, ours, native] of checks) {
@@ -361,7 +431,7 @@ if (ranAllFrames && next) {
     if (!ok) allPass = false;
     console.log(`  ${name}: ours=${ours} native=${native} ${ok ? 'exact' : 'DIFF'}`);
   }
-  console.log(`  rng: ours=${rngDraws} native≡${rngBudget} (mod 65536) ${rngMatch ? 'exact' : 'DIFF'}`);
+  console.log(`  rng: ours=${rngStageDraws} native≡${rngBudget} (mod 65536) ${rngMatch ? 'exact' : 'DIFF'}`);
 } else if (!stoppedEarly) {
   console.log('end-of-stage: no next-stage snapshot (RNG residue not applicable)');
 } else {
@@ -369,12 +439,10 @@ if (ranAllFrames && next) {
 }
 console.log(allPass ? `STAGE ${stageNumber} PASS` : `STAGE ${stageNumber} DIVERGED`);
 if (scene.hitLog.length > 0) {
-  console.log(`unexpected player hits: ${scene.hitLog.length}`);
+  console.log(`player contacts observed: ${scene.hitLog.length} (native fixture expects ${nativePlayerOracle.hits.size})`);
   for (const hit of scene.hitLog) console.log(' ', JSON.stringify(hit));
 }
-let earliestDivergence = scene.hitLog[0]
-  ? { replayFrame: firstHitReplayFrame, reason: 'unexpected-player-hit', ours: scene.hitLog[0] }
-  : null;
+let earliestDivergence = playerDivergence;
 if (nativeTracePath) {
   if (!existsSync(nativeTracePath)) {
     console.error(`native trace not found: ${nativeTracePath}`);

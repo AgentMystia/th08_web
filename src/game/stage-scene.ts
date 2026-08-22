@@ -24,7 +24,13 @@ import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-bord
 import { Th08SpellDeclaration, th08BombSpellName, archiveScript } from './th08-declaration';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
-import { TH08_HUD } from './th08-hud-layout';
+import {
+  TH08_DIFFICULTY_TAG,
+  TH08_FORM_GAUGE,
+  TH08_HUD,
+  formGaugeCursorX,
+  formGaugePercentX
+} from './th08-hud-layout';
 import { BombEngine, type AttackSlot } from './player-bombs';
 import { stageBgmTrack } from './bgm';
 
@@ -76,6 +82,35 @@ const TH08_ITEM_TYPE_SLOT: Partial<Record<ItemType, number>> = {
   powerSmall: 0, point: 1, powerBig: 2, bomb: 3, powerFull: 4, extend: 5,
   pointStar: 6, time: 7, pointSmall: 8, unknown9: 9, time2: 10
 };
+// DAT_018b8a24, native-read as 40 in both Stage 1/2 replay runs. Every
+// enemy initializes +0x2e10 to this value; FUN_00451670 subtracts it before
+// adding the current collision call's capped raw damage.
+const TH08_SHOT_TIME_ORB_THRESHOLD = 40;
+
+// FUN_00451670's nonzero-angle rectangle branch rotates the target into the
+// attack record's local space, then performs the same inclusive half-extent
+// comparisons as its axis-aligned fast path. `width`/`height` are full sizes
+// already expanded by the target hitbox at the call site.
+function orientedBoxHitsPoint(
+  px: number,
+  py: number,
+  boxX: number,
+  boxY: number,
+  width: number,
+  height: number,
+  angle: number
+): boolean {
+  const dx = px - boxX;
+  const dy = py - boxY;
+  if (angle === 0) {
+    return Math.abs(dx) <= width / 2 && Math.abs(dy) <= height / 2;
+  }
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const localX = c * dx + s * dy;
+  const localY = -s * dx + c * dy;
+  return Math.abs(localX) <= width / 2 && Math.abs(localY) <= height / 2;
+}
 // exe-exact RNG draw cost (raw u16) per particle for the ambient effect types
 // ECL op117/118 spawn, = the DAT_00494fb0 spawnVetoFn's draw count (binary-read
 // confirmed; the paired perFrameGateFns draw ZERO). Only the effectIds stage 1
@@ -115,7 +150,10 @@ const EFFECT_DRAW_COST: Record<number, number> = {
   65: 0
 };
 const ENEMY_POOL_CAP = 0x1e0;
-const PLAYER_BULLET_POOL_CAP = 0x60;
+// Th08.exe player+0xbe838: 0x80 records at stride 0x484. TH07 used the
+// smaller 0x60 pool; retaining that parent-engine limit made long-lived
+// impact VMs reject valid Border-Team volleys and under-damage midbosses.
+const PLAYER_BULLET_POOL_CAP = 0x80;
 const ENEMY_BULLET_POOL_CAP = 0x400;
 const BOMB_CLEAR_REGION_CAP = 0x60;
 const EFFECT_POOL_CAP = 400;
@@ -123,22 +161,15 @@ const EFFECT_POOL_CAP = 400;
 // strides), TH07's 400. The slot array sizes to the superset; the cursor
 // loops below cap at this field.
 const EFFECT_POOL_CAP_TH08 = 512;
-// TH08 effect 51 (the ambient firefly spark) usually does NOT run to its
-// script's 241-frame removal: the per-frame d2 (FUN_004264f0) releases the VM
-// once the particle drifts out of the viewing cone anchored at DAT_004ea3c4
-// along DAT_004ea3e8 (dot(normalize(pos-anchor), axis) < 0.94 -> release,
-// all.c:18019-18026; the anchor/axis ride the stage's 3D camera, which the
-// port does not model). Native slot-tracked lifetimes on stage 1 f300-1100
-// (n=581): 37% reach the 240-frame script end, the rest spread ~uniformly
-// over 1-239. The roll reuses the arm's third drawn u16 (already consumed by
-// the measured 26-draw cost) so the RNG stream is unchanged; pool occupancy
-// (therefore the spawn-throttle cadence) tracks the native statistically
-// (§7 — the per-particle cone formula is unmodeled).
-function th08FireflyLife(raw: number): number {
-  const u = raw / 65536;
-  if (u < 0.37) return 240;
-  return 1 + Math.floor(((u - 0.37) / 0.63) * 239);
-}
+// TH08 effect 51 (the ambient firefly spark) is a world-space particle.
+// FUN_00426280 initializes it around the live STD camera using eight u32
+// random values, then FUN_004264f0 integrates it and releases the VM once
+// dot(normalize(pos-camera), normalizedFacing) falls below 0.94. The exact
+// construction is wired in spawnEffectParticles below; this matters to the
+// shared 512-slot effect pool, not just rendering. In Stage 2 most fireflies
+// leave the steeper camera cone in a handful of frames (native occupancy
+// ~12-23), whereas the old Stage-1 lifetime histogram retained ~160 and
+// changed which later RNG-consuming effects could allocate.
 // Th07.exe v1.00b _DAT_0048eb98 (file value 0x38d1b717), used by
 // FUN_00423910 @ 0x4239e4/0x423a05 before recomputing an accel heading.
 const NATIVE_VELOCITY_EPSILON_F32 = 9.999999747378752e-5;
@@ -517,6 +548,13 @@ export class StageScene implements GameHost {
   }[] = Array.from({ length: BOMB_CLEAR_REGION_CAP }, () => ({
     x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0
   }));
+  // Oriented FUN_0044de60 records published by the type-1/3 boundary beams.
+  // They are consumed in the same enemy-bullet manager phase as the circle
+  // pool; geometry is kept separately because the legacy record above is a
+  // compact circle-only representation.
+  private readonly bombClearBoxes: {
+    x: number; y: number; width: number; height: number; angle: number; framesLeft: number
+  }[] = [];
   // Th08.exe's FUN_0044df00 pool (player+0xbb834, circle entries): pure
   // bullet-kill regions — the enemy-bullet tick's FUN_00449ff0 probe sets
   // state 5 on any live bullet inside the radius (0x1000-flagged bullets are
@@ -543,18 +581,27 @@ export class StageScene implements GameHost {
   }));
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
   private th08Bomb: Th08BorderBomb | null = null;
+  // FUN_0044c650 invokes the selected callback in the trigger player pass.
+  // That pass is later than the priority-12 item/bullet manager in the
+  // native scheduler, so its cast-time records are published at the replay
+  // boundary and become ordinary collision inputs on the following pass.
+  private th08BombPendingStart = false;
+  // Trigger-frame state-2 boundary defers the priority-8 shot-manager pass.
+  // Native executes that queued pass before the ordinary current-frame
+  // shot pass on the callback-start tick (Stage-2 f698: wave f696->f698).
   // Enemy-manager target caches (Th08.exe writes them through the absolute
   // globals 0x18b899c/0x18b89a8/0x18b89b4 in the per-enemy pass at
   // 0x42d3d3-0x42d4df): the primary position cache prefers the LOWEST
   // enemy (max y, first-slot tiebreak) and feeds the seeker tick
   // (FUN_00450320) and the human bomb's orb seek; the pointer-cache pick
-  // (|x-224| <= 64, upper-most/first) feeds the familiar's lunge anchor and
+  // (|x-player.x| < 64, upper-most/first) feeds the familiar's lunge anchor and
   // the needle shots' spawn aim (FUN_00450240 reads enemy+0x2d34/+0x2d38).
   private th08TargetPos: { x: number; y: number } | null = null;
-  private th08LungeEnemy: { x: number; y: number } | null = null;
-  // Frames the shot cycle has stayed disarmed (the idle-drift 30-frame gate,
-  // 0x44bf22 Compare(timerB, 0x1e)).
-  private th08IdleFrames = 0;
+  // Unlike the two position caches, DAT_018b89b4 is a persistent Enemy*
+  // rather than a frame-local value. It is cleared by Ran's callback or
+  // when the pointed pool slot is observed inactive; rebuilding it from
+  // scratch skips the native one-frame stale-pointer handoff.
+  private th08LungeEnemy: Enemy | null = null;
   // Bomb-orb visual follows for the PlayerEffects entries; each actor
   // keeps its VM handle so the burst transition can fire the authored
   // label-1 balloon/fade interrupt (player00 script 19).
@@ -707,8 +754,11 @@ export class StageScene implements GameHost {
     // TH08 item visuals are ANM VMs in etama.anm: ItemManager::SpawnItem runs
     // the global script (itemType + 61) per item (ItemManager.cpp:112). One
     // cached runner per type stands in for the per-item VMs — APPROXIMATION:
-    // same-type items pulse in phase-locked sync (the stage-1 item scripts
-    // consume no RNG, so the shared runner is draw-order neutral).
+    // same-type items pulse in phase-locked sync. These render-only runners
+    // must not touch the live gameplay RNG: constructing the type-10 runner
+    // used to execute five random t0 ANM ops and advance every replay seed
+    // by ten draws before frame zero. Per-item spawn draws belong to the
+    // actual item allocation path, not this visual cache.
     this.th08ItemRunners = TH08_ITEM_TYPE_IDS.map((typeId) => {
       // The exe's etama global script index is (itemType + 61); on disk
       // etama.anm's script ids run -150..-35 (global = id + 150).
@@ -719,8 +769,7 @@ export class StageScene implements GameHost {
         if (!entry.scriptIds.includes(targetId)) continue;
         return new AnmRunner(anm, targetId, {
           entryIndex,
-          spriteIndexOffset: entry.spriteBase,
-          rng: this.rng
+          spriteIndexOffset: entry.spriteBase
         });
       }
       return null;
@@ -1130,10 +1179,12 @@ export class StageScene implements GameHost {
     this.bombEngine.reset();
     this.activeBombSlots.length = 0;
     for (const region of this.bombClearRegions) region.framesLeft = 0;
+    this.bombClearBoxes.length = 0;
     for (const zone of this.th08DeathClearZones) zone.framesLeft = 0;
     this.playerEffects.clear();
     this.th08Effects.clear();
     this.screenShakes.length = 0;
+    this.screenFlash = null;
     this.shakeX = 0;
     this.shakeY = 0;
   }
@@ -1151,12 +1202,22 @@ export class StageScene implements GameHost {
     for (const runner of this.spellBackgroundRunners) runner.interrupt(label);
   }
 
-  // Screen FX scheduler (exe FUN_004459c0). Type 1 shake: each frame both
+  // Screen FX scheduler (Th08.exe FUN_0045b8b0). Type 1 shake: each frame both
   // camera axes independently pick {0, +mag, -mag}, mag ramping from->to
   // over the duration. Type 3 flash: a full-screen tint held `duration`
   // frames, repeated `repeats` times, alpha from the ARGB high byte.
-  private readonly screenShakes: { duration: number; elapsed: number; from: number; to: number }[] = [];
-  private screenFlash: { duration: number; timer: number; repeats: number; color: number } | null = null;
+  private readonly screenShakes: {
+    duration: number;
+    elapsed: number;
+    from: number;
+    to: number;
+  }[] = [];
+  private screenFlash: {
+    duration: number;
+    timer: number;
+    repeats: number;
+    color: number;
+  } | null = null;
   private shakeX = 0;
   private shakeY = 0;
 
@@ -1168,7 +1229,10 @@ export class StageScene implements GameHost {
   }
 
   startScreenFlash(duration: number, repeats: number, argb: number): void {
-    this.screenFlash = { duration: Math.max(1, duration), timer: 0, repeats, color: argb >>> 0 };
+    this.screenFlash = {
+      duration: Math.max(1, duration), timer: 0, repeats,
+      color: argb >>> 0
+    };
   }
 
   fadeBgm(seconds: number): void {
@@ -1399,11 +1463,13 @@ export class StageScene implements GameHost {
         // port's fallback visual; authored lifetime/capacity remains exact.
         let vx = 0;
         let vy = 0;
-        // Effect 51 only: the arm's third drawn u16 (already consumed by the
-        // measured cost) is retained to roll the firefly lifetime.
-        let lifeRoll = -1;
+        // Retain effect-51's raw values: FUN_004069f0 first executes the five
+        // ANM random ops (10 u16), then FUN_00426280 consumes eight u32
+        // values (16 u16) for its world position/velocity/acceleration.
+        const fireflyRaw: number[] | null = effectId === 51 ? [] : null;
         for (let d = 0; d < perParticle; d++) {
           const raw = this.rng.u16();
+          fireflyRaw?.push(raw);
           if (d === 0) {
             const ang = (raw / 65536) * Math.PI * 2;
             vx = Math.cos(ang);
@@ -1412,21 +1478,44 @@ export class StageScene implements GameHost {
             const speed = (0.3 + (raw / 65536) * 0.9) * this.slowRate;
             vx *= speed;
             vy *= speed;
-          } else if (d === 2 && effectId === 51) {
-            lifeRoll = raw;
           }
         }
         if (seed) {
           vx += seed.x * 0.02;
           vy += seed.y * 0.02;
         }
+        let world: EffectParticle['world'] | undefined;
+        if (fireflyRaw && fireflyRaw.length >= 26) {
+          const random01 = (at: number): number =>
+            (((fireflyRaw[at] << 16) | fireflyRaw[at + 1]) >>> 0) / 0x100000000;
+          const randomSigned = (at: number, amplitude: number): number =>
+            (random01(at) * 2 - 1) * amplitude;
+          const camera = this.runtime.std.camera();
+          const rate = Math.fround(this.slowRate);
+          world = {
+            // FUN_00426280: position = DAT_004ea3c4 (the live camera) plus
+            // signed(60), signed(100)+100, rand(100)+30. The callback reads
+            // the zeroed +0x2b0 vector here, not the effect emitter's screen
+            // position passed to FUN_00425430.
+            x: Math.fround(camera.x + randomSigned(10, 60)),
+            y: Math.fround(camera.y + randomSigned(12, 100) + 100),
+            z: Math.fround(camera.z + random01(14) * 100 + 30),
+            vx: Math.fround(Math.fround(randomSigned(16, 0.001)) * rate),
+            vy: Math.fround(Math.fround(randomSigned(18, 0.03)) * rate),
+            vz: Math.fround(Math.fround(-random01(20) * 0.1 - 0.3) * rate),
+            ax: Math.fround(Math.fround(randomSigned(22, 0.0001)) * rate),
+            ay: Math.fround(Math.fround(randomSigned(24, 0.0001)) * rate),
+            az: Math.fround(-0.0003 * rate),
+            angle: 0,
+            angularVelocity: 0
+          };
+        }
         particle = {
           id: this.id++, poolSlot: slot, effectId,
           x, y, vx, vy, age: 0,
-          life: effectId === 51 && lifeRoll >= 0
-            ? th08FireflyLife(lifeRoll)
-            : (EFFECT_SCRIPT_LIFE[effectId] ?? 24),
+          life: EFFECT_SCRIPT_LIFE[effectId] ?? 24,
           color, size: 2, kind: 'spark',
+          ...(world ? { world } : {}),
           ...(ownerEnemyId == null ? {} : { ownerEnemyId })
         };
       } else {
@@ -1481,6 +1570,10 @@ export class StageScene implements GameHost {
     return this.playerObj.th08Form;
   }
 
+  th08GaugeExtreme(): boolean {
+    return this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
+  }
+
   // TH08 op 184 receiver: the global side mirror on singleton 0x4ea670
   // (bit 11). Consumers outside the slice: FUN_00416b10's spell-bonus
   // accumulator gate — kept on the run state for later wiring.
@@ -1501,14 +1594,15 @@ export class StageScene implements GameHost {
     //   FUN_00415c60()  — cancel every enemy bullet to items (+ lasers);
     //   FUN_0042efb0(0,0) — sweep ordinary enemies (HP=0 via the death
     //                      path; value cap 0, return discarded);
-    //   FUN_004413e0()  — flag live player shots harmless, drifting up.
-    // Items already on the field keep falling — no force-collect. The
+    //   FUN_004413e0()  — force every live item into homing state 1 and
+    //                      write velocity (0,-0.5,0).
+    // The
     // player, background scroll, effects, and BGM keep running natively;
     // only the field is emptied, which is why the input-locked player
     // cannot be shot mid-conversation.
     this.cancelBulletsToItems();
     this.runtime.killNonBossEnemies(this, null, 0, 0);
-    this.driftPlayerShotsForDialogue();
+    this.homeAllItemsTh08();
     // Bridge the Msg parser's decoded instructions into the machine's
     // {time, op, args, text} shape. The parser has already split TH08's
     // packed op1/op15/op17 payloads (portrait = low i16, script = high).
@@ -1540,50 +1634,57 @@ export class StageScene implements GameHost {
     this.runState.addYoukaiGauge(this.runState.gaugeDialoguePull());
   }
 
-  // FUN_004413e0 (all.c:31356, called at msg start and from every MSG
-  // runner frame @ all.c:24700): every live player shot gets the harmless
-  // byte (+0x2d7 = 1) and velocity (0, -0.5, 0) — in-flight shots drift up
-  // out of the field and cannot damage anything for the rest of the
-  // conversation. The reset (FUN_00441530, velocity (0, -0.9)) only runs on
-  // the player-death and last-spell paths; a conversation never restores
-  // shots — they simply expire offscreen.
-  private driftPlayerShotsForDialogue(): void {
-    for (const b of this.playerBullets) {
-      if (b.dead) continue;
-      b.driftHarmless = true;
-      b.vx = 0;
-      b.vy = -0.5;
+  // ItemManager::FUN_004413e0 (all.c:31356, called at message start, every
+  // live MSG frame, and FUN_0040be30's bomb-trigger tail): walk the linked
+  // 0x2dc-byte ITEM records, set +0x2d7 to homing state 1 and overwrite the
+  // velocity vector at +0x2b0 with (0,-0.5,0). It does not touch player
+  // shots, consume RNG, or advance the fixed-item allocation cursor.
+  private homeAllItemsTh08(): void {
+    for (const it of this.items) {
+      if (it.dead) continue;
+      it.state = 1;
+      it.vx = 0;
+      it.vy = Math.fround(-0.5);
     }
   }
 
-  // The enemy-manager target caches (0x42d3d3-0x42d4df): recomputed every
-  // frame after the enemy pass. Primary (player+0xe2aa4): the lowest enemy,
-  // max y with first-slot tiebreak. Pointer cache (player+0xe2abc): among
-  // enemies within +-64 of playfield center x (224), the upper-most/first —
-  // the familiar's lunge target and the needle shots' aim source.
-  private updateTh08TargetCaches(): void {
-    let primary: { x: number; y: number } | null = null;
-    let lunge: { x: number; y: number } | null = null;
-    for (const e of this.enemies) {
-      if (e.dead || !e.ecl.interactable) continue;
-      // all.c:21448-21450: the damage/contact/pointer-cache block is gated on
-      // flags bit 11 == 0 — an ETHEREAL familiar (player in youkai form) is
-      // invisible to BOTH caches. Measured on the native replay (f1680-1698):
-      // while the familiars' bit11 read 1 the target cache jumped to the
-      // (304,104) master instead of the lower familiars.
-      if (e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1) continue;
-      if (!primary || e.y > primary.y) primary = { x: e.x, y: e.y };
-      if (Math.abs(e.x - 224) <= 64 && (!lunge || e.y < lunge.y)) lunge = { x: e.x, y: e.y };
+  // Publish one enemy into the caches reset at the head of updateEnemies.
+  // Native does this INSIDE each slot's collision block (0x42d3d3-42d4df),
+  // before damage/death settlement. A shot-killed enemy therefore remains
+  // the next player tick's target when it wins the strict first-slot tie;
+  // rebuilding from the compacted live list bent Yukari's seekers toward a
+  // different fairy one frame early and shifted every later impact/RNG arm.
+  private publishTh08TargetCandidate(e: Enemy): void {
+    if (!e.ecl.interactable) return;
+    // all.c:21448-21450 puts collision and BOTH cache publications behind
+    // raw flags bits 4/5/11 all being clear. The invisible stage controller
+    // and ethereal familiars must never become targets.
+    if (((e.ecl.th08?.flags ?? 0) & (0x10 | 0x20 | 0x800)) !== 0) return;
+    if (!this.th08TargetPos || e.y > this.th08TargetPos.y) {
+      this.th08TargetPos = { x: e.x, y: e.y };
     }
-    this.th08TargetPos = primary;
-    this.th08LungeEnemy = lunge;
-    this.playerObj.th08LungeTarget = lunge;
+    // DAT_018b89b4 (the Border Team option-lunge / focused-shot target)
+    // uses abs(enemy.x - player.x) < 64, not distance from the playfield
+    // centre.  At replay stage 2 f727 the player is at x=172 and the nearest
+    // fairy is at x=280.806: native leaves the cache null, keeping Yukari's
+    // option at (172,32) and the three type-1 shots on their authored upward
+    // headings.  Using 224 here selected that fairy and sent all three shots
+    // down-right instead.
+    // FUN_0041fd20 tests enemy+0x2da4 and excludes child-spawned actors
+    // from this cache. They remain valid for the ordinary homing cache
+    // above, but Ran must not retarget from a dying wave master onto one of
+    // its children (native Stage-2 f922 leaves DAT_018b89b4 null).
+    if (!e.ecl.parent && Math.abs(e.x - this.playerObj.x) < 64 &&
+        (!this.th08LungeEnemy || e.y < this.th08LungeEnemy.y)) {
+      this.th08LungeEnemy = e;
+    }
   }
 
   // The player update's gauge block (0x44bdf0-0x44c012): fire drift while
   // the shot cycle is armed and the focus state has been stable >= 30
-  // frames; idle drift back toward neutral once the cycle has been
-  // disarmed >= 30 frames. Gated off during dialogue and bombs.
+  // frames; idle drift back toward neutral once player+0xe2ad0 reaches 30.
+  // This is called before firePlayerBullets so the cycle's frame-19 tick is
+  // still armed, matching FUN_0044aec0 -> FUN_00451500 native order.
   private tickTh08Gauge(): void {
     const run = this.runState;
     const p = this.playerObj;
@@ -1595,28 +1696,30 @@ export class StageScene implements GameHost {
       const trickle = run.tickGaugeTrickle();
       if (trickle) this.addScore(trickle);
     }
-    if (this.th08Bomb || this.isDialogueActive()) return;
-    const armed = p.fireFrame >= 0;
-    if (armed) {
-      this.th08IdleFrames = 0;
-      if (p.th08FocusFrames >= 30) {
-        run.addYoukaiGauge(run.gaugeFireDrift(p.th08Form === 1, p.th08FocusFrames));
-      }
-    } else {
-      this.th08IdleFrames++;
-      if (this.th08IdleFrames >= 30 && run.youkaiGauge !== 0) {
-        run.addYoukaiGauge(run.gaugeIdleDrift());
-      }
+    // Player::OnUpdate dispatches the deathbomb-window state (2) and death
+    // squish state (1), then explicitly skips FUN_0044aec0. Its later tally
+    // counters still run, so this gate belongs after tickGaugeTrickle().
+    // Materialize state 3 is not excluded by the native dispatcher.
+    if (p.hitState || p.dyingFrame >= 0 || this.th08Bomb || this.isDialogueActive()) return;
+    // player+8 is 0-based (the initial normal-form callback begins at zero),
+    // whereas Player.th08FocusFrames is incremented at this port's callback
+    // head. Native Compare(30) therefore opens when our mirror has passed 30.
+    if (p.th08FocusFrames <= 30) return;
+    const clock = p.tickTh08GaugeTimers(p.fireFrame >= 0, this.slowRate);
+    if (clock.fireTimer !== null) {
+      run.addYoukaiGauge(run.gaugeFireDrift(p.th08Form === 1, clock.fireTimer));
+    } else if (clock.idleReady && run.youkaiGauge !== 0) {
+      run.addYoukaiGauge(run.gaugeIdleDrift());
     }
   }
 
   private updateTh08Dialogue(input: InputFrame): void {
     const dlg = this.th08Dialogue;
     if (!dlg) return;
-    // Native order: Player (prio 9, moves shots) ... Gui (prio 0xf) re-runs
-    // FUN_004413e0 every MSG frame — our update() likewise ticks player
-    // shots before this tail, so re-asserting the drift here matches.
-    if (!dlg.machine.state.done) this.driftPlayerShotsForDialogue();
+    // Native order: ItemManager (priority 12) ... GUI (priority 15) re-runs
+    // FUN_004413e0 every MSG frame, so the boundary publishes every surviving
+    // item in state 1 with the authored (0,-0.5) velocity.
+    if (!dlg.machine.state.done) this.homeAllItemsTh08();
     let bits = 0;
     if (input.held.has('shoot') || input.held.has('confirm')) bits |= TH08_DIALOGUE_INPUT_BITS.confirm;
     if (input.held.has('up')) bits |= TH08_DIALOGUE_INPUT_BITS.humanDirection;
@@ -1913,20 +2016,20 @@ export class StageScene implements GameHost {
     void deathMode;
   }
 
-  // TH08 field clear: every live bullet becomes two auto-collecting time
-  // orbs. No immediate score popup is created.
+  // TH08 FUN_00415c60 -> FUN_00430830(1): the shared declaration/dialogue/
+  // ins_112/full-power field clear. Every live bullet becomes ONE homing
+  // point-star (item type 6, state 1), then its fixed bullet slot is zeroed.
+  // This is distinct from FUN_00423100's scored phase-end sweep below, which
+  // converts through the live type-9 global and pays two time orbs per bullet.
   cancelBulletsToItems(): void {
     for (const b of this.enemyBullets) {
       if (b.dead) continue;
-      // TH08 (all.c:23531-23533): a cancelled bullet spawns TWO time orbs
-      // when the mode global reads 9 (stage 1 always does).
-      this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
-      this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
+      this.spawnItem('pointStar', b.x, b.y, { state: 1 });
     }
     this.clearEnemyBullets(true);
-    // FUN_00422ea0(1) also converts each non-immune live laser at its
-    // origin and every 32 px along [nearDist, farDist).
-    this.cancelLaserField(false, true, false);
+    // The laser half uses that same mode-1 item mapping at its origin and
+    // every 32 px along [nearDist, farDist).
+    this.cancelLaserField(false, true, false, 'pointStar');
   }
 
   // Th07.exe FUN_00423100(8000,1) (op91 spell end, boss nonspell death):
@@ -1964,7 +2067,12 @@ export class StageScene implements GameHost {
     this.cancelLaserField(unconditional, false);
   }
 
-  private cancelLaserField(unconditional: boolean, spawnItems: boolean, includeOrigin = false): void {
+  private cancelLaserField(
+    unconditional: boolean,
+    spawnItems: boolean,
+    includeOrigin = false,
+    itemType: ItemType = this.cancelItemType
+  ): void {
     for (const l of this.enemyLasers) {
       if (!l.inUse) continue;
       if ((l.flags & 4) !== 0 && !unconditional) continue;
@@ -1977,13 +2085,13 @@ export class StageScene implements GameHost {
           // beam, but FUN_00422ea0 does not. When nearDist is zero the former
           // intentionally duplicates the origin; sharing that behavior made
           // every spell declaration add one spurious item per live laser.
-          if (includeOrigin) this.spawnItem(this.cancelItemType, l.x, l.y, { state: 1 });
+          if (includeOrigin) this.spawnItem(itemType, l.x, l.y, { state: 1 });
           const cos = Math.cos(l.angle);
           const sin = Math.sin(l.angle);
           // Th07.exe (v1.00b) FUN_00422ea0 @ 0x422ea0 and
           // FUN_00423100 @ 0x423100; DAT_0048ead4 = 32.0f.
           for (let d = l.nearDist; d < l.farDist; d += 32) {
-            this.spawnItem(this.cancelItemType, l.x + cos * d, l.y + sin * d, { state: 1 });
+            this.spawnItem(itemType, l.x + cos * d, l.y + sin * d, { state: 1 });
           }
         }
       }
@@ -2075,6 +2183,15 @@ export class StageScene implements GameHost {
       this.openPause();
       return;
     }
+    // ScreenInf calc jobs are registered at priority 3, BELOW the replay
+    // input feed at priority 6. A native replay counter boundary therefore
+    // observes the high-priority managers first; these screen jobs run after
+    // that boundary and before the following frame's player/enemy callbacks.
+    // StageScene.update represents one feed-to-feed interval, so execute the
+    // carried low-priority jobs at its head. Keeping them at the tail gave
+    // the same cumulative draw count but assigned the shake's u32 values to
+    // time-item scatter first (Stage-2 native f781 -> premature f828 collect).
+    this.tickScreenFx();
     // Declined / exhausted continues: linger on GAME OVER, then leave.
     // Practice has no continues and leaves the same way.
     if (this.gameOver && this.mode !== 'test') {
@@ -2145,6 +2262,7 @@ export class StageScene implements GameHost {
     // +0x23fc is decremented first and held X may trigger as soon as it
     // reaches zero.
     if (p.bombCooldown > 0) p.bombCooldown--;
+    let bombTriggeredThisFrame = false;
     if (!bombCleanupThisTick && !messageActive && input.held.has('bomb') &&
         (p.controllable || p.hitState) && !this.gameOver && p.tryBomb()) {
       this.voidSpellCapture();
@@ -2152,8 +2270,12 @@ export class StageScene implements GameHost {
       // spell bonus and latches DAT_012f40bc = spell-active state.
       this.bombDuringSpell = this.spellcard !== null;
       this.onBombUsed();
+      bombTriggeredThisFrame = true;
     }
-    if (p.bombTimer > 0) this.prepareBombEffects();
+    // Existing bombs publish their current records before the Web's manager
+    // passes.  A newly-triggered bomb is started at the manager tail below,
+    // matching the native player(9) / item+bullet(14) scheduler boundary.
+    if (p.bombTimer > 0 && !bombTriggeredThisFrame) this.prepareBombEffects();
     // FUN_0043a820's compound gate is bomb-active && Marisa family && B shot
     // (DAT_004ca4d8 / DAT_00625625 / DAT_00625626), not a global bomb gate.
     // Snapshot the frame-entry bomb state because Player.update() consumes
@@ -2165,6 +2287,10 @@ export class StageScene implements GameHost {
     // last invulnerability tick, matching the native state dispatcher.
     this.tickPlayerShotCollisionClock(p.invulnFrames > 0);
     p.update(input, this.slowRate, !messageActive);
+    // Player+0xe2abc and DAT_018b89b4 are the same absolute pointer. Ran's
+    // callback can clear it before the priority-10 enemy scan republishes a
+    // candidate, so reflect that mutation back into the persistent cache.
+    if (p.th08LungeTarget == null) this.th08LungeEnemy = null;
     if (bombActiveAtFrameStart && p.bombTimer === 0) {
       this.bombCleanupPending = true;
     }
@@ -2205,11 +2331,31 @@ export class StageScene implements GameHost {
       this.th08AuraActor.x = p.x;
       this.th08AuraActor.y = p.y;
     }
+    // FUN_0044aec0 updates the human/youkai gauge before the player-shot
+    // callback FUN_00451500 advances/expires the 20-frame fire cycle and
+    // before the priority-10 enemy manager applies kill gauge deltas.
+    this.tickTh08Gauge();
     // The popup/ascii manager is priority 1, ahead of every gameplay
     // manager. Existing popups age now; item pickups later this frame create
     // fresh entries that do not tick until the next scheduler pass.
     this.updatePopups();
-    const death = p.tickDeath(this.slowRate);
+    if (p.hitState && !bombTriggeredThisFrame) {
+      // FUN_0044cbf0 calls GameManager::AddTimeOrbs(-15) on every live
+      // deathbomb-window tick, before decrementing preDeadCount. When at
+      // least 15 current-stage orbs remain, FUN_00418220 subtracts from the
+      // current/total/stage counters and regenerates the two-field integrity
+      // checksum (two u32 draws = four raw u16). If 15 would underflow, only
+      // the current counter is zeroed and there are NO draws. Stage-2's
+      // replay enters with 38: its first two window ticks are therefore
+      // 38 -> 23 -> 8 (+4 draws each), then 8 -> 0 (zero draws).
+      const fullDebit = this.runState.currentTimeOrbs >= 15;
+      this.runState.addTimeOrbs(-15);
+      if (fullDebit) {
+        this.rng.u32InRange(100000);
+        this.rng.u32InRange(100000);
+      }
+    }
+    const death = bombTriggeredThisFrame ? 'none' : p.tickDeath(this.slowRate);
     if (death === 'effects') this.onPlayerDeath();
     else if (death === 'respawn') this.onPlayerRespawn();
     // TH08 death white-out (FUN_0044d180 arms player+0xe2a70 = 60 on the miss
@@ -2295,33 +2441,37 @@ export class StageScene implements GameHost {
     // either way). The +0xb24<2 gate pauses spawning from 60 frames into an
     // ENEMY spell declaration (FUN_00415ce0/00416ad0; player bombs never arm
     // +0xb24) until the banner releases (~frame 100).
-    {
-      const clock = this.th08AfterimageClock++;
-      if (clock % 3 === 0 && clock > 699) {
-        const declAge = this.spellcard?.declAge ?? -1;
-        const declSuppress = declAge >= 60 && declAge < 100;
-        if (!declSuppress) {
-          this.spawnEffectParticles(62, 0, 0, 12, 0x20ffffff);
+      {
+        const clock = this.th08AfterimageClock++;
+        if (clock % 3 === 0 && clock > 699) {
+          const declAge = this.spellcard?.declAge ?? -1;
+          const declSuppress = declAge >= 60 && declAge < 100;
+          if (!declSuppress) {
+            this.spawnEffectParticles(62, 0, 0, 12, 0x20ffffff);
+          }
         }
       }
-    }
     // FUN_0041ed50 (priority 10) and the generic effect manager (priority
     // 11) do NOT honor the TH07 dialogue freeze: invisible ECL controllers,
     // enemies, movement/collision and ambient effects continue. The only
     // enemy-tail exception is the boss timer, gated in tickEnemyManagerTail.
-    this.updateEnemies();
-    this.updateTh08TargetCaches();
-    this.tickTh08Gauge();
-    this.updateParticles();
+      this.updateEnemies();
+      this.updateParticles();
     // FUN_004241c0 calls the item manager at the head of the priority-12
     // bullet callback (all.c:16039-16042). Items therefore update after
     // effects, before bullets/lasers, and freeze with dialogue gameplay.
     // Cancellation items created later in this callback wait until the
     // next frame for their first update.
-    this.updateItems();
-    this.updateBullets();
-    this.updateLasers();
-    if (this.postBombLaserCounter > 0) this.postBombLaserCounter--;
+      // FUN_0040be30 calls FUN_004413e0 at the trigger tail.  The current
+      // item pass has already happened natively; the live items therefore
+      // retain their exact positions for this replay boundary and begin
+      // homing on the next pass.  Running updateItems here collected one
+      // extra time orb (four RNG draws) and shifted every later fixed slot.
+      if (!bombTriggeredThisFrame) this.updateItems();
+      this.updateBullets();
+      this.updateLasers();
+      if (this.postBombLaserCounter > 0) this.postBombLaserCounter--;
+      if (bombTriggeredThisFrame) this.startPendingBombAfterManagers();
     // The MSG manager is registered at priority 13 (FUN_00426656 via
     // FUN_0042e290(..., 0xd), all.c:18954), after enemies/effects and the
     // item+bullet+laser priority-12 callback. A timeline op6 created inside
@@ -2342,7 +2492,6 @@ export class StageScene implements GameHost {
       this.th08Declaration.update(this.slowRate);
       if (this.th08Declaration.done) this.th08Declaration = null;
     }
-    this.tickScreenFx();
     // The stage object arms its results screen on the same scheduler tick
     // that the last authored timeline wait is consumed. Native Stage 1 has
     // PRE10475 and then leaves gameplay; there is no PRE10476 player tick.
@@ -2361,22 +2510,37 @@ export class StageScene implements GameHost {
     this.playerEffects.interruptAll(1);
     this.bombEngine.reset();
     this.activeBombSlots.length = 0;
+    this.th08BombPendingStart = false;
+    this.runState.gaugeLocked = false;
+    this.playerObj.th08BombFocusOverride = null;
   }
 
   private onBombUsed(): void {
     const p = this.playerObj;
     this.bombActiveThisFrame = true;
+    this.runState.gaugeLocked = true;
+    // Bomb stock mutation (FUN_00439883) and the per-run bomb counter
+    // mutation (FUN_0044e2e0) each finish with FUN_00406e50: two ranged
+    // u32 integrity values apiece, eight raw-u16 draws total. Native Stage-2
+    // f697 consists of exactly these draws at the trigger boundary.
+    for (let i = 0; i < 4; i++) this.rng.u32InRange(100000);
     // TH08 Border Team: the bomb machine (0x44c650) dispatches ONE per-frame
     // callback for the whole bomb from the table at player+0x1000 (rdata
     // 0x4c7ad0 team block 0): 0x40c010 unfocused / 0x410c40 focused /
     // 0x40c910+0x410fe0 the side-inverted deathbombs. Durations come from
     // the shared cast helper 0x40be30 (260/200/260/300).
-    this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
+    this.th08Bomb = null;
+    this.th08BombPendingStart = true;
     this.th08BombOrbActors = [];
-    this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
-    // param_4 (active length) drives bombTimer; the separate param_5
-    // clock at player+0xe2af4 is the LONGER invulnerability window.
-    p.bombTimer = this.th08Bomb.duration;
+    // FUN_0044c650 completes a deathbomb rescue and selects the inverted form
+    // immediately, so the remainder of this player pass already fires the
+    // Type-3 SHT table. Store duration+1 because Player.update's common tail
+    // consumes one before the replay boundary (native Stage-2 f697 exposes
+    // the authored 250 count).
+    const pendingBomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
+    p.completePendingDeathbombRescue();
+    p.th08BombFocusOverride = (p.th08BombType & 1) !== 0;
+    p.bombTimer = pendingBomb.duration + 1;
     p.bombInvuln = TH08_BOMB_INVULN[p.th08BombType];
     // FUN_0040be30 → FUN_00415d60: every bomb declares its spell card
     // (portrait + banner VMs + the rdata name, sfx id 14 se_cat00);
@@ -2448,6 +2612,17 @@ export class StageScene implements GameHost {
     if (!sim.active) {
       this.th08Bomb = null;
       this.th08BombOrbActors = [];
+      // FUN_0044c650 dispatches the selected callback before the ordinary
+      // focus/movement/shooter block. When that callback reaches its final
+      // authored tick, FUN_00416130 tears the bomb down immediately: the
+      // SAME player pass already reads the raw focus key and the opposite
+      // SHT table. Leaving this facade timer at one kept the forced bomb
+      // side for an extra pass. Stage-2 replay f947 then moved only 2px and
+      // fired Yukari's needles from Ran instead of moving 4px and firing
+      // Reimu's table from the player, starting the f949 kill/RNG cascade.
+      p.bombTimer = 0;
+      p.th08BombFocusOverride = null;
+      this.bombActiveThisFrame = false;
       // FUN_00416130 (bomb end): interrupt 1 releases the name VM's
       // label-1 wait into its exit; the portrait/banners are self-timed.
       this.th08Declaration?.end();
@@ -2500,7 +2675,23 @@ export class StageScene implements GameHost {
       get targetPos() {
         return scene.th08TargetPos;
       },
-      addAttackSlot(x, y, radius, damage) {
+      addAttackSlot(x, y, radius, damage, cadenceCounter = 0, cadenceDivisor = 1) {
+        // Publish in the player pass; each enemy consumes the record later
+        // from collideBombSlots after its movement/ECL tick. Applying damage
+        // here skipped FUN_00451670's global fourth-contact effect-3 path
+        // and paid gameplay RNG in the wrong scheduler phase.
+        scene.bombEngine.allocateCircle(
+          x,
+          y,
+          radius,
+          damage,
+          'bomb',
+          cadenceCounter,
+          cadenceDivisor
+        );
+        // The orb VM reads the slot's accumulated contact damage to decide
+        // whether to burst. Predict that total for the VM only; actual HP
+        // settlement remains deferred to the enemy pass above.
         let settled = 0;
         const r2 = radius * radius;
         for (const e of scene.enemies) {
@@ -2508,7 +2699,6 @@ export class StageScene implements GameHost {
           const dx = e.x - x;
           const dy = e.y - y;
           if (dx * dx + dy * dy <= r2) {
-            scene.damageEnemy(e, damage, 'bomb');
             settled += damage;
           }
         }
@@ -2517,14 +2707,40 @@ export class StageScene implements GameHost {
         // state machine can burst on time.
         return settled;
       },
-      clearBullets(x, y, radius) {
-        const r2 = radius * radius;
-        for (const b of scene.enemyBullets) {
-          if (b.dead) continue;
-          const dx = b.x - x;
-          const dy = b.y - y;
-          if (dx * dx + dy * dy <= r2) scene.beginBombClearFade(b);
+      addBoxAttackSlot(
+        x, y, width, height, angle, damage,
+        cadenceCounter = 0, cadenceDivisor = 1
+      ) {
+        scene.bombEngine.allocateBox(
+          x, y, width, height, angle, damage, 'bomb',
+          cadenceCounter, cadenceDivisor
+        );
+        // The boundary beams do not consume the return value, but mirror the
+        // circular host contract for direct unit probes.
+        let settled = 0;
+        for (const e of scene.enemies) {
+          if (e.dead || !e.ecl.interactable) continue;
+          if (orientedBoxHitsPoint(
+            e.x, e.y, x, y, width + e.ecl.hitbox.x,
+            height + e.ecl.hitbox.y, angle
+          )) settled += damage;
         }
+        return settled;
+      },
+      clearBullets(x, y, radius) {
+        // FUN_0044df00 only publishes the player-quad record here. The
+        // enemy-bullet manager moves each normal bullet first and probes the
+        // quad later in that bullet's own pass (all.c:23510-23548). Clearing
+        // immediately from the player callback tested the previous-frame
+        // position and cancelled several Stage-2 bullets 1-9 frames early.
+        scene.allocateBombClearRegion(x, y, radius, 0, 1);
+      },
+      clearBulletsBox(x, y, width, height, angle) {
+        scene.bombClearBoxes.push({
+          x: Math.fround(x), y: Math.fround(y),
+          width: Math.fround(width), height: Math.fround(height),
+          angle: Math.fround(angle), framesLeft: 1
+        });
       },
       randomFloat() {
         return scene.rng.f();
@@ -2540,6 +2756,15 @@ export class StageScene implements GameHost {
           scale: scale === 1 ? undefined : scale,
           color: color === 0xffffffff || color === 0 ? undefined : (color & 0xffffff)
         });
+      },
+      effectParticles(effectId, x, y, count, color) {
+        scene.spawnEffectParticles(effectId, x, y, count, color);
+      },
+      startScreenShake(duration, from, to) {
+        scene.startScreenShake(duration, from, to);
+      },
+      startScreenFlash(duration, repeats, argb) {
+        scene.startScreenFlash(duration, repeats, argb);
       },
       orbVm(index, script, x, y) {
         // The bombardment slots (16/17) spawn AT THE TARGET; the orb ring
@@ -2566,6 +2791,18 @@ export class StageScene implements GameHost {
   }
 
   private prepareBombEffects(): void {
+    if (this.th08BombPendingStart) {
+      this.th08BombPendingStart = false;
+      const p = this.playerObj;
+      p.completePendingDeathbombRescue();
+      p.th08BombFocusOverride = (p.th08BombType & 1) !== 0;
+      this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
+      this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
+      // The callback writes param_4 on this second tick. Add one because the
+      // player tail decrements the facade after choreography; the boundary
+      // then reads the authored 200/150/200/250 count.
+      p.bombTimer = this.th08Bomb.duration + 1;
+    }
     // The bomb tick runs before this frame's enemy/bullet passes so the
     // choreography state is fixed for the rest of the frame.
     this.tickBombChoreography();
@@ -2574,12 +2811,48 @@ export class StageScene implements GameHost {
     this.refreshActiveAttackSlots();
   }
 
+  private startPendingBombAfterManagers(): void {
+    if (!this.th08BombPendingStart) return;
+    this.th08BombPendingStart = false;
+    const p = this.playerObj;
+    this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
+    this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
+    this.homeAllItemsTh08();
+    // The native rotating cursor is already one probe past Web's last live
+    // slot at this boundary: Stage-2 f698 allocates the first cancel item in
+    // slot 86 while the visible survivors end at 84. This is fixed-pool
+    // cursor state only; unlike the old attribution, FUN_004413e0 itself
+    // neither scans allocation slots nor consumes RNG.
+    if (this.th08ItemPool) {
+      this.th08ItemPool.nextIndex =
+        (this.th08ItemPool.nextIndex + 1) % this.th08ItemPool.items.length;
+    }
+
+    // The cast-time r100 record is created after this frame's ordinary
+    // bullet scan.  Native nevertheless exposes bullets already inside the
+    // newly-published field as state 5 at the same replay boundary, without
+    // paying the type-6 item; the next manager pass performs normal quad
+    // conversion.  Stage-2 f697/f698 is the concrete witness: slot 15 is
+    // silently retired at r100, then slot 16 pays the sole point-star at
+    // its post-move x=268.579 under r101.
+    if (p.th08BombType === 1 || p.th08BombType === 3) {
+      const radius2 = 100 * 100;
+      for (const b of this.enemyBullets) {
+        if (b.dead || b.clearFadeFrames != null || (b.flags & 0x1000) !== 0) continue;
+        const dx = b.x - p.x;
+        const dy = b.y - p.y;
+        if (dx * dx + dy * dy < radius2) this.beginBulletClearFade(b);
+      }
+    }
+    this.refreshActiveAttackSlots();
+  }
+
   private refreshActiveAttackSlots(): void {
     this.activeBombSlots.length = 0;
     for (const slot of this.bombEngine.activeSlots()) this.activeBombSlots.push(slot);
   }
 
-  private collideBombSlots(e: Enemy, hitbox = e.ecl.hitbox): void {
+  private collideBombSlots(e: Enemy, hitbox = e.ecl.hitbox): number {
     // FUN_0043a980 is entered for interactable shot-collision actors even
     // while ECL op103 has cleared canTakeDamage. Contacts still accumulate
     // raw damage, Cherry/score, the global hit tally, and impact effects;
@@ -2587,25 +2860,38 @@ export class StageScene implements GameHost {
     // (Th07.exe v1.00b FUN_0041ed50 @ 0x41fa76). Extra PRE7692 is the
     // concrete witness: an op103(0) actor receives all 16 focused-beam
     // history-helper contacts and four id5 effects without losing HP.
-    if (!e.ecl.interactable || !e.ecl.shotCollision) return;
-    // FUN_0043a980 scans attack slots 0..111 after the 96 player-shot slots.
+    if (!e.ecl.interactable || !e.ecl.shotCollision) return 0;
+    let rawDamage = 0;
+    // TH08 FUN_00451670 scans all 0xc0 attack slots after the 0x80 shots.
     for (const s of this.activeBombSlots) {
-      const hw = (hitbox.x + s.radiusX) / 2;
-      const hh = (hitbox.y + s.radiusY) / 2;
-      if (Math.abs(e.x - s.x) > hw || Math.abs(e.y - s.y) > hh) continue;
+      if (s.cadenceCounter % s.cadenceDivisor !== 0) continue;
+      if (s.shape === 'circle') {
+        // Circle records test the enemy's live origin directly, without
+        // expanding the radius by the enemy hitbox.
+        const dx = e.x - s.x;
+        const dy = e.y - s.y;
+        if (dx * dx + dy * dy > s.radiusX * s.radiusX) continue;
+      } else {
+        if (!orientedBoxHitsPoint(
+          e.x, e.y, s.x, s.y,
+          hitbox.x + s.radiusX, hitbox.y + s.radiusY, s.angle
+        )) continue;
+      }
       this.damageEnemy(
         e,
         s.damage,
         s.source === 'shot' && !this.bombActiveThisFrame ? 'shot' : 'bomb'
       );
+      rawDamage += Math.trunc(s.damage);
       s.hitTally += s.damage;
-      // Player+0x240c is one global hit counter. Every fourth attack-slot
-      // contact emits id3 for slots 0..95, id5 for slots 96..111
-      // (FUN_0043a980 @ all.c:27687-27712).
+      // Player+0xe2a94 is one global hit counter. Every fourth TH08 attack-
+      // slot contact emits effect 3. Effect 5 is the ordinary shot-impact
+      // path, not a high-slot branch (all.c:40459-40475).
       if ((++this.playerHitTally & 3) === 0) {
-        this.spawnEffectParticles(s.poolSlot < 0x60 ? 3 : 5, e.x, e.y, 1, 0xffffffff);
+        this.spawnEffectParticles(3, e.x, e.y, 1, 0xffffffff);
       }
     }
+    return rawDamage;
   }
 
   private beginBulletClearFade(
@@ -2625,7 +2911,11 @@ export class StageScene implements GameHost {
   }
 
   private beginBombClearFade(b: EnemyBullet): boolean {
-    return this.beginBulletClearFade(b, 'time');
+    // Every Border-Team FUN_0044df00 bomb-clear quad carries param6=6.
+    // Bullet state-5 settlement therefore creates item type 6 (pointStar),
+    // not a time orb. Native Stage-2 f698 exposes the first conversion as
+    // item slot 86/type6/state1 with zero spawn RNG.
+    return this.beginBulletClearFade(b, 'pointStar');
   }
 
   private cancelBulletWithBombSlots(b: EnemyBullet): boolean {
@@ -2642,6 +2932,15 @@ export class StageScene implements GameHost {
       if (dx * dx + dy * dy < r.radius * r.radius) {
         return this.beginBombClearFade(b);
       }
+    }
+    for (const box of this.bombClearBoxes) {
+      if (box.framesLeft <= 0) continue;
+      // FUN_00449ff0 tests the bullet POSITION only. The quad stores full
+      // width/height and halves them internally; bullet hitbox/graze size is
+      // not added to either extent.
+      if (orientedBoxHitsPoint(
+        b.x, b.y, box.x, box.y, box.width, box.height, box.angle
+      )) return this.beginBombClearFade(b);
     }
     // Th08.exe FUN_00449ff0's pool probe (player+0xbb834): the familiar
     // master-death quads. Same contact shape as the bomb regions above, but
@@ -2913,10 +3212,12 @@ export class StageScene implements GameHost {
     // familiar (player in youkai form) takes no player-shot or attack-slot
     // damage at all — the whole settlement block is behind bit11==0.
     if (e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1) return;
-    // Th07.exe FUN_0043a980 @ 0x43a9e6: while the player's own bomb is
-    // active (player+0x16a20), each SHOT deals table/3 damage, min 1.
+    // TH08 FUN_00451670 @ 0x4517e1-0x451815: while the player's own bomb is
+    // active (player+0xfdc), scale EACH colliding shot's SHT damage by /5,
+    // with a minimum of 1, before adding it to the per-enemy frame total.
+    // This is deliberately per shot: 12+20 becomes 2+4, not (12+20)/5.
     if (kind === 'shot' && this.bombActiveThisFrame) {
-      damage = Math.max(1, Math.trunc(damage / 3));
+      damage = Math.max(1, Math.trunc(damage / 5));
     }
     if (kind === 'shot') e.pendingShotDmg += damage;
     else e.pendingBombDmg += damage;
@@ -2924,7 +3225,7 @@ export class StageScene implements GameHost {
 
   // Th07.exe FUN_0041ed50 damage pipeline (all.c:14174-14253), run once per
   // enemy per frame:
-  //   raw = this frame's shot+bomb sum (shots pre-scaled /3 during a bomb)
+  //   raw = this frame's shot+bomb sum (shots pre-scaled /5 during a bomb)
   //   cherry gain from the PRE-cap raw sum (its own internal 70 cap)
   //   raw capped at 70 (0x46 @ all.c:14226 — TH07-confirmed, not TH06 lore)
   //   score += capped/5
@@ -2938,13 +3239,21 @@ export class StageScene implements GameHost {
   private settlePendingDamage(e: Enemy): boolean {
     let shotRaw = e.pendingShotDmg;
     const bombRaw = e.pendingBombDmg;
-    const raw = shotRaw + bombRaw;
     const hadBomb = bombRaw > 0;
+    // FUN_00451670's return tail (all.c:40497-40499): while the live gauge
+    // is past the youkai effects threshold (FUN_00406d70), the frame's
+    // complete raw contact damage — shots plus attack slots, before the
+    // 70 cap, spell tiering and shields — is scaled by 106/100. Keep the
+    // bomb part intact so the spell branch's bomb flag stays native.
+    if (this.runState.gaugeIsExtremelyYoukai()) {
+      shotRaw = Math.trunc((shotRaw + bombRaw) * 106 / 100) - bombRaw;
+    }
+    const raw = shotRaw + bombRaw;
     e.pendingShotDmg = 0;
     e.pendingBombDmg = 0;
-    // Zeroed every frame like the exe's enemy+0x2e4c (all.c:14173) and set
-    // to the HP actually removed below — ECL var 10061 (the Prismrivers'
-    // op43 damage-sharing poll) reads it.
+    // TH08 enemy+0x3354 (ECL var 10083): HP actually removed by this
+    // settlement.  Do not reuse the TH07 var-10061 mapping here: in TH08
+    // vars 10061-10068 are the eight run-global float defaults.
     e.damageThisFrame = 0;
     if (raw <= 0) return hadBomb;
     // Replay load writes DAT_00625627 as the complete shot byte
@@ -2973,6 +3282,29 @@ export class StageScene implements GameHost {
     e.hp -= dmg;
     e.damageThisFrame = dmg;
     this.settledDamageThisFrame += dmg;
+    // FUN_0042b370 @ 0x42b370 runs immediately after every native damage
+    // settlement.  A child passes half of the HP it actually lost to its
+    // parent.  This is load-bearing in Stage 2: Sub12's 64-damage contact at
+    // replay f1805 removes 32 HP from its Sub11 master in the SAME manager
+    // pass.  The parent's ins_160 shield uses the same rules as a direct hit
+    // (non-boss: zero; boss: /9), and the indirect damage may not cross the
+    // largest still-armed life threshold.  The helper deliberately does not
+    // write the parent's +0x3354 damage field or award score a second time.
+    const parent = e.ecl.parent;
+    if (parent && dmg !== 0) {
+      let shared = Math.trunc(dmg / 2);
+      if (parent.ecl.damageShield > 0) {
+        shared = parent.ecl.isBoss ? Math.trunc(shared / 9) : 0;
+      }
+      if (shared !== 0) {
+        let floor = 0;
+        for (const phase of parent.ecl.lifeThresholds) {
+          if (phase.threshold > floor) floor = phase.threshold;
+        }
+        parent.hp -= shared;
+        if (parent.hp <= floor) parent.hp = floor;
+      }
+    }
     return hadBomb;
   }
 
@@ -3175,6 +3507,7 @@ export class StageScene implements GameHost {
     const enemyMinY = Math.fround(Math.fround(e.y) - Math.fround(hitbox.y) * 0.5);
     const enemyMaxX = Math.fround(Math.fround(e.x) + Math.fround(hitbox.x) * 0.5);
     const enemyMaxY = Math.fround(Math.fround(e.y) + Math.fround(hitbox.y) * 0.5);
+    let rawDamage = 0;
     for (let slot = 0; slot < PLAYER_BULLET_POOL_CAP; slot++) {
       const b = this.playerBulletSlots[slot];
       if (!b) continue;
@@ -3188,6 +3521,17 @@ export class StageScene implements GameHost {
       if (bulletMinY <= enemyMaxY && bulletMinX <= enemyMaxX &&
           enemyMinY <= bulletMaxY && enemyMinX <= bulletMaxX) {
         {
+          // FUN_00451670 checks the PERSISTENT accumulator before adding any
+          // damage from this collision call. Crossing consumes the threshold
+          // even for a non-eligible/focused shot; only an extremely-human
+          // eligible shot turns that crossing into a state-3 time item.
+          while (e.timeOrbDamageAccumulator >= TH08_SHOT_TIME_ORB_THRESHOLD) {
+            if (this.runState.gaugeIsExtremelyHuman() && b.timeOrbEligible) {
+              this.spawnItem('time', b.x, b.y, { state: 3 });
+            }
+            e.timeOrbDamageAccumulator -= TH08_SHOT_TIME_ORB_THRESHOLD;
+          }
+          rawDamage += Math.trunc(b.damage);
           this.damageEnemy(e, b.damage);
           b.state = 'collided';
           if (anm.hasScript(b.impactScript)) {
@@ -3198,7 +3542,7 @@ export class StageScene implements GameHost {
             // t=1; a remove authored at t=20 therefore frees the slot on the
             // twentieth following tick. Starting AnmRunner at zero kept every
             // impact alive one extra frame and changed which SHT record won a
-            // full 96-slot pool (native Stage 3 processing frame 2811).
+            // full 128-slot pool (native Stage 3 processing frame 2811).
             b.runner.frame = 1;
           }
           // TH08 settle (all.c:40425-40438): while the shot is still in its
@@ -3215,7 +3559,11 @@ export class StageScene implements GameHost {
         }
       }
     }
-    this.collideBombSlots(e, hitbox);
+    rawDamage += this.collideBombSlots(e, hitbox);
+    // The native call adds min(total raw shot/attack-slot damage, 50) only
+    // after the complete slot scan. Hitbox2 invokes this function again with
+    // the same accumulator, which can therefore emit a second item in-frame.
+    e.timeOrbDamageAccumulator += Math.min(rawDamage, 50);
   }
 
   // Border Team callback-1 seeker state, keyed by fixed player-shot slot.
@@ -3346,9 +3694,14 @@ export class StageScene implements GameHost {
   //   bit1) and one at the master (r32, +1/frame, 16 frames, param6 7) —
   //   modeled by th08DeathClearZones (the per-child local_30 orb burst
   //   with its FUN_0042f270/2f230 count tiers is not yet modeled, §7).
-  private settleTh08FamiliarDeath(e: Enemy): void {
+  private settleTh08FamiliarDeath(e: Enemy): number {
     const t8 = e.ecl.th08;
     if (t8?.familiar) {
+      // FUN_0042adb0's direct-familiar tail runs while the parent link is
+      // still live: pull the gauge one twelfth toward neutral BEFORE the
+      // common enemy-death form delta at 0x42d65c. A master sweep clears
+      // that link first, so swept familiars deliberately skip this pull.
+      this.runState.addYoukaiGauge(this.runState.gaugeDialoguePull());
       // FUN_004412b0: a directly destroyed familiar pays a point popup,
       // one immediate time orb, and asks FUN_00416b10 to restore 8000 of
       // the live spell bonus. The latter is suppressed while op 184's
@@ -3364,6 +3717,15 @@ export class StageScene implements GameHost {
       // NOT a direct counter increment. This feeds the orb's 4-draw spawn
       // AND the 4-draw collect into the stream at the native times.
       this.spawnItem('time', e.x, e.y, {});
+      // The same tail clears +0x330c/+0x3308 and writes +0x3304 = -2 before
+      // returning to the common death switch. That suppresses the ordinary
+      // drop/preburst arm: native Stage-2 f1809 creates the familiar time
+      // orb plus the common extreme-gauge orb, but no point item and only
+      // the four common effect-4 particles. Leaving the authored point drop
+      // live added three preburst particles (12 RNG draws) and one item.
+      e.ecl.itemDrop = -2;
+      t8.deathDropA = 0;
+      t8.deathDropB = 0;
       const sc = this.spellcard;
       if (sc?.capturing && this.runState.th08SideMirror === 0) {
         const elapsed = sc.elapsed + sc.elapsedFrac;
@@ -3381,12 +3743,12 @@ export class StageScene implements GameHost {
       t8.markerHandle?.release();
       t8.markerHandle = null;
       t8.markerActor = null;
-      return;
+      return 0;
     }
     const children = this.enemies.filter(
       c => !c.dead && c.ecl.parent === e && c.ecl.th08?.familiar
     );
-    if (children.length === 0) return;
+    if (children.length === 0) return 0;
     // FUN_0042adb0(1)'s per-child loop (all.c:20446-20528): each swept child
     // in chain order gets the kill quad FIRST (FUN_0044df00, no draws), then
     // its time-orb burst — local_30 orbs scattered by (frand01*(2*local_30),
@@ -3400,6 +3762,23 @@ export class StageScene implements GameHost {
     const orbTier = childCount < 8 ? childCount * 2 + 10 : 26;
     for (const c of children) {
       const ct8 = c.ecl.th08!;
+      // FUN_0042adb0 snapshots a pos-inherit child's origin from the master
+      // before severing the parent link. The master has already completed
+      // this manager tick's movement, while later child slots have not run
+      // yet, so preserving the child's logical/orbit offset also carries the
+      // master's current-frame displacement into the swept live position.
+      // Stage-2's Sub7 death is the exact witness: the master moves from
+      // y=121.00 to 121.25 on the settlement tick and all four child-centred
+      // drops spawn 0.25px lower in the native trace.
+      if ((ct8.flags & 0x200) !== 0) {
+        const origin = ct8.movement.origin;
+        c.x = Math.fround(c.x + Math.fround(e.x - origin.x));
+        c.y = Math.fround(c.y + Math.fround(e.y - origin.y));
+        c.z = Math.fround(c.z + Math.fround(e.z - origin.z));
+        origin.x = Math.fround(e.x);
+        origin.y = Math.fround(e.y);
+        origin.z = Math.fround(e.z);
+      }
       ct8.flags |= 0x400;
       c.ecl.parent = null;
       c.dead = true;
@@ -3439,6 +3818,7 @@ export class StageScene implements GameHost {
       );
     }
     this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16, 7);
+    return childCount;
   }
 
   private armTh08DeathClearZone(x: number, y: number, radius: number, growth: number, frames: number, convertType = -1): void {
@@ -3548,8 +3928,13 @@ export class StageScene implements GameHost {
       kind: 'graze', frame: this.frame,
       data: { x: sourceX, y: sourceY, total: this.graze }
     });
-    // 0x44aa78: every graze event pushes the gauge +100 (youkai-ward).
-    this.runState.addYoukaiGauge(this.runState.gaugeGrazeDelta());
+    // 0x44aa6d-0x44aa78: the +100 gauge push is conditional on the live
+    // player FORM byte at player+5. Human-form grazes still award graze,
+    // score, rank and effects, but leave the gauge alone; native Stage-2
+    // f1238 is the concrete witness (form 0, gauge only takes fire drift).
+    if (p.th08Form === 1) {
+      this.runState.addYoukaiGauge(this.runState.gaugeGrazeDelta());
+    }
     this.addScore(extreme ? 4000 : 2000);
     if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
       this.spawnItem('time2', sourceX, sourceY, {});
@@ -3607,8 +3992,31 @@ export class StageScene implements GameHost {
     // retail, but still advance the shared gameplay RNG by sixteen raw u16s.
     for (let i = 0; i < 5; i++) this.rng.u32InRange(100000);
     for (let i = 0; i < 3; i++) this.rng.range(100000);
-    const result = p.hit();
+    const quota = TH08_STAGE_ORB_QUOTAS[this.stageNumber - 1]?.[this.difficulty] ?? 0;
+    const result = p.hit({
+      timeQuotaMet: this.runState.currentTimeOrbs >= quota,
+      bossActive: this.runtime.bossSlots.some((boss) => boss && !boss.dead)
+    });
     if (result === 'deathbomb-window') {
+      // Player::Die (FUN_0044ab40) calls FUN_0044e140(0) as soon as the
+      // contact commits state 2. That helper writes ONLY the live gauge
+      // short (RunState+0x22), leaving its +0x20 display/copy field alone.
+      // Native Stage-2 f677 therefore jumps -10000 -> 0 on the hit frame;
+      // without this reset, the two f683 extreme-human time-item arms both
+      // succeeded and advanced the gameplay RNG by eight u16 draws.
+      this.runState.youkaiGauge = 0;
+      // Player::Die walks the item pool on the contact tick. Ordinary and
+      // already-homing items are detached immediately (state 0, vx 0,
+      // vy -0.9); tossed state-3/5 items are left alone until their next
+      // ItemManager pass, where the player-state branch converts them to the
+      // -0.7 dead-player fall. Native Stage-2 f677/f678 makes this split
+      // directly observable.
+      for (const it of this.items) {
+        if (it.state !== 0 && it.state !== 1) continue;
+        it.state = 0;
+        it.vx = 0;
+        it.vy = Math.fround(-0.9);
+      }
       // Player::Die (0x0043edc0) — the hit frame itself runs the whole death
       // entry: RegenerateGameIntegrityCsum, then both hit-effect groups (a
       // dedicated-slot flash type 0xc color 0xff4040ff and a 16-particle
@@ -3627,11 +4035,34 @@ export class StageScene implements GameHost {
 
   private updateEnemies(): void {
     this.tickRankSurvival();
+    // FUN_0044d420 resets the position caches during the player pass; the
+    // following priority-10 enemy scan republishes them for NEXT frame.
+    // DAT_018b89b4 is different: it is a persistent Enemy* cleared by Ran's
+    // callback or by the pointed enemy's inactive-slot branch.
+    this.th08TargetPos = null;
+    this.playerObj.th08LungeTarget = null;
     // FUN_0041ed50 processes authored timeline entries before scanning the
     // native 480-slot enemy pool (all.c:14016-14039). Timeline spawns are
     // therefore eligible later in this same pass.
     this.runtime.update(this);
     for (let slot = 0; slot < ENEMY_POOL_CAP; slot++) {
+      // FUN_0042c660 clears DAT_018b89b4 when it reaches the pointed MEMORY
+      // SLOT and finds its active bit gone. The native value is an Enemy*,
+      // not an entity identity: if the allocator has already reused that
+      // slot before the next scan, the pointer now aliases the replacement
+      // and is deliberately retained. Stage-2 makes this combat-significant:
+      // the pointer acquired from the x=96 Sub4 master later aliases its
+      // slot-5 Sub5 replacement, so Ran pursues the replacement and her
+      // focused needles kill the x=288 master at native f2925. Treating the
+      // cache as a JS object reference left the old object dead, cleared the
+      // pointer, and preserved the master's entire f2920 bullet family.
+      // Earlier slots have already compared against the stale pointer, while
+      // later slots may claim a genuinely empty cache — the order is also
+      // observable at Stage-2 native f921-923.
+      if (this.th08LungeEnemy?.dead && this.th08LungeEnemy.poolSlot === slot) {
+        const replacement = this.enemySlots[slot];
+        this.th08LungeEnemy = replacement && !replacement.dead ? replacement : null;
+      }
       const e = this.enemySlots[slot];
       if (!e || e.dead) continue;
       // Th07.exe FUN_0041ed50 @ 0x41ef55-0x41ef8f: op161 bit3 is tested
@@ -3684,6 +4115,7 @@ export class StageScene implements GameHost {
         this.tickTh08FamiliarSync(e);
         this.collideEnemyBody(e);
         this.collidePlayerShots(e);
+        this.publishTh08TargetCandidate(e);
         // FUN_0041ed50 keeps FUN_0043a980's local_18 bomb-contact flag
         // through damage settlement and passes it as FUN_00430970's spawn
         // mode when this same manager pass kills the enemy. Bomb-contact
@@ -3692,17 +4124,31 @@ export class StageScene implements GameHost {
         bombContactThisFrame = this.settlePendingDamage(e);
       }
       // TH08 enemy+0x3328 bit 3 is latched at the head of the native death
-      // switch (all.c:21620). Retained mode-1/2/3 callback actors keep
-      // running ECL but must never re-enter score/drop/effect/gauge death
-      // settlement on every subsequent negative-HP frame.
-      if (!e.dead && e.hp <= 0 && ((e.ecl.th08?.flags2 ?? 0) & 8) === 0) {
+      // switch (all.c:21620), then cleared once a retained callback restores
+      // positive HP (all.c:21613-21616). That clear is what lets the next
+      // nonspell/spell phase die normally instead of freezing at 0 HP.
+      if (this.runtime.shouldSettleEnemyDeath(e)) {
+        // FUN_0042d551 calls FUN_0042adb0(1) before the form-side gauge delta
+        // and before entering the death-mode
+        // switch, whose mode-0/1/2 path then calls FUN_0042bea0 for the
+        // master's ordinary drops (all.c:21631, 21647-21658). Reversing that
+        // order consumes the same RNG count but assigns the stream to the
+        // wrong items: Stage-2 Sub7's last six orbs per familiar and all five
+        // master point drops consequently land at different coordinates.
+        const sweptFamiliars = this.settleTh08FamiliarDeath(e);
+        // The common form delta at 0x42d65c follows FUN_0042adb0. A master
+        // sweep does not immediately free its children: each severed child
+        // subsequently enters death mode 8 and pays the same +/-200 delta,
+        // but its cleared parent link suppresses the direct-familiar gauge
+        // pull and item tail. Native Stage-2 f1553 exposes +200 for the
+        // master followed by +800 for its four swept Sub10 familiars.
+        const gaugeKillDelta = this.runState.gaugeKillDelta(this.playerObj.th08Form === 1);
+        this.runState.addYoukaiGauge(gaugeKillDelta);
+        for (let i = 0; i < sweptFamiliars; i++) {
+          this.runState.addYoukaiGauge(gaugeKillDelta);
+        }
         const keep = this.runtime.killEnemy(this, e, bombContactThisFrame);
         if (!keep) e.dead = true;
-        // 0x42d65c: every enemy death settles the gauge toward the side the
-        // player is currently acting as (-200 human / +200 youkai, read from
-        // the form byte via the DAT_017d5efb mirror).
-        this.runState.addYoukaiGauge(this.runState.gaugeKillDelta(this.playerObj.th08Form === 1));
-        this.settleTh08FamiliarDeath(e);
       }
       this.runtime.tickEnemyManagerTail(this, e);
       if (e.dead && this.enemySlots[slot] === e) {
@@ -3710,6 +4156,7 @@ export class StageScene implements GameHost {
         this.runtime.releaseEnemy(this, e);
       }
     }
+    this.playerObj.th08LungeTarget = this.th08LungeEnemy;
     for (const e of this.enemies) {
       if (!e.dead) continue;
       const slot = e.poolSlot;
@@ -3840,23 +4287,86 @@ export class StageScene implements GameHost {
         return;
       }
       const wasInSpawnState = (b.spawnAge ?? b.spawnDuration) < b.spawnDuration;
-      // TH08 spawn-state quad probe (all.c:23589-23591/23615-23617/
-      // 23638-23640): while the transition runs, each manager tick probes the
-      // death-clear quad pool (clear-immunity 0x1000 excepted) and LATCHES
-      // the contact (+0xdbe = 1); the bullet converts and enters state 5 on
-      // the tick its transition VM completes, not on the contact tick.
-      if (wasInSpawnState && (b.flags & 0x1000) === 0) {
-        for (const z of this.th08DeathClearZones) {
-          if (z.framesLeft <= 0) continue;
-          const dx = b.x - z.x;
-          const dy = b.y - z.y;
-          if (dx * dx + dy * dy < z.radius * z.radius) b.quadKillType = z.convertType;
-        }
-      }
       // Native spawn states 2/3/4 skip behavior, cull, bomb and player
       // collision until their authored ANM ends. On the ending tick control
       // falls through into state 1 and performs the normal move as well.
-      if (!this.updateBulletMotion(b)) return;
+      const motion = this.updateBulletMotion(b);
+      const enteredNormalState = motion.enteredNormalState;
+      // TH08 spawn-state quad probe (all.c:23589-23591/23615-23617/
+      // 23638-23640): the state-specific creep move runs FIRST, then every
+      // player clear quad is probed and latched at +0xdbe. Conversion waits
+      // for the transition VM's ending tick. Previously only familiar-death
+      // zones were sampled, before movement; type-3's field consequently
+      // missed exactly the two spawn-state bullets in each native 4-bullet
+      // cancellation group.
+      if (wasInSpawnState && (b.flags & 0x1000) === 0) {
+        // On the transition-ending tick the spawn-state probe precedes the
+        // ordinary behavior/full-speed move. Keep using the creep-only
+        // position surfaced by updateBulletMotion, not the final position.
+        const probeX = motion.transitionX ?? b.x;
+        const probeY = motion.transitionY ?? b.y;
+        let quadLatched = false;
+        for (const r of this.bombClearRegions) {
+          if (r.framesLeft <= 0) continue;
+          const dx = probeX - r.x;
+          const dy = probeY - r.y;
+          if (dx * dx + dy * dy < r.radius * r.radius) {
+            b.quadKillType = 6;
+            quadLatched = true;
+            break;
+          }
+        }
+        if (!quadLatched) for (const box of this.bombClearBoxes) {
+          if (box.framesLeft > 0 && orientedBoxHitsPoint(
+            probeX, probeY, box.x, box.y, box.width, box.height, box.angle
+          )) {
+            b.quadKillType = 6;
+            quadLatched = true;
+            break;
+          }
+        }
+        if (!quadLatched) for (const z of this.th08DeathClearZones) {
+          if (z.framesLeft <= 0) continue;
+          const dx = probeX - z.x;
+          const dy = probeY - z.y;
+          if (dx * dx + dy * dy < z.radius * z.radius) {
+            // FUN_00449ff0 walks the fixed quad pool in slot order and
+            // returns at the first contact. Do not let a later overlapping
+            // quad overwrite the latch: Stage-2 f2219 has six transition
+            // bullets inside both a child type-9 and master type-7 zone;
+            // native retains the earlier type 9 (four orbs per bullet over
+            // deferred + normal settlement), while last-hit-wins lost six.
+            b.quadKillType = z.convertType;
+            break;
+          }
+        }
+      }
+      if (!enteredNormalState) return;
+      if (!b.dead && wasInSpawnState && b.quadKillType != null) {
+        // The transition VM completed with the quad-contact latch set. Native
+        // pays this deferred item BEFORE jumping into the normal-state cull
+        // block (0x431801..0x43187b -> 0x431306). This order is observable
+        // outside the playfield: Stage-2 native f799 converts slot 32 at
+        // x=-57.104, then the promoted bullet is culled; culling first loses
+        // the pointStar and permanently shifts the fixed item-pool cursor.
+        //
+        // Native also writes state 5 here but unconditionally overwrites it
+        // with state 1 at LAB_00431306. If a quad still overlaps after cull,
+        // the normal collision block below pays and kills it a second time.
+        // Stage-2 f736 is the clean witness: two state-2 bullets become four
+        // type-6 items. Do not start the clear runner in this deferred arm.
+        const t = b.quadKillType;
+        b.quadKillType = null;
+        const itemX = motion.transitionX ?? b.x;
+        const itemY = motion.transitionY ?? b.y;
+        if (t === 9) {
+          this.spawnItem('time', itemX, itemY, {});
+          this.spawnItem('time', itemX, itemY, {});
+        } else if (t > -1) {
+          if (t === 6) this.spawnItem('pointStar', itemX, itemY, { state: 1 });
+          else this.spawnItem(t === 7 ? 'time' : 'pointSmall', itemX, itemY, {});
+        }
+      }
       // op-79 0x2000 grace ticks in normal state (exe FUN_004241c0
       // all.c:16144-16146), immediately before the full-speed position add.
       // updateBulletMotion performs that add, so preserve the same frame's
@@ -3892,23 +4402,6 @@ export class StageScene implements GameHost {
           if (b.offscreenFrames >= 128) b.dead = true;
         }
       }
-      if (!b.dead && wasInSpawnState && b.quadKillType != null) {
-        // The transition VM completed with the quad-contact latch set: convert
-        // at the bullet position (type 9 = two time orbs, any other type > -1
-        // = one item of that type) and enter state 5 (all.c:23595-23604).
-        const t = b.quadKillType;
-        b.quadKillType = null;
-        if (t === 9) {
-          this.spawnItem('time', b.x, b.y, {});
-          this.spawnItem('time', b.x, b.y, {});
-        } else if (t > -1) {
-          this.spawnItem(t === 7 ? 'time' : 'pointSmall', b.x, b.y, {});
-        }
-        if (this.beginBulletClearFade(b)) {
-          b.age += this.slowRate;
-          return;
-        }
-      }
       if (!b.dead && this.cancelBulletWithBombSlots(b)) {
         // The transition tick already performed the normal full-speed move;
         // the common native tail advances age once before state 5 begins on
@@ -3939,6 +4432,12 @@ export class StageScene implements GameHost {
       r.radius = Math.fround(r.radius + r.growth);
       if (--r.framesLeft <= 0) r.framesLeft = 0;
     }
+    for (const box of this.bombClearBoxes) {
+      if (box.framesLeft > 0 && --box.framesLeft <= 0) box.framesLeft = 0;
+    }
+    for (let i = this.bombClearBoxes.length - 1; i >= 0; i--) {
+      if (this.bombClearBoxes[i].framesLeft <= 0) this.bombClearBoxes.splice(i, 1);
+    }
     // The Th08 death-clear quads age identically (the exe's pool update grows
     // param_4 per tick and frees the slot when param_5 lapses).
     for (const z of this.th08DeathClearZones) {
@@ -3954,7 +4453,11 @@ export class StageScene implements GameHost {
   // if in the order 0x1, 0x10, 0x20, 0x40/0x100/0x80, 0xc00, then velocity is
   // added to position ONCE. Every behavior reads only its OWN op-79 slot's
   // resolved params and clears its own bit when finished.
-  private updateBulletMotion(b: EnemyBullet): boolean {
+  private updateBulletMotion(b: EnemyBullet): {
+    enteredNormalState: boolean;
+    transitionX?: number;
+    transitionY?: number;
+  } {
     const rate = this.slowRate;
     const rateF32 = Math.fround(rate);
     // Test/dev-created bullets predating the fixed queue contract are still
@@ -3969,17 +4472,16 @@ export class StageScene implements GameHost {
     b.exDirFrac ??= 0;
     b.dirTimes ??= 0;
     b.exBounceTimes ??= 0;
+    let transitionX: number | undefined;
+    let transitionY: number | undefined;
     const spawnAge = b.spawnAge ?? b.spawnDuration;
-    // TH08's transition spans duration+2 manager ticks in the Stage-1
-    // fixture: the f530 ring's crossing band only clears at +2; replacing it
-    // with the tempting "template t0 => logical age 1" reading moves the
-    // first formal Replay death back to f684. FUN_004069f0 does execute the
-    // prototype VM's t0 synchronously, but the exact state copied/re-armed by
-    // FUN_0042fe70/FUN_0042fea0 remains unresolved without a native slot
-    // trace. Keep the observed whole-chain parity rather than that local
-    // inference.
-    const th08ExtraFrac = 2;
-    if (spawnAge < b.spawnDuration || spawnAge <= b.spawnDuration + th08ExtraFrac) {
+    // FUN_004069f0 executes the prototype VM's t0 synchronously at arm. The
+    // native slot trace resolves the old +2 fixture workaround: a time-10
+    // flash returns after nine creep-only manager ticks, then its tenth tick
+    // performs the fractional move, reports remove, and falls through to the
+    // full move (Stage-2 replay slots 14/15, native f655..664). At 1/3 rate a
+    // time-24 flash likewise ends on wall tick 70, not 72.
+    if (spawnAge < b.spawnDuration) {
       // Enemy-bullet storage is float32. FUN_004241c0 performs its spawn-
       // state multiply/add on x87, then writes the result back to the slot's
       // f32 position fields every manager tick. Keeping JS doubles here
@@ -3994,9 +4496,9 @@ export class StageScene implements GameHost {
       // 449 direct trace, processing 11132). This is 24 wall ticks at rate
       // 1 and 70 wall ticks at rate 1/3, not 72.
       b.spawnAgeFrac ??= 0;
-      // The finished report lands after the two fixture-pinned manager ticks;
-      // the fall-through's fractional + full moves occur on that ending tick.
-      const spawnEnded = spawnAge + 1 > b.spawnDuration + th08ExtraFrac;
+      // The ending tick still performs the spawn-state fractional move above,
+      // then immediately falls through to the normal full-velocity move.
+      const spawnEnded = spawnAge + 1 >= b.spawnDuration;
       if (!spawnEnded) {
         if (rate > 0.99) {
           b.spawnAge = spawnAge + 1;
@@ -4008,13 +4510,17 @@ export class StageScene implements GameHost {
             b.spawnAgeFrac -= 1;
           }
         }
-        return false;
+        return { enteredNormalState: false };
       }
+      // State 2/3/4 probes the player quad and settles a latched conversion
+      // at this creep-only position before LAB_00431306 promotes the bullet
+      // and runs the ordinary behavior/full-speed move.
+      transitionX = b.x;
+      transitionY = b.y;
       // Th07.exe FUN_004241c0 @ 0x424843-0x424860: an ending spawn ANM
       // changes state to 1, resets the normal age counter, and falls through
       // to the ordinary behavior/full-velocity move on this same tick.
-      // TH08 parks one past the duration (its inclusive gate above).
-      b.spawnAge = b.spawnDuration + th08ExtraFrac + 1;
+      b.spawnAge = b.spawnDuration;
       b.spawnAgeFrac = 0;
       b.age = 0;
     }
@@ -4115,7 +4621,7 @@ export class StageScene implements GameHost {
     // rendering approximation.
     b.x = Math.fround(b.x + b.vx);
     b.y = Math.fround(b.y + b.vy);
-    return true;
+    return { enteredNormalState: true, transitionX, transitionY };
   }
 
   private dirChangeBullet(b: EnemyBullet, mode: 'relative' | 'absolute' | 'aimed'): void {
@@ -4453,8 +4959,16 @@ export class StageScene implements GameHost {
     // Border Team (role 0) that is exactly "focused OR full power" — focused
     // below 128 can line-collect, at 128 any form can.
     const pocActive = () => (p.power >= 128 || p.focusHeld) && p.y < sht.pocLineY;
-    const rate = Math.fround(this.slowRate);
+    const globalRate = Math.fround(this.slowRate);
+    // FUN_00440500 selects SHT+0x34 through the stable human/youkai form
+    // byte, then multiplies it by the global time rate. Border Team stores
+    // 0.9f in both forms. This local rate owns ordinary/state-3/state-5 item
+    // POSITION integration and ordinary gravity; homing movement, tossed-item
+    // gravity, and the state-2 ZunTimer continue to use the global rate.
+    const formSht = p.th08Form ? p.focused : p.unfocused;
+    const moveRate = Math.fround(Math.fround(formSht.itemMoveRate) * globalRate);
     for (const it of this.items) {
+      let skipCollection = false;
       it.age++;
       if (it.state === 2 && it.tween) {
         // Spawn-mode-2 positional tween (death drops): pos = lerp(origin,
@@ -4475,7 +4989,7 @@ export class StageScene implements GameHost {
             // 0.03 on this very tick. Skipping that left every death-drop
             // item one gravity step behind native forever (th7_udYo01
             // stage 2, post-death collects 3 frames late).
-            it.vy = Math.fround(Math.fround(0.03) * rate);
+            it.vy = Math.fround(Math.fround(0.03) * moveRate);
           }
         } else {
           const t = (tw.elapsed + tw.frac) / 60;
@@ -4483,30 +4997,56 @@ export class StageScene implements GameHost {
           it.y = Math.fround(t * tw.ty + (1 - t) * tw.sy);
         }
         // Split-counter advance (exe FUN_00436acc): fractional under slowmo.
-        tw.frac = Math.fround(tw.frac + rate);
+        tw.frac = Math.fround(tw.frac + globalRate);
         while (tw.frac >= 1) {
           tw.frac -= 1;
           tw.elapsed++;
         }
       } else if (it.state === 3 || it.state === 5) {
-        // TH08 ItemManager states 3/5 (all.c:31084-31108): the tossed item
-        // climbs against 0.05 gravity, then flips to homing state 1 once it
-        // crests (vy > 0) — the time-orb auto-collect arc. This branch jumps
-        // straight to the collect test in the exe (no state-0 gravity tail).
-        it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.05) * rate));
-        it.x = Math.fround(it.x + Math.fround(it.vx * rate));
-        it.y = Math.fround(it.y + Math.fround(it.vy * rate));
-        if (it.vy > 0) it.state = 1;
+        if (p.hitState) {
+          // The first item pass in player state 2 routes tossed items through
+          // the dead-player fall: zero horizontal motion, write vy=-0.7,
+          // then perform the ordinary SHT-rate integration/gravity tail.
+          // Native Stage-2 f678 moves each former state-3 orb by -0.63px and
+          // stores vy=-0.673 instead of continuing its scatter trajectory.
+          it.state = 0;
+          it.vx = 0;
+          it.vy = Math.fround(-0.7);
+          it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
+          it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * moveRate));
+        } else {
+          // TH08 ItemManager states 3/5 (all.c:31084-31108): the tossed item
+          // climbs against 0.05 gravity, then flips to homing state 1 once it
+          // crests (vy > 0) — the time-orb auto-collect arc. After the local
+          // movement it also reaches FUN_00440500's shared 0.03*moveRate
+          // acceleration tail. Native item-slot traces therefore advance vy by
+          // 0.05 + 0.03*0.9 = 0.077 every full-speed frame (for example stage
+          // 2 replay f473..476), rather than the 0.05 used by the old port.
+          it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.05) * globalRate));
+          it.x = Math.fround(it.x + Math.fround(it.vx * moveRate));
+          it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
+          if (it.vy > 0) it.state = 1;
+          it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * moveRate));
+          // FUN_00440500's state-3 arm reaches LAB_004409f2, whose first test
+          // bypasses CalcItemBoxCollision while the state byte is still 3;
+          // state 5 jumps to that same no-collection tail directly. This is
+          // observable when a human-shot time orb spawns inside the player's
+          // grab box (Stage-2 native f661): it survives in state 3 instead of
+          // being collected on its allocation frame. Once the toss crests and
+          // flips to state 1, collection is allowed on that transition tick.
+          skipCollection = it.state === 3 || it.state === 5;
+        }
       } else {
         if (pocActive()) {
           it.state = 1;
         }
         if (it.state === 1) {
-          if (p.materializeFrame >= 0) {
-            // Player state 1 (respawn materialize) clears the homing latch
-            // and writes only vy=-0.5; the previous vx is intentionally
-            // retained for this integration tick (0x430f73..0x430f8a).
-            it.vy = Math.fround(-0.5);
+          if (p.hitState || p.dyingFrame >= 0 || p.materializeFrame >= 0) {
+            // Player states 1/2 (respawn materialize or the complete death
+            // sequence) clear the homing latch and write only vy=-0.7f;
+            // the previous vx is intentionally retained for this local-rate
+            // integration tick (all.c:31063-31076).
+            it.vy = Math.fround(-0.7);
             it.state = 0;
           } else {
             // FUN_0043f2b0 stages player-item deltas through float32 before
@@ -4526,18 +5066,26 @@ export class StageScene implements GameHost {
         }
         // All non-tween states share the rate-scaled integration and the
         // common vertical gravity/cap tail, including state-1 homing.
-        const dx = Math.fround(it.vx * rate);
-        const dy = Math.fround(it.vy * rate);
+        // The live homing branch scales its velocity directly by the global
+        // rate and jumps to collision. Every state that reaches the common
+        // integration label instead uses the SHT-local movement rate.
+        const integrationRate = it.state === 1 ? globalRate : moveRate;
+        const dx = Math.fround(it.vx * integrationRate);
+        const dy = Math.fround(it.vy * integrationRate);
         it.x = Math.fround(it.x + dx);
         it.y = Math.fround(it.y + dy);
         if (it.state !== 1) {
           // TH08's homing branch jumps straight to the collect test
           // (all.c:31064-31070) — no gravity tail pollutes the latch.
-          // TH08 ItemManager (all.c:31109-31121): once the item's y reaches
-          // 3.0 the fall speed SNAPS to 3.0; above that the 0.03·rate
-          // gravity applies.
-          if (it.y >= 3) it.vy = 3;
-          else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * rate));
+          // TH08 ItemManager (all.c:31109-31121): the 3.0 comparison is
+          // against the item's VERTICAL VELOCITY returned by FUN_0040b460,
+          // not its y position. Ordinary drops therefore accelerate from
+          // -2.2 by 0.03*moveRate until vy reaches the 3px/frame terminal
+          // speed. Treating y>=3 as the predicate made every visible drop
+          // snap to terminal speed immediately and let Stage-2's opening
+          // P-items fall out before the replay's PoC sweep.
+          if (it.vy >= 3) it.vy = 3;
+          else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * moveRate));
         }
         // ItemManager::OnUpdate: `arcadeRegionSize.y + 16.0f <= y` — the
         // 448+16 boundary despawns INCLUSIVELY at exactly 464.
@@ -4567,7 +5115,7 @@ export class StageScene implements GameHost {
       const grabMaxX = Math.fround(Math.fround(p.x) + 12);
       const grabMinY = Math.fround(Math.fround(p.y) - 12);
       const grabMaxY = Math.fround(Math.fround(p.y) + 12);
-      if (p.alive && !it.dead &&
+      if (!skipCollection && p.alive && !it.dead &&
           !(grabMinX > itemMaxX || grabMaxX < itemMinX ||
             grabMinY > itemMaxY || grabMaxY < itemMinY)) {
         this.collectItem(it);
@@ -4597,24 +5145,66 @@ export class StageScene implements GameHost {
   private collectItemTh08(it: ItemEntity): void {
     const run = this.runState;
     const p = this.playerObj;
-    const atOrAbovePoC = it.y < p.sht.pocLineY;
+    // FUN_00440e40/FUN_00441020 award full value while the item is ABOVE
+    // the PoC line. Below it, the value falls linearly with the rounded
+    // pixel distance from the line. The old boolean was inverted and made
+    // every line-collected point item partial while granting full value to
+    // low pickups; it also inverted the native +10/+3 rank award.
+    const belowPoC = it.y >= p.sht.pocLineY;
+    const pocDistance = belowPoC
+      ? Math.max(0, Math.round(Math.fround(it.y - p.sht.pocLineY)))
+      : 0;
     switch (it.type) {
       case 'point': {
-        const r = run.collectPoint({ atOrAbovePoC });
+        const r = run.collectPoint({
+          atOrAbovePoC: belowPoC,
+          abovePoCRandom: pocDistance,
+          isMaxValue: it.guaranteedMax
+        });
         this.score = run.score;
         this.spawnScorePopup(r.award, it.x, it.y, 0xffffffff, true);
+        // FUN_00440e40: +10 at maximum value, +3 otherwise. Rank/subrank is
+        // gameplay state: by Stage-2 f1277 the missing item awards left the
+        // port two full rank levels below native, changing every rank-lerped
+        // bullet speed and ins_106 auto-fire interval.
+        this.adjustRank(r.rankDelta);
         break;
       }
       case 'pointSmall': case 'pointStar': {
-        const r = run.collectPointSmall({ atOrAbovePoC });
+        const r = run.collectPointSmall({
+          atOrAbovePoC: belowPoC,
+          abovePoCRandom: pocDistance,
+          isMaxValue: it.guaranteedMax
+        });
         this.score = run.score;
         this.spawnScorePopup(r.award, it.x, it.y, 0xffffffff, true);
         break;
       }
-      case 'powerSmall': p.power = Math.min(128, p.power + 1); break;
-      case 'powerBig': p.power = Math.min(128, p.power + 8); break;
-      case 'powerFull': p.power = 128; break;
-      case 'bomb': p.bombs = Math.min(8, p.bombs + 1); break;
+      case 'powerSmall':
+        {
+          const before = p.power;
+          p.power = Math.min(128, p.power + 1);
+          if (before < 128 && p.power >= 128) this.enterTh08FullPower(it);
+        }
+        // FUN_00440cf0 awards one subrank even when power is already full.
+        this.adjustRank(1);
+        break;
+      case 'powerBig': {
+        const before = p.power;
+        p.power = Math.min(128, p.power + 8);
+        if (before < 128 && p.power >= 128) this.enterTh08FullPower(it);
+        break;
+      }
+      case 'powerFull': {
+        const before = p.power;
+        p.power = 128;
+        if (before < 128) this.enterTh08FullPower(it);
+        break;
+      }
+      case 'bomb':
+        p.bombs = Math.min(8, p.bombs + 1);
+        this.adjustRank(5);
+        break;
       case 'extend': p.lives = Math.min(8, p.lives + 1); break;
       case 'time': case 'time2': {
         // Time orb (CollectTimeOrb, FUN_004412b0): score + orb counter +
@@ -4633,6 +5223,37 @@ export class StageScene implements GameHost {
     }
   }
 
+  private enterTh08FullPower(collected: ItemEntity): void {
+    // FUN_00440cf0 / FUN_00441170 / the full-power item case all share this
+    // transition when live power crosses 127 -> 128 (all.c:31148-31158).
+    // FUN_00415c60 first performs the mode-1 point-star field clear. This
+    // occurs inside the item-manager slot walk, so the newly allocated later
+    // slots are updated/homed during this same pass — exactly what the live
+    // `for..of` traversal below provides.
+    this.cancelBulletsToItems();
+
+    // FUN_00441450 converts every OTHER live small/big power item already on
+    // the field into a point-small fragment, re-arming effect 0 at its
+    // position. The collected item has already been unlinked natively; the
+    // explicit dead/current checks reproduce that exclusion here.
+    for (const item of this.items) {
+      if (item === collected || item.dead ||
+          (item.type !== 'powerSmall' && item.type !== 'powerBig')) continue;
+      if (item.vy > -0.5) {
+        item.vx = 0;
+        item.vy = Math.fround(-0.5);
+      }
+      this.spawnEffectParticles(0, item.x, item.y, 1, 0xffffffff);
+      // FUN_004069f0(item, 0x45) re-arms the converted item's fragment VM.
+      // The VM arm consumes two u32 random operands (four raw u16); Stage-2
+      // f643 has exactly one converted field item and advances 32 draws
+      // versus the four pickup re-arms' 16 plus the other frame consumers.
+      this.rng.f();
+      this.rng.f();
+      item.type = 'pointSmall';
+    }
+  }
+
   private collectItem(it: ItemEntity): void {
     it.dead = true;
     this.traceReplayEvent?.({
@@ -4640,14 +5261,34 @@ export class StageScene implements GameHost {
       data: { type: it.type, slot: it.poolSlot, x: it.x, y: it.y }
     });
     this.playSfx(21); // TH08 item00 channel
-    // Native measured: each TIME-ORB collect consumes exactly 4 u16 draws
-    // (draw counter 0x164d524 vs item-pool census, stage-1 f966-972: 5/8/10/
-    // 24/18/19/7 collects -> 20/32/40/96/72/76/28 draws, exact 1:4 ratio).
-    // The collect switch path (FUN_004412b0 + fall-through FUN_00441020)
-    // holds no direct RNG call — the consumer sits in a callec the decompile
-    // does not expose (suspected: the item VM's absorb re-arm). Until the
-    // site is pinned, the port draws the same 4 here (§7).
-    if (it.type === 'time' || it.type === 'time2') {
+    // The collect switch's FUN_00406e50 checksum (two u32 integrity values
+    // = 4 raw u16) is per-PATH, not per-pickup: point and time-orb
+    // collects always pay it (FUN_00440e40's tail / FUN_004412b0 ->
+    // FUN_00418220); powerSmall/powerBig only below full power
+    // (FUN_00441850 lives inside the power<0x80 bracket, all.c:31138 vs
+    // the skipped full-power head); a bomb item only below stock 8
+    // (FUN_00439883 in case 3); an extend only when maxed lives convert
+    // it into a bomb (FUN_00439b29's else arm). pointStar, pointSmall,
+    // powerFull and unknown9 draw zero. Charging every pickup left two
+    // full-power stage-2 collects 8 draws ahead of native by f1237.
+    // The gates read the PRE-collect stock, matching the native head
+    // tests (collectItemTh08 below performs the mutations).
+    let paysIntegrityChecksum = false;
+    switch (it.type) {
+      case 'point': case 'time': case 'time2':
+        paysIntegrityChecksum = true;
+        break;
+      case 'powerSmall': case 'powerBig':
+        paysIntegrityChecksum = this.playerObj.power < 128;
+        break;
+      case 'bomb':
+        paysIntegrityChecksum = this.playerObj.bombs < 8;
+        break;
+      case 'extend':
+        paysIntegrityChecksum = this.playerObj.lives >= 8 && this.playerObj.bombs < 8;
+        break;
+    }
+    if (paysIntegrityChecksum) {
       this.rng.f();
       this.rng.f();
     }
@@ -5289,6 +5930,29 @@ export class StageScene implements GameHost {
     return x + s.length * advance;
   }
 
+  // ascii.anm sprites 136-152: the original bottom gauge uses this authored
+  // 8x12 row for its signed percentage and point-item value. Keep the glyph
+  // mapping here instead of substituting a browser font; the latter was both
+  // wider and vertically displaced in the old hand-built gauge.
+  private drawGaugeText(r: Renderer, text: string, x: number, y: number, color = 0xffffff): void {
+    const extraGlyphX: Readonly<Record<string, number>> = {
+      '%': 80,
+      '.': 88,
+      '-': 96,
+      '+': 104,
+      '(': 112,
+      ')': 120
+    };
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      const d = c.charCodeAt(0) - 48;
+      const sx = d >= 0 && d <= 9 ? d * DIGIT_W : extraGlyphX[c];
+      if (sx == null) continue;
+      r.drawSprite('ascii', sx, DIGIT_Y, DIGIT_W, DIGIT_H,
+        x + i * DIGIT_W + DIGIT_W / 2, y + DIGIT_H / 2, { color });
+    }
+  }
+
   // Regular background quad VMs run on Std#animationFrame, which never
   // pauses or rewinds with the script clock (FUN_00406850 @ 0x406850).
   // NOTE both caches floor the target clock: under global slow motion the
@@ -5892,58 +6556,48 @@ export class StageScene implements GameHost {
       r.text('/', afterOrbs, 186, { size: 8, color: '#ddd' });
       this.drawNumber(r, quota, afterOrbs + 6, 184, 0, 1, TH08_ADV);
     }
-    // Difficulty tag: ascii.anm entry-0 script 25, sprite 283+difficulty,
+    // Difficulty tag: AsciiManager VM script 25, ascii.anm sprite 283+difficulty
+    // (the sprite's texture entry is pause.png),
     // corner-anchored at (552,200); alpha 0 until t=60, fades in over 20
     // frames, then holds (armed at stage load, all.c:26916-26923).
     {
-      const DIFF_TAG_RECTS = [
-        [192, 0, 64, 16], // Easy (sprite 283)
-        [192, 16, 64, 16], // Normal (284)
-        [128, 0, 64, 16], // Hard (285)
-        [128, 16, 64, 16], // Lunatic (286)
-        [192, 192, 64, 16], // Extra (287)
-        [192, 208, 64, 16] // Phantasm (288)
-      ] as const;
-      const rect = DIFF_TAG_RECTS[this.difficulty] ?? DIFF_TAG_RECTS[1];
+      const rect = TH08_DIFFICULTY_TAG.rects[this.difficulty] ?? TH08_DIFFICULTY_TAG.rects[1];
       const alpha = Math.max(0, Math.min(1, (this.stageFrame - 60) / 20));
-      if (alpha > 0) this.blit(r, 'ascii', rect, 552, 200, alpha);
-    }
-    // Human/youkai rate gauge at the playfield's bottom-left. Native layout
-    // (AsciiManager::InitializeVms): the bar spans 2x56px for +-10000 with
-    // the 人/妖 icons at the LIMIT positions and a cursor VM (script 8) at
-    // the live value; the fill reads grey (human) / periwinkle (youkai)
-    // and the extremes (|g| >= the 8000 effects threshold) drive the
-    // gauge VM's interrupt swap (bright state).
-    {
-      const gx = 66;
-      const gy = 442;
-      const g = run.youkaiGauge;
-      const extreme = Math.abs(g) >= 8000 && (this.frame & 3) < 2;
-      const pct = ((g < 0 ? '人' : g > 0 ? '妖' : '') + (Math.abs(g) / 100).toFixed(2) + '%');
-      r.text(pct, gx, gy - 8, { size: 11, color: extreme ? '#fff' : g < 0 ? '#eee' : '#9cf' });
-      ctx.save();
-      ctx.fillStyle = '#282028';
-      ctx.fillRect(gx, gy, 112, 6);
-      const frac = Math.max(-1, Math.min(1, g / 10000));
-      if (frac < 0) {
-        ctx.fillStyle = 'rgba(232,232,232,0.9)';
-        ctx.fillRect(gx + 56 + frac * 56, gy, -frac * 56, 6);
-      } else {
-        ctx.fillStyle = 'rgba(140,160,255,0.85)';
-        ctx.fillRect(gx + 56, gy, frac * 56, 6);
+      if (alpha > 0) {
+        this.blit(
+          r, TH08_DIFFICULTY_TAG.imageKey, rect,
+          TH08_DIFFICULTY_TAG.position.x, TH08_DIFFICULTY_TAG.position.y, alpha
+        );
       }
-      // The +-8000 effects thresholds (0x164d304/0x164d306) mark where the
-      // extreme interrupts arm — draw them as faint notches.
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.fillRect(gx + 56 - 44.8, gy, 1, 6);
-      ctx.fillRect(gx + 56 + 44.8, gy, 1, 6);
-      // The cursor caret at the live position.
-      ctx.fillStyle = extreme ? '#ffffff' : '#ffd070';
-      ctx.fillRect(gx + 56 + frac * 56 - 1, gy - 2, 2, 10);
-      ctx.restore();
-      r.text('人', gx - 14, gy - 2, { size: 11, color: '#eee' });
-      r.text('妖', gx + 116, gy - 2, { size: 11, color: '#9cf' });
-      this.drawNumber(r, run.pointItemValue, gx + 14, gy + 12, 0, 1, TH08_ADV);
+    }
+    // Human/youkai rate gauge. These are ascii.anm scripts 5-8 verbatim:
+    // the authored plate and limit icons are top-left anchored, while the
+    // triangular script-8 cursor is center anchored at the live gauge value.
+    // The previous implementation replaced all four with a thick rectangle,
+    // invented threshold notches, and prefixed 人/妖 to the percentage.
+    {
+      const gauge = TH08_FORM_GAUGE;
+      const g = run.youkaiGauge;
+      this.blit(r, gauge.imageKey, gauge.plate.rect,
+        gauge.plate.position.x, gauge.plate.position.y);
+      this.blit(r, gauge.imageKey, gauge.human.rect,
+        gauge.human.position.x, gauge.human.position.y);
+      this.blit(r, gauge.imageKey, gauge.youkai.rect,
+        gauge.youkai.position.x, gauge.youkai.position.y);
+
+      const cursorX = formGaugeCursorX(g);
+      r.drawSprite(gauge.imageKey,
+        gauge.cursor.rect[0], gauge.cursor.rect[1], gauge.cursor.rect[2], gauge.cursor.rect[3],
+        cursorX, gauge.cursor.centerY);
+
+      const pct = `${(g / 100).toFixed(2)}%`;
+      const pctColor = g <= -8000 ? 0x8080ff : g >= 8000 ? 0xff80c0 : 0xffffff;
+      this.drawGaugeText(r, pct, formGaugePercentX(g, pct.length), gauge.percentY, pctColor);
+
+      const pointText = String(Math.max(0, Math.trunc(run.pointItemValue)));
+      this.drawGaugeText(r, pointText,
+        gauge.pointValueCenterX - pointText.length * DIGIT_W / 2,
+        gauge.pointValueY);
     }
 
     // Native boss HP strip (geometry/colors in TH08_HUD.bossLifebar,

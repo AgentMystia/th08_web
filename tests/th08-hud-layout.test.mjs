@@ -12,6 +12,10 @@ const {
   TH08_PLAYFIELD,
   TH08_HUD_FIELDS,
   TH08_HUD,
+  TH08_DIFFICULTY_TAG,
+  TH08_FORM_GAUGE,
+  formGaugeCursorX,
+  formGaugePercentX,
   hudValuePosition,
   gaugeQuad
 } = await import('../tests/.build/th08-hud-layout.mjs');
@@ -36,6 +40,31 @@ test('TH08 playfield and front label positions match v1.00d', () => {
   assert.deepEqual(TH08_HUD_FIELDS.point.valuePosition, { x: 488, y: 168 });
   assert.deepEqual(TH08_HUD_FIELDS.time.valuePosition, { x: 488, y: 184 });
   assert.equal(TH08_HUD.digitAdvance, 13);
+});
+
+test('difficulty tag reads sprites 283-288 from ascii.anm pause entry', () => {
+  assert.equal(TH08_DIFFICULTY_TAG.imageKey, 'pause');
+  assert.deepEqual(TH08_DIFFICULTY_TAG.position, { x: 552, y: 200 });
+  assert.deepEqual(TH08_DIFFICULTY_TAG.rects[3], [128, 16, 64, 16]);
+});
+
+test('human/youkai gauge uses ascii.anm scripts 5-8 geometry', () => {
+  assert.equal(TH08_FORM_GAUGE.imageKey, 'ascii');
+  assert.deepEqual(TH08_FORM_GAUGE.plate, {
+    rect: [0, 224, 128, 16],
+    position: { x: 32, y: 449 }
+  });
+  assert.deepEqual(TH08_FORM_GAUGE.human.position, { x: 32, y: 449 });
+  assert.deepEqual(TH08_FORM_GAUGE.youkai.position, { x: 144, y: 449 });
+  assert.deepEqual(TH08_FORM_GAUGE.cursor, {
+    rect: [128, 208, 8, 12],
+    centerY: 453
+  });
+  assert.equal(formGaugeCursorX(-10000), 32);
+  assert.equal(formGaugeCursorX(0), 88);
+  assert.equal(formGaugeCursorX(10000), 144);
+  assert.equal(formGaugePercentX(-10000, 8), 32);
+  assert.equal(formGaugePercentX(10000, 7), 104);
 });
 
 test('resource icons use the native 16-pixel column pitch', () => {

@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 
 const outDir = 'tests/.build/th08-pacing';
 mkdirSync(outDir, { recursive: true });
@@ -29,6 +29,15 @@ const { TH08_DATA } = await import(`../${outDir}/data/th08-data.mjs`);
 
 const etamaAnm = new Anm(TH08_DATA.anm.etama, 'etama');
 const enemyAnm = new Anm(TH08_DATA.anm.enemy, 'enemy');
+
+test('TH08 Border-Team shots use the native 128-slot pool', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 2, null, 1
+  );
+  assert.equal(scene.playerBulletSlots.length, 0x80);
+});
 
 const f32 = (v) => ({ kind: 'f32', v });
 const i32 = (v) => ({ kind: 'i32', v });
@@ -188,7 +197,7 @@ test('the dialogue sweep (FUN_0042efb0(0,0)) kills via hp=0, spares controllers 
   assert.equal(drops.length, 0, 'no sweep items without the drop flag');
 });
 
-test('state-2 transition creeps at vel/2 for duration+2 ticks, then the frac+full fall-through', async () => {
+test('state-2 transition runs its authored duration, then frac+full fall-through', async () => {
   const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
   const mod = await loadEngine();
   const scene = new mod.StageScene(makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 1, null, 1);
@@ -213,9 +222,66 @@ test('state-2 transition creeps at vel/2 for duration+2 ticks, then the frac+ful
     return Math.round(b.x * 1000) / 1000;
   };
   assert.equal(xAfter(1), 96.5, 'tick 1: first half-step');
-  assert.equal(xAfter(11), 102, 'ticks 2..12: half-steps (13 total)');
-  assert.equal(xAfter(1), 103.5, 'tick 13 (age 12 = D+2): frac + full fall-through');
-  assert.equal(xAfter(1), 104.5, 'tick 14: full velocity only');
+  assert.equal(xAfter(8), 100.5, 'ticks 2..9: authored creep-only span');
+  assert.equal(xAfter(1), 102, 'tick 10: fractional + full fall-through');
+  assert.equal(xAfter(1), 103, 'tick 11: full velocity only');
+});
+
+test('TH08 active bombs scale each colliding player shot by /5, minimum 1', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 2, null, 1);
+  scene.mode = 'test';
+  const enemy = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 100, y: 100, life: 100 });
+
+  // FUN_00451670 @ 0x4517e1-0x451815 branches on player+0xfdc, then
+  // integer-divides every shot record independently. The focused Border
+  // volley observed at native Stage-2 f917 is therefore 12/5 + 20/5 = 6.
+  scene.bombActiveThisFrame = true;
+  scene.damageEnemy(enemy, 12, 'shot');
+  scene.damageEnemy(enemy, 20, 'shot');
+  scene.damageEnemy(enemy, 4, 'shot');
+  assert.equal(enemy.pendingShotDmg, 7, '2 + 4 + minimum-1');
+
+  enemy.pendingShotDmg = 0;
+  scene.bombActiveThisFrame = false;
+  scene.damageEnemy(enemy, 12, 'shot');
+  scene.damageEnemy(enemy, 20, 'shot');
+  assert.equal(enemy.pendingShotDmg, 32, 'ordinary shots retain their SHT damage');
+});
+
+test('TH08 child damage immediately propagates one half to its parent', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 2, null, 1);
+  scene.mode = 'test';
+  const parent = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 100, y: 100, life: 200 });
+  const child = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 100, y: 100, life: 100, parent });
+
+  // FUN_0042b370: Stage-2's native f1805 witness is a 64-HP hit on Sub12
+  // and a same-pass 32-HP loss on its Sub11 parent.
+  scene.damageEnemy(child, 64, 'shot');
+  scene.settlePendingDamage(child);
+  assert.deepEqual([child.hp, parent.hp], [36, 168]);
+
+  // Indirect damage cannot cross the largest armed life threshold.
+  parent.ecl.lifeThresholds[0] = { threshold: 150, sub: 1 };
+  scene.damageEnemy(child, 40, 'shot');
+  scene.settlePendingDamage(child);
+  assert.equal(parent.hp, 150);
+
+  // A positive ins_160 shield blocks sharing to ordinary parents; bosses
+  // retain the native /9 chip after the initial /2.
+  parent.hp = 200;
+  parent.ecl.damageShield = 1;
+  parent.ecl.lifeThresholds[0] = { threshold: -1, sub: -1 };
+  scene.damageEnemy(child, 20, 'shot');
+  scene.settlePendingDamage(child);
+  assert.equal(parent.hp, 200);
+  parent.ecl.isBoss = true;
+  scene.damageEnemy(child, 70, 'shot');
+  scene.settlePendingDamage(child);
+  assert.equal(parent.hp, 197, 'trunc(trunc(70 / 2) / 9)');
 });
 
 test('TH08 spawn states 2/3/4 creep at vel*(1/2, 1/2.5, 1/3)', async () => {
@@ -240,6 +306,317 @@ test('TH08 spawn states 2/3/4 creep at vel*(1/2, 1/2.5, 1/3)', async () => {
   }
 });
 
+test('TH08 ordinary items follow the SHT-local 0.9 motion rate and native pickup frames', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
+  const stage = rpy.stages.find((entry) => entry.stage === 1);
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team,
+    1, null, stage.rngSeed
+  );
+  scene.mode = 'test';
+  scene.rank = stage.rank;
+  scene.graze = stage.graze;
+  scene.playerObj.lives = stage.lives;
+  scene.playerObj.bombs = stage.bombs;
+  scene.playerObj.power = stage.power;
+  Object.assign(scene.runState, {
+    youkaiGauge: stage.youkaiGauge,
+    clockTime: stage.clockTime,
+    pointItemValue: stage.pointItemValue,
+    pointItemExtends: stage.pointItemExtends,
+    nextPointItemExtendThreshold: stage.nextPointItemExtendThreshold
+  });
+  const inputBits = (word) => ({
+    held: new Set([
+      word & 1 ? 'shoot' : null, word & 2 ? 'bomb' : null,
+      word & 4 ? 'focus' : null, word & 0x10 ? 'up' : null,
+      word & 0x20 ? 'down' : null, word & 0x40 ? 'left' : null,
+      word & 0x80 ? 'right' : null, word & 0x100 ? 'skip' : null
+    ].filter(Boolean)),
+    pressed: new Set()
+  });
+  const near = (actual, expected) => assert.ok(
+    Math.abs(actual - expected) < 0.0006,
+    `${actual} should match native ${expected}`
+  );
+
+  for (let frame = 0; frame <= 510; frame++) {
+    scene.update(inputBits(stage.inputs[frame]));
+    // Native replay counter f401 == sim f400. The first power drop has just
+    // received one common move (-2.2f * 0.9f) and one 0.03f * 0.9f gravity
+    // tail (FUN_00440500).
+    if (frame === 400) {
+      assert.equal(scene.items.length, 1);
+      near(scene.items[0].y, -14.711);
+      near(scene.items[0].vy, -2.173);
+    }
+    // Native f480 == sim f479: the complete ordinary-fall trajectory is an
+    // exact slot-trace witness, not merely a one-tick unit calculation.
+    if (frame === 479) {
+      assert.equal(scene.items.length, 3);
+      near(scene.items[0].y, -94.343);
+      near(scene.items[1].y, -78.857);
+      near(scene.items[2].y, -48.851);
+    }
+    if (frame === 503) assert.deepEqual([scene.playerObj.power, scene.items.length], [1, 2]);
+    if (frame === 507) assert.deepEqual([scene.playerObj.power, scene.items.length], [2, 1]);
+    if (frame === 510) assert.deepEqual([scene.playerObj.power, scene.items.length], [3, 0]);
+  }
+});
+
+test('TH08 ordinary item terminal speed is gated by vy, never by screen y', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 2, null, 1
+  );
+  scene.mode = 'test';
+  scene.playerObj.x = 320;
+  scene.playerObj.y = 384;
+  scene.spawnItem('powerSmall', 64, 100);
+
+  scene.updateItems();
+
+  assert.equal(scene.items.length, 1);
+  assert.ok(Math.abs(scene.items[0].y - 98.02) < 0.0001);
+  assert.ok(Math.abs(scene.items[0].vy - (-2.173)) < 0.0001);
+});
+
+test('TH08 state-3/5 tosses skip pickup until they crest into state 1', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), 3, 'reimuYukari', 2, null, 1
+  );
+  scene.mode = 'test';
+  scene.playerObj.x = 172;
+  scene.playerObj.y = 126;
+  scene.spawnItem('time', 172, 126, { state: 3 });
+
+  scene.updateItems();
+
+  assert.equal(scene.items.length, 1, 'a tossed orb inside the grab box survives');
+  assert.equal(scene.items[0].state, 3);
+  assert.equal(scene.runState.currentTimeOrbs, 0);
+
+  scene.items[0].vy = 0.01;
+  scene.updateItems();
+
+  assert.equal(scene.items.length, 0, 'the crest tick flips to state 1 and can collect');
+  assert.equal(scene.runState.currentTimeOrbs, 1);
+});
+
+test('Stage-2 human-shot time orbs follow the native threshold, toss arc, and pickup frame', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
+  const stageIndex = rpy.stages.findIndex((entry) => entry.stage === 2);
+  const stage = rpy.stages[stageIndex];
+  const entryScore = rpy.stages[stageIndex - 1].scoreAtEnd;
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team,
+    2, null, stage.rngSeed
+  );
+  scene.mode = 'test';
+  scene.rank = stage.rank;
+  scene.score = entryScore;
+  scene.graze = stage.graze;
+  scene.playerObj.lives = stage.lives;
+  scene.playerObj.bombs = stage.bombs;
+  scene.playerObj.power = stage.power;
+  Object.assign(scene.runState, {
+    score: entryScore,
+    youkaiGauge: stage.youkaiGauge,
+    clockTime: stage.clockTime,
+    pointItemValue: stage.pointItemValue,
+    pointItemExtends: stage.pointItemExtends,
+    nextPointItemExtendThreshold: stage.nextPointItemExtendThreshold
+  });
+  const inputBits = (word) => ({
+    held: new Set([
+      word & 1 ? 'shoot' : null, word & 2 ? 'bomb' : null,
+      word & 4 ? 'focus' : null, word & 0x10 ? 'up' : null,
+      word & 0x20 ? 'down' : null, word & 0x40 ? 'left' : null,
+      word & 0x80 ? 'right' : null, word & 0x100 ? 'skip' : null
+    ].filter(Boolean)),
+    pressed: new Set()
+  });
+  const near = (actual, expected) => assert.ok(
+    Math.abs(actual - expected) < 0.0006,
+    `${actual} should match native ${expected}`
+  );
+
+  for (let frame = 0; frame <= 642; frame++) {
+    scene.update(inputBits(stage.inputs[frame]));
+    // Native replay f473 == sim f472. The enemy kill first applies -200
+    // gauge, crosses the human extreme, and consequently drops both the
+    // ordinary power item and a time item. The latter has already received
+    // one state-3 update this tick.
+    if (frame === 472) {
+      assert.equal(scene.runState.youkaiGauge, -8102);
+      assert.deepEqual(scene.items.map((it) => it.type), ['powerSmall', 'time']);
+      const orb = scene.items.find((it) => it.poolSlot === 1);
+      assert.equal(orb.state, 3);
+      near(orb.x, 341.267);
+      near(orb.y, 158.214);
+      near(orb.vy, -1.957);
+      assert.equal(scene.rng.seed, 58589);
+    }
+    // Native f476: the persistent per-enemy 40-damage accumulator has paid
+    // the first human-shot orb, consuming the exact four-draw spawn pair.
+    if (frame === 475) {
+      assert.equal(scene.items.filter((it) => it.type === 'time').length, 2);
+      assert.equal(scene.rng.seed, 26561);
+      const orb = scene.items.find((it) => it.poolSlot === 1);
+      near(orb.y, 153.273);
+      near(orb.vy, -1.726);
+    }
+    // Native f499/f500: the first orb crests on the authored tick, then the
+    // state-1 branch computes the exact 10px/frame homing vector.
+    if (frame === 498) {
+      const orb = scene.items.find((it) => it.poolSlot === 1);
+      assert.equal(orb.state, 1);
+      near(orb.x, 335.204);
+      near(orb.y, 136.112);
+      near(orb.vy, 0.045);
+    }
+    if (frame === 499) {
+      const orb = scene.items.find((it) => it.poolSlot === 1);
+      near(orb.x, 327.519);
+      near(orb.y, 142.511);
+      near(orb.vx, -7.685);
+      near(orb.vy, 6.399);
+    }
+    // Native f518: slot 1 is collected on this exact frame and its four RNG
+    // draws leave the stream at the recorded checkpoint.
+    if (frame === 517) {
+      assert.equal(scene.items.some((it) => it.poolSlot === 1), false);
+      assert.equal(scene.rng.seed, 26433);
+    }
+    // Native f634..643 == sim f633..642: the opening power drops keep their
+    // authored slow-fall trajectories, enter the focused PoC sweep, and
+    // raise the stage-entry 115 power to the full 128. This sequence is the
+    // upstream contract for the seven-record Border-Team shot table used by
+    // the midboss; snapping visible drops to terminal speed left it at 124.
+    const powerCheckpoints = new Map([
+      [632, 115], [633, 116], [634, 117], [636, 117], [637, 118],
+      [638, 122], [641, 124], [642, 128]
+    ]);
+    if (powerCheckpoints.has(frame)) {
+      assert.equal(scene.playerObj.power, powerCheckpoints.get(frame), `power at sim f${frame}`);
+    }
+  }
+});
+
+test('Stage-2 graze/familiar-death alignment holds to f1276; the f680+ draw-economy residual is recorded', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
+  const stageIndex = rpy.stages.findIndex((entry) => entry.stage === 2);
+  const stage = rpy.stages[stageIndex];
+  const entryScore = rpy.stages[stageIndex - 1].scoreAtEnd;
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team,
+    2, null, stage.rngSeed
+  );
+  scene.mode = 'test';
+  scene.rank = stage.rank;
+  scene.score = entryScore;
+  scene.graze = stage.graze;
+  scene.playerObj.lives = stage.lives;
+  scene.playerObj.bombs = stage.bombs;
+  scene.playerObj.power = stage.power;
+  Object.assign(scene.runState, {
+    score: entryScore,
+    youkaiGauge: stage.youkaiGauge,
+    clockTime: stage.clockTime,
+    pointItemValue: stage.pointItemValue,
+    pointItemExtends: stage.pointItemExtends,
+    nextPointItemExtendThreshold: stage.nextPointItemExtendThreshold
+  });
+  const inputBits = (word) => ({
+    held: new Set([
+      word & 1 ? 'shoot' : null, word & 2 ? 'bomb' : null,
+      word & 4 ? 'focus' : null, word & 0x10 ? 'up' : null,
+      word & 0x20 ? 'down' : null, word & 0x40 ? 'left' : null,
+      word & 0x80 ? 'right' : null, word & 0x100 ? 'skip' : null
+    ].filter(Boolean)),
+    pressed: new Set()
+  });
+  // Native replay counter N exposes sim state N-1. These checkpoints cover:
+  // human-form grazes (no +100), the focused Sub7 master + four swept Sub10
+  // familiars (+5*200), then the dense time-orb pickup wave. Gauge alignment
+  // keeps the f1594 shot threshold below -8000 and prevents the old extra
+  // state-3 orb/four-draw RNG branch.
+  const checkpoints = new Map([
+    [1237, [-1002, 18767]],
+    [1276, [-2513, 21269]],
+    [1552, [-6071, 59505]],
+    [1592, [-7823, 59790]],
+    [1593, [-9355, 19806]],
+    [1808, [-8665, 27796]],
+    [2218, [-9156, 28334]]
+  ]);
+  // KNOWN RESIDUAL (see AGENTS.md §0, 2026-08-23 pass): somewhere in
+  // f680..1237 the port draws 8 u16s the native run does not (0.05% of the
+  // window's 17.6k draws; per-source CI profiling narrowed it to the small
+  // u32 consumers — auto-fire phase arms, state-3 item scatters, or paying
+  // collects — every one of which is individually exe-verified). The
+  // gauge/prefix checkpoints that still hold stay hard-asserted; everything
+  // downstream of the first diverging checkpoint is logged as a residual
+  // (LFSR-walked draw distance to the native seed) instead of asserted, so
+  // the number stays visible in CI until a native per-frame draw profile
+  // pins the missing consumer. Do NOT "fix" this by clamping draw counts.
+  const stepSeed = (seed) => {
+    const a = ((seed ^ 0x9630) - 0x6553) & 0xffff;
+    return (((a & 0xc000) >> 14) + a * 4) & 0xffff;
+  };
+  const distance = (from, to) => {
+    let s = from;
+    for (let i = 1; i <= 65536; i++) {
+      s = stepSeed(s);
+      if (s === to) return i <= 32768 ? -i : 65536 - i;
+    }
+    return null;
+  };
+  const residualLog = [];
+  for (let frame = 0; frame <= 2218; frame++) {
+    scene.update(inputBits(stage.inputs[frame]));
+    const expected = checkpoints.get(frame);
+    if (expected) {
+      if (frame <= 1276) {
+        // Upstream of the residual's downstream cascade: the gauge
+        // trajectory still holds exactly.
+        assert.equal(scene.runState.youkaiGauge, expected[0], `gauge at sim f${frame}`);
+      }
+      const delta = distance(scene.rng.seed, expected[1]);
+      residualLog.push(
+        `f${frame} gauge=${scene.runState.youkaiGauge}/native ${expected[0]}` +
+        ` seedDrawDelta=${delta == null ? 'unreachable' : delta}`
+      );
+    }
+    if (frame === 1593) {
+      // Cascade of the f680..1237 over-draw: one kill lands a few frames
+      // off native, moving its 92-item field snapshot and the 326-orb
+      // geometry. Logged, not asserted, until the residual closes.
+      residualLog.push(`f1593 items=${scene.items.length}/native 92`);
+      const nativeOrb = scene.items.find((item) => item.poolSlot === 326);
+      residualLog.push(`f1593 slot326=${nativeOrb ? `${nativeOrb.type}@(${nativeOrb.x.toFixed(3)},${nativeOrb.y.toFixed(3)})` : 'none'}`);
+    }
+    if (frame === 1808) {
+      residualLog.push(`f1808 tailSlots=${JSON.stringify(
+        scene.items.filter((item) => item.poolSlot >= 368).map((item) => [item.poolSlot, item.type])
+      )}`);
+    }
+  }
+  residualLog.push(`f2218 tailSlots748=${JSON.stringify(
+    scene.items.filter((item) => item.poolSlot >= 748).map((item) => [item.poolSlot, item.type])
+  )}`);
+  console.log(`stage-2 f680+ residual record (native draw-economy gap):\n  ${residualLog.join('\n  ')}`);
+});
+
 test('retained TH08 midboss death callbacks settle exactly once', async () => {
   const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
   const mod = await loadEngine();
@@ -253,13 +630,54 @@ test('retained TH08 midboss death callbacks settle exactly once', async () => {
     if (event.kind === 'enemy-kill' && event.sub === 15) kills.push(event);
   };
   const shooting = { held: new Set(['shoot']), pressed: new Set() };
-  // 5000-frame budget: the familiar master-death kill quads (Th08.exe
-  // FUN_0044df00 pool) replaced the bogus direct 16-orb spawn, shifting the
-  // post-f921 RNG stream; the exit chain now lands at ~f4758 (was ~f4640).
-  for (let frame = 0; frame < 5000; frame++) scene.update(shooting);
+  // The native t0 life ordering restores the opening fairies' authored
+  // volleys, so the replay stream reaches this midboss exit just after f5100
+  // instead of the old under-populated ~f4758 path. Leave enough room for
+  // Sub18 to unregister while still checking that mode 2 settles only once.
+  for (let frame = 0; frame < 6000; frame++) scene.update(shooting);
 
   assert.equal(kills.length, 1, 'mode-2 midboss actor must not re-enter death settlement');
   assert.equal(scene.runtime.lifecycleLog.filter((event) =>
     event.ev === 'kill' && event.sub === 15).length, 1);
   assert.equal(scene.bossActive, null, 'authored Sub18 exit unregisters the midboss');
+});
+
+test('Wriggle Night Bug Tornado exits its retained spell actor into Sub37', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
+  const stage = rpy.stages.find((entry) => entry.stage === 1);
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team,
+    1, null, stage.rngSeed
+  );
+  scene.mode = 'test';
+  scene.rank = stage.rank;
+  scene.playerObj.power = stage.power;
+  Object.assign(scene.runState, {
+    youkaiGauge: stage.youkaiGauge,
+    clockTime: stage.clockTime,
+    pointItemValue: stage.pointItemValue
+  });
+  const inputBits = (word) => ({
+    held: new Set([
+      word & 1 ? 'shoot' : null, word & 2 ? 'bomb' : null,
+      word & 4 ? 'focus' : null, word & 0x10 ? 'up' : null,
+      word & 0x20 ? 'down' : null, word & 0x40 ? 'left' : null,
+      word & 0x80 ? 'right' : null, word & 0x100 ? 'skip' : null
+    ].filter(Boolean)),
+    pressed: new Set()
+  });
+  let sawNightBug = false;
+  let exitedToSub37 = false;
+  for (let frame = 0; frame < 17000 && !exitedToSub37; frame++) {
+    scene.playerObj.invulnFrames = 999999;
+    scene.playerObj.bombInvuln = 999999;
+    scene.update(inputBits(stage.inputs[frame] ?? 1));
+    if (scene.spellcard?.name.includes('ナイトバグトルネード')) sawNightBug = true;
+    exitedToSub37 = sawNightBug && !scene.spellcard && scene.bossActive?.ecl.ctx.subId === 37;
+  }
+
+  assert.equal(sawNightBug, true, 'the replay reached Wriggle\'s first authored spell');
+  assert.equal(exitedToSub37, true, 'retained death latch rearmed and released the spell actor');
 });

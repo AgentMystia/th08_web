@@ -581,6 +581,124 @@ hang risk is handled by the cancel+rerun procedure).
 TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
 Border Team, dialogue, HUD, and the replay harness are all live.
 
+### 2026-08-23 scheduler-boundary + item/damage economy pass
+
+The interrupted follow-up to the 999b644 movement rework, rebuilt from
+native /proc slot traces instead of replay metrics, and extended across
+the item/damage/bomb economies. CI's replay job now runs `--stage 1` and
+`--stage 2` as two separate advisory oracles; the verifier no longer skips
+simulation ticks from the T8RP slowdown table (telemetry, not commands —
+skipping four of the first 30 stage-2 records rerolled every auto-fire
+deadline), and carries a seed-scoped native player-contact oracle for the
+committed fixture (stage 2, rngSeed 0x32fb: the f677 contact + deathbomb
+chain with per-frame state/RNG checkpoints). Every item below is exe-proven
+and test-locked; the tests embed the native trace values (exact f32 item
+coordinates, RNG seeds at specific frames).
+
+1. **Player-state machine**: FUN_0044ab40 RECOMPUTES preDeadCount on every
+   hit (bombs*6, +7 with the Time quota met, cap 15, doubled cap 30 under a
+   registered boss, Border Team ×9/5 — native stage-2 stock 3 → 27). The
+   deathbomb trigger retains native state 2 for one tick
+   (pendingDeathbombRescue completes inside FUN_0044c650's callback start);
+   FUN_0044cbf0 debits 15 time orbs per window tick with a two-u32
+   checksum regen only when the debit does not underflow; FUN_0044e140(0)
+   zeroes only the LIVE gauge short at the hit; FUN_00441530 detaches
+   state-0/1 items to (0,-0.9) and the next item pass converts tossed
+   items to the -0.7 dead-player fall; bombs latch a focus override
+   (player+3) until FUN_00416130's same-pass teardown.
+2. **Gauge clocks** (0x44be3e-0x44c00d): player+0xe2ad0 is the shot-idle
+   timer (rises to 30 disarmed, drains armed), player+0xe2ae8 the firing
+   ramp read PRE-tick — trunc(t/15) capped at 21, NOT the old
+   `min(20, t/15)` focus-counter conflation. Human-form grazes award
+   nothing to the gauge (0x44aa6d reads the form byte).
+3. **Item economy**: SHT+0x34 is the per-form ItemManager movement rate
+   (Border 0.9 in both forms) multiplied by the global rate — ordinary
+   gravity 0.03*rate and terminal-speed snapping compare VY against 3.0,
+   never the y position (the old y>=3 predicate snapped every visible drop
+   to terminal speed). FUN_004400a0 literals corrected: fall vy = -2.2f
+   (0xc00ccccd), toss vy = -2.0 - rng01*0.2 (0x3e4ccccd). State-3/5 tosses
+   skip pickup until they crest into state 1. Point value above PoC is
+   full; below it degrades linearly with the rounded distance, and the
+   rank award is +10 full / +3 partial, +1 per powerSmall, +5 per bomb
+   item. Collect checksum draws (FUN_00406e50 = 2 u32 = 4 u16) are
+   per-PATH: point/time always; powerSmall/powerBig only below full
+   power; bomb items only below stock 8; extends only when maxed lives
+   convert to a bomb; pointStar/pointSmall/powerFull never. Crossing to full power runs
+   FUN_00415c60's mode-1 point-star field clear plus FUN_00441450's
+   power→pointSmall conversion (2 u32 per converted item).
+4. **Damage pipeline** (FUN_00451670/0041ed50): shots during the player's
+   own bomb scale PER SHOT by /5 minimum 1 (not a sum/3); the youkai
+   extreme scales the frame's whole raw contact damage by 106/100 before
+   the 70 cap; the persistent enemy+0x2e10 accumulator adds min(raw,50)
+   per call and emits a state-3 time item (human extreme + SHT i16@+0x1e
+   < 0) on threshold crossings inside the slot loop; FUN_0042b370 shares
+   trunc(settled/2) to the parent, gated by the PARENT's shield timer
+   (0 → none; boss flag bit → /9) and floored at the largest armed life
+   threshold.
+5. **Enemy semantics**: the template starts with raw flags 0x4c (shot/
+   body/damage all enabled — Stage-2 Sub1's ins_80(2) clears only body);
+   ins_79/80/81 keep the three semantic gates in raw-bit lockstep; the
+   retained-death latch (flags2 bit 3) clears once a callback restores
+   positive HP; mode-3 death clears the raw mode field so the next phase
+   settles as mode 0; timeline spawns run their synchronous t0 core at the
+   timeline life (Sub1's clock-30 ring AND clock-34 5x3 volley both fire);
+   timeline op13 consumes EVERY matching latch and op14 fills EVERY free
+   slot; ins_160(n) is the per-enemy retreat/damage shield at +0x5354
+   (positive → 0 damage, boss /9; ticks down in the manager tail), NOT a
+   manager clock; ins_145 sets flags bit 25 (laser re-trigger) and ins_146
+   is the actual clock-add; RNG float vars are UNSIGNED u32s (>>> 0 — the
+   sign-extension bug halved Stage-2 Sub4's displacement); three-operand
+   arithmetic reads the DESTINATION id raw; auto-fire runs on its own
+   +0x3064 ZunTimer that advances through ins_2 WAITs and resets after
+   each volley, resolving VARs through the CAPTURING context's bank;
+   16px non-rice bullet hitboxes read 6.0, not 12.
+6. **Bombs**: the attack-slot pool is TH08's 0xc0 records with circle and
+   oriented-box shapes and a cadence gate (+0x24 % +0x38); publication
+   follows native scheduler boundaries (trigger-frame records appear at
+   the manager tail; FUN_004117b0's timer-50 groups publish four long
+   oriented boxes whose widths 1085.247/1266.194/1447.141/1628.088 come
+   from the timer-49 interpolation × sqrt(1/2), each with a 16-frame
+   8→0 shake and the authored purple flash); orb auras deal 5/contact and
+   detonate at the 200 threshold; bursts grow 12.8/12 frames (deathbomb
+   8.5333/15) with a 4.2667/30 clear; every bomb clear quad carries
+   param6=6 → pointStar conversion.
+7. **Bullets**: spawn-state transitions run their authored duration then
+   frac+full fall-through (the old fixture-pinned +2 is gone); the quad
+   latch probes ALL quad families at the creep-only position with
+   first-hit-wins (a later overlapping quad may not overwrite the latch),
+   and the deferred conversion pays BEFORE the normal-state cull.
+8. **Effects/HUD**: effect-51 fireflies are world-space particles built
+   from the eight u32 draws inside the measured 26-draw cost (camera +
+   signed offsets, drifting out of the viewing cone); ScreenInf jobs run
+   at the update head (priority 3 < replay feed 6); the difficulty tag
+   reads sprites 283+ from pause.png (ascii.anm's third entry), and the
+   human/youkai gauge is ascii.anm scripts 5-8 verbatim (plate, limit
+   icons, center-anchored cursor, 8x12 gauge glyphs).
+
+**Standing residual of this pass — the stage-2 f680..1237 8-draw gap.**
+The pacing test's f1237 seed checkpoint (native 18767) reads
+ours = native + 8 u16 draws (LFSR-walk-verified; 0.05% of the window's
+17.6k draws). The gauge trajectory still matches exactly through f1276,
+so gameplay events are unchanged; the error is purely in the draw
+economy. CI per-source profiling of the window decomposes our 17602
+draws as: 16976 spawnEffectParticles (ambient fireflies at exactly
+1/frame = 560 arms x 26, kill/drop/impact particles), 240 ScreenFx
+shake ticks (4 groups x 15 x 4 — matches the modeled boundary-beam
+groups), 192 collect checksums (48 paying collects), 96 auto-fire phase
+arms (48 ins_106 executions = fairy spawns), 88 state-3 scatter pairs
+(22 item spawns), 8 bomb-trigger integrity, 2 aura arm. Every one of
+these consumer costs is individually exe-verified; the residual is a
+COUNT difference (4 u32 calls) in one of the small families — most
+likely ins_105/106 spawn arms vs the authored timeline, or in-window
+shot impacts — and oscillates downstream (+4/-4/+16... with one kill
+shifted a few frames; gauge re-syncs to exact at f2218). Pinning it
+needs a native per-frame draw profile (wine — unavailable on this
+host). The test keeps f1237/f1276 as hard checkpoints and records the
+downstream deltas as logged residuals; the replay job's advisory
+divergence (stage 1 f3192 / stage 2 f3367 first unexpected hits under
+the new stricter oracle) is the same class of cascade. Do NOT close
+this by clamping draw counts or special-casing frames.
+
 **2026-08-19 full TH08-ification (commits 4855d94..605d359): the TH07 path
 is REMOVED.** The engine is single-path: `runState` (Th08RunState) is
 unconditional in StageScene, Border Team is the only character, formats are

@@ -52,10 +52,14 @@ pointItems/gauge/clock/RNG 残差）。CI 以 advisory（非阻塞）方式运�
 
 - **范围**：垂直切片 = Stage 1 + Stage 2 + Border Team。无 Stage 3+/其他
   队伍/全难度完整回归。
-- **Replay 收敛**：Stage 1 在 ~f2884、Stage 2 在 ~f1052 处发散（自动炮相位的
-  RNG 抽签残差，首个幻影弹着，其余为级联），根因候选与完整分析记录在
-  `AGENTS.md` §0 与 `HANDOFF.md`。playable 路径本身（弹幕、对话、HUD、炸弹、
-  Boss 呈现）由 th08-* 回归测试与 CI 浏览器启动检查守护。
+- **Replay 收敛**：两面的逐帧 oracle 在 CI 分别运行（advisory），以
+  `EARLIEST DIVERGENCE` 输出作为收敛反馈通道。当前残差：Stage 1 首个
+  意外弹着 f3193、Stage 2 f3368（新版更严的意外弹着判据，与旧版
+  f2884/f1052 口径不可直接比较）；其上游是 Stage 2 f680..1237 窗口内
+  一次 8-u16 的抽签经济残差（占该窗口 17.6k 抽的 0.05%，事件面完全
+  对齐），根因候选与完整分析记录在 `AGENTS.md` §0 与 `HANDOFF.md`。
+  playable 路径本身（弹幕、对话、HUD、炸弹、Boss 呈现）由 th08-* 回归
+  测试与 CI 浏览器启动检查守护。
 - 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序等）。
 
 ## 资产生成 / Regenerating embedded data

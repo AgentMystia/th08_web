@@ -52,6 +52,17 @@ test('youkai gauge clamps and honors the native lock/copy behavior', () => {
   assert.equal(state.youkaiGaugeCopy, -9500);
 });
 
+test('firing gauge drift ramps from timer/15 and caps at 21', () => {
+  const state = new Th08RunState(3);
+  assert.equal(state.gaugeFireDrift(false, 0), 0);
+  assert.equal(state.gaugeFireDrift(false, 14), 0);
+  assert.equal(state.gaugeFireDrift(false, 15), -1);
+  assert.equal(state.gaugeFireDrift(false, 300), -20);
+  assert.equal(state.gaugeFireDrift(false, 301), -21);
+  assert.equal(state.gaugeFireDrift(false, 900), -21, 'native uses a fixed cap, not timer/15 forever');
+  assert.equal(state.gaugeFireDrift(true, 301), 21);
+});
+
 test('point-item extend thresholds follow the v1.00d tables', () => {
   const state = new Th08RunState(3);
   const expected = [100, 250, 500, 800, 1100, 9999, 10499];

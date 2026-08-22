@@ -143,6 +143,29 @@ test('TH08 var math: raw compound assigns and the 3-operand a-b form', () => {
   assert.equal(enemy.ecl.vars[8], 100);
 });
 
+test('TH08 unsigned RNG float vars preserve the upper half of each u32', () => {
+  // FUN_0043ed20 assembles two u16 draws into an *unsigned* u32. JS bitwise
+  // operators otherwise sign-extend 0x80000000, turning native rand01=0.5
+  // into -0.5. The signed-angle variants must use that same unsigned source.
+  const runtime = makeRuntime([[
+    instruction(0, 7, [varId(10016), varId(10033)]),
+    instruction(0, 7, [varId(10017), varId(10035)]),
+    instruction(0, 7, [varId(10018), varId(10082)]),
+    instruction(1, 1)
+  ]]);
+  const game = makeHost([
+    0x8000, 0,
+    0x8000, 0,
+    0x8000, 0
+  ]);
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 40, y: 60 });
+  runTicks(runtime, game, enemy, 1);
+
+  assert.equal(enemy.ecl.vars[8], 0.5);
+  assert.equal(enemy.ecl.vars[9], 0);
+  assert.ok(Math.abs(enemy.ecl.vars[10]) < 0.000001, `angle=${enemy.ecl.vars[10]}`);
+});
+
 test('TH08 vars 10085-10087 expose the native additive position offset', () => {
   // Stage-1 Sub32 reads 10085/10086 to build its cubic boss-movement
   // control points. Falling through to the literal variable id launches the
@@ -160,6 +183,135 @@ test('TH08 vars 10085-10087 expose the native additive position offset', () => {
   assert.deepEqual(enemy.ecl.th08.movement.positionOffset, { x: 2.5, y: -1.25, z: 0 });
   assert.equal(enemy.ecl.vars[8], 250);
   assert.equal(enemy.ecl.vars[9], -125);
+});
+
+test('TH08 ins_79/80/81 keep shot, body and HP-damage gates in raw-bit lockstep', () => {
+  // The first three mask bits map to flags bits 6/2/3. Wriggle's spell
+  // declarations use ins_80(4), wait 90 frames, then ins_81(4): HP must not
+  // fall during that authored declaration window.
+  const runtime = makeRuntime([[
+    instruction(0, 79, [i32(0)]),
+    instruction(1, 80, [i32(7)]),
+    instruction(2, 81, [i32(7)]),
+    instruction(3, 1)
+  ]]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 40, y: 60 });
+
+  assert.equal((enemy.ecl.th08.flags & (0x40 | 4 | 8)), 0x40 | 4 | 8);
+  assert.equal(enemy.ecl.shotCollision, true);
+  assert.equal(enemy.ecl.collisionEnabled, true);
+  assert.equal(enemy.ecl.canTakeDamage, true);
+
+  runtime.tickEnemyCore(game, enemy);
+  assert.equal((enemy.ecl.th08.flags & (0x40 | 4 | 8)), 0);
+  assert.equal(enemy.ecl.shotCollision, false);
+  assert.equal(enemy.ecl.collisionEnabled, false);
+  assert.equal(enemy.ecl.canTakeDamage, false);
+
+  runtime.tickEnemyCore(game, enemy);
+  assert.equal((enemy.ecl.th08.flags & (0x40 | 4 | 8)), 0x40 | 4 | 8);
+  assert.equal(enemy.ecl.shotCollision, true);
+  assert.equal(enemy.ecl.collisionEnabled, true);
+  assert.equal(enemy.ecl.canTakeDamage, true);
+});
+
+test('TH08 enemy template starts with native shot/body/damage raw flags enabled', () => {
+  // FUN_00429e00 sets raw bits 2, 3 and 6 in the copied enemy template.
+  // Stage-2 Sub1 only clears body contact with ins_80(2); shot contact and
+  // damage must remain enabled so the opening fairies can actually die.
+  const runtime = makeRuntime([[
+    instruction(0, 80, [i32(2)]),
+    instruction(10, 1)
+  ]]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 40, y: 60 });
+
+  assert.equal(enemy.ecl.th08.flags & (0x40 | 8 | 4), 0x40 | 8);
+  assert.equal(enemy.ecl.shotCollision, true);
+  assert.equal(enemy.ecl.collisionEnabled, false);
+  assert.equal(enemy.ecl.canTakeDamage, true);
+});
+
+test('TH08 ins_160 arms the per-enemy damage shield and consumes its arm frame', () => {
+  // Native /proc memory trace of Stage-2 Sub1: ins_160(8) leaves +0x535c at
+  // 7 after the spawn pass, then 6..1..0 on the following seven manager
+  // tails. It does not freeze the ECL instruction clock (raw ins_2 does).
+  const runtime = makeRuntime([[
+    instruction(0, 160, [i32(8)]),
+    instruction(1, 6, [i32(10000), i32(42)]),
+    instruction(20, 1)
+  ]]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 40, y: 60 });
+
+  runtime.tickEnemyCore(game, enemy);
+  assert.equal(enemy.ecl.damageShield, 8);
+  runtime.tickEnemyManagerTail(game, enemy);
+  assert.equal(enemy.ecl.damageShield, 7);
+
+  runtime.tickEnemyCore(game, enemy);
+  assert.equal(Math.trunc(enemy.ecl.vars[0]), 42, 'ins_160 incorrectly stalled ECL dispatch');
+  for (let i = 0; i < 7; i++) runtime.tickEnemyManagerTail(game, enemy);
+  assert.equal(enemy.ecl.damageShield, 0);
+});
+
+test('TH08 ins_145 sets the laser-effect flag without skipping later t0 setup', () => {
+  // Raw opcode 0x91 maps to exe case 0x90. Stage 2 puts it before every
+  // familiar's movement setup; treating it as the adjacent ClockAdd opcode
+  // skips the rest of that t0 row and leaves the familiar motionless.
+  const runtime = makeRuntime([[
+    instruction(0, 145, [i32(1)]),
+    instruction(0, 7, [varId(10016), f32(0.5)]),
+    instruction(0, 65, [varId(10016), f32(2)]),
+    instruction(1, 1)
+  ]]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 40, y: 60 });
+
+  assert.equal((enemy.ecl.th08.flags & 0x02000000) !== 0, true);
+  assert.equal(enemy.ecl.vars[8], 0.5, 'ins_145 skipped the remaining t0 instructions');
+  assert.equal(enemy.ecl.th08.movement.mode, 1);
+  assert.notEqual(enemy.ecl.axisSpeed.x, 0);
+});
+
+test('TH08 retained mode-3 death rearms the next boss-phase death exactly once', () => {
+  const runtime = makeRuntime([[], []]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 40, y: 60, life: 100 });
+  const t = enemy.ecl.th08;
+  enemy.ecl.deathCallbackSub = 1;
+  t.flags |= 8 | (3 << 20);
+  enemy.hp = 0;
+
+  assert.equal(runtime.shouldSettleEnemyDeath(enemy), true);
+  assert.equal(runtime.killEnemy(game, enemy), true, 'mode 3 retains callback actor');
+  assert.equal(enemy.hp, 1);
+  assert.equal((t.flags >> 20) & 7, 0, 'native mode field reset for next death');
+  assert.equal((t.flags & 8) !== 0, false, 'damage gate stays down until ECL restores it');
+  assert.equal(enemy.ecl.canTakeDamage, false);
+  assert.equal((t.flags2 & 8) !== 0, true, 'death latch set by first settlement');
+
+  assert.equal(runtime.shouldSettleEnemyDeath(enemy), false, 'positive HP only rearms');
+  assert.equal((t.flags2 & 8) !== 0, false, 'positive HP clears retained-death latch');
+  enemy.hp = 0;
+  assert.equal(runtime.shouldSettleEnemyDeath(enemy), true, 'next phase may now settle');
+  assert.equal(runtime.killEnemy(game, enemy), false, 'cleared raw mode makes next death remove');
+});
+
+test('TH08 gauge-extreme enemy death emits the native time item', () => {
+  const runtime = makeRuntime([[]]);
+  const game = makeHost();
+  const spawned = [];
+  game.th08GaugeExtreme = () => true;
+  game.spawnItem = (type, x, y, options) => spawned.push({ type, x, y, options });
+  const enemy = runtime.spawnEclEnemy(game, {
+    subId: 0, x: 40, y: 60, life: 10, item: -2
+  });
+  enemy.hp = 0;
+
+  assert.equal(runtime.killEnemy(game, enemy), false);
+  assert.deepEqual(spawned, [{ type: 'time', x: 40, y: 60, options: { state: 1 } }]);
 });
 
 test('TH08 enemy-scope locals survive a CALL that redefines frame locals', () => {
@@ -246,6 +398,8 @@ test('all 21 TH08 bullet prototypes resolve their main script in etama.anm', () 
   // Hitbox derivation: type 0 is the 8x8 pellet (4.0), type 10 the 64px
   // bubble (24.0), type 7 the 32px orb family (10.0 default branch).
   assert.equal(runtime.th08BulletHitbox(0), 4);
+  assert.equal(runtime.th08BulletHitbox(1), 6);
+  assert.equal(runtime.th08BulletHitbox(3), 6);
   assert.equal(runtime.th08BulletHitbox(10), 24);
   assert.equal(runtime.th08BulletHitbox(7), 10);
 });
@@ -326,7 +480,11 @@ test('TH08 Stage-1 opening mob waves retain the authored Lunatic spawn and FIRE 
     angle2: event.data.angle2, aimMode: event.data.aimMode,
     flags: event.data.flags
   });
-  assert.deepEqual(primaryFire.slice(0, 2).map(fireSignature), [
+  const sub1Authored = [30, 34].map((clock) =>
+    primaryFire.find((event) => event.sub === 1 && event.clock === clock)
+  );
+  assert.ok(sub1Authored.every(Boolean), 'Sub1 authored clock-30/34 volleys missing');
+  assert.deepEqual(sub1Authored.map(fireSignature), [
     {
       sub: 1, clock: 30, sprite: 2, offset: 2, ways: 32, stacks: 2,
       // Rank-8 lerp with the ECL-context init bounds ±0.15 (all.c:19955-19956;
@@ -492,6 +650,42 @@ test('TH08 timeline: op1 mirror spawn, rank filter, and the 13/14 latch', () => 
   assert.ok(t1Index >= 0, 'latched timeline never fired');
   assert.ok(logAt[4] === t1Index, `latched spawn fired before release: ${logAt}`);
   assert.ok(logAt[6] === t1Index + 1, `latched spawn late: ${logAt}`);
+});
+
+test('TH08 timeline: op14 fills every free latch and op13 clears every match', () => {
+  const ecl = makeEcl8Timelines(
+    [[instruction(0, 1)], [instruction(0, 1)], [instruction(0, 1)], [instruction(0, 1)]],
+    [
+      [
+        tlEvent(0, 14, [i32(7)]),
+        // Native op14 cannot insert this id while all four slots contain 7.
+        tlEvent(1, 14, [i32(8)])
+      ],
+      [
+        tlEvent(3, 13, [i32(7)]),
+        // op13(7) clears all four copies, so id 8 remains absent and parks.
+        tlEvent(4, 13, [i32(8)])
+      ]
+    ]
+  );
+  const runtime = new StageRuntime(
+    { ...TH08_DATA.stages[1], ecl },
+    { etama, enemy: enemyAnm, effect: effectAnm }
+  );
+  const game = makeHost();
+
+  for (let frame = 0; frame < 3; frame++) {
+    game.frame = frame;
+    runtime.update(game);
+  }
+  assert.deepEqual(runtime.timelineLatches, [7, 7, 7, 7]);
+
+  for (let frame = 3; frame < 8; frame++) {
+    game.frame = frame;
+    runtime.update(game);
+  }
+  assert.deepEqual(runtime.timelineLatches, [-1, -1, -1, -1]);
+  assert.equal(runtime.timelineCursors[1].frame, 4, 'missing id 8 latch must keep timeline 1 parked');
 });
 
 test('TH08 timeline: spawn ops drop while a boss is registered, op15 bypasses', () => {

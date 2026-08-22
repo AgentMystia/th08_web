@@ -48,11 +48,10 @@ jobs:
       - run: npm run prepare-pages
       - run: node scripts/browser-boot.mjs dist/pages 300
 
-  # Stage-1 replay convergence oracle. ADVISORY ONLY: the run is known to
-  # diverge (first unexpected player hit ~f3301; root-cause candidates are
-  # tracked in HANDOFF.md). continue-on-error keeps CI green while the
-  # EARLIEST DIVERGENCE output stays visible as the convergence feedback
-  # channel. Promote to a gate (drop continue-on-error) once it passes.
+  # Stage-1 + Stage-2 replay convergence oracles. Frame alignment is again
+  # the primary fidelity feedback channel. They remain advisory only while
+  # the known formal replays still diverge; promote each step independently
+  # once its stage passes end-state + RNG verification.
   replay:
     runs-on: ubuntu-latest
     steps:
@@ -68,9 +67,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node22-testbuild-replay-${{ hashFiles('package-lock.json') }}-
       - run: npm ci
-      - name: replay convergence (advisory — known Stage-1 divergence, see HANDOFF.md)
+      - name: Stage 1 replay convergence (advisory)
         continue-on-error: true
-        run: npm run replay:verify:th08
+        run: node scripts/replay-verify-th08.mjs --stage 1
+      - name: Stage 2 replay convergence (advisory)
+        continue-on-error: true
+        run: node scripts/replay-verify-th08.mjs --stage 2
 
   pages:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

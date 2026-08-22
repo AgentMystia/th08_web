@@ -121,7 +121,7 @@ test('TH08 SHT decodes the 56-byte header, records, unknowns, and callbacks', { 
       [3, 1.649999976158142, 2.799999952316284, 10, 24, 128]
     );
     assert.deepEqual(
-      [sht.deathbombWindow, sht.headerUnknown32, sht.headerUnknown52],
+      [sht.deathbombWindow, sht.headerUnknown32, sht.itemMoveRate],
       [18, 8000, 0.8999999761581421]
     );
   }
@@ -129,14 +129,14 @@ test('TH08 SHT decodes the 56-byte header, records, unknowns, and callbacks', { 
   assert.deepEqual(focused.levels.map((level) => level.shots.length), [2, 2, 3, 4, 5, 7]);
   for (const sht of [unfocused, focused]) {
     const records = sht.levels.flatMap((level) => level.shots);
-    assert.deepEqual([...new Set(records.map((shot) => shot.shotType))], [0]);
+    assert.deepEqual([...new Set(records.map((shot) => shot.shotType))], [0, 1]);
     assert.ok(records.every((shot) => shot.funcs[0] === 0 || shot.funcs[0] === 1));
     assert.ok(records.every((shot) => shot.funcs[1] === 0 || shot.funcs[1] === 1));
   }
 
   const shot = unfocused.levels[0].shots[0];
   assert.deepEqual(
-    ['interval', 'delay', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'unknown30', 'orb']
+    ['interval', 'delay', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'unknown30', 'source']
       .map((key) => shot[key]),
     [5, 0, 0, 0, 18, 48, -1.5707963705062866, 16, 48, -50, 0]
   );
@@ -144,11 +144,10 @@ test('TH08 SHT decodes the 56-byte header, records, unknowns, and callbacks', { 
 
   const angled = unfocused.levels[1].shots[1];
   assert.deepEqual(
-    ['interval', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'orb', 'unknown33', 'sprite']
+    ['interval', 'x', 'y', 'hitboxW', 'hitboxH', 'angle', 'speed', 'damage', 'source', 'shotType', 'sprite']
       .map((key) => angled[key]),
-    [15, 0, 0, 18, 18, -2.094395160675049, 10, 14, 0, 0, 2]
+    [15, 0, 0, 18, 18, -2.094395160675049, 10, 14, 0, 1, 2]
   );
-  assert.equal(angled.unknown34, 1);
   assert.deepEqual(angled.funcs, [0, 1, 0, 0]);
 });
 

@@ -19,6 +19,20 @@ function makeScene(stageNumber = 1) {
   return scene;
 }
 
+test('constructing the stage performs only the two native drop-cursor RNG draws', () => {
+  const seed = rpy.stages[1].rngSeed;
+  const advance = (value) => {
+    const a = ((value ^ 0x9630) - 0x6553) & 0xffff;
+    return (((a & 0xc000) >> 14) + a * 4) & 0xffff;
+  };
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team,
+    2, null, seed
+  );
+  assert.equal(scene.rng.seed, advance(advance(seed)),
+    'AddedCallback draws twice; render-only cached item VMs draw nothing');
+});
+
 test('the tally clock advance is +1 when the stage quota is met, +2 when missed', () => {
   const met = makeScene(1);
   met.runState.currentTimeOrbs = 3000; // Lunatic stage-1 quota is 3000

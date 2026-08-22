@@ -89,9 +89,10 @@ export class Th08ItemSpawnPool {
       current.y = f32(options.y);
       current.z = f32(options.z ?? 0);
       current.vx = 0;
-      // Item spawner FUN_004400a0 writes +0x2b4 = 0xc00ccccd = -2.1875f for
-      // the plain fall state.
-      current.vy = f32(-2.1875);
+      // Item spawner FUN_004400a0 writes +0x2b4 = 0xc00ccccd = -2.2f for
+      // the plain fall state. Reading that literal as -2.1875 left every
+      // ordinary drop 0.0125 px/frame too slow before the gravity tail.
+      current.vy = f32(-2.2);
       current.vz = 0;
       current.type = type;
       current.state = state;
@@ -105,9 +106,11 @@ export class Th08ItemSpawnPool {
         current.vy = current.y;
         current.vz = current.z;
       } else if (state === 3 || state === 5) {
-        // FUN_004400a0 param_4==3: vy = -2.0 - rng01*0.1 (0x3e4ccccd), vx a
-        // signed rng01*0.6.
-        current.vy = f32(f32(-2) - f32(options.rng.range(0.1)));
+        // FUN_004400a0 param_4==3: vy = -2.0 - rng01*0.2
+        // (0x3e4ccccd), vx a signed rng01*0.6. The old 0.1 transcription
+        // confused the IEEE-754 literal; native Stage-2 slot 1 starts at
+        // -2.017016 and reaches -1.957016 after its first update.
+        current.vy = f32(f32(-2) - f32(options.rng.range(0.2)));
         current.vx = randomSigned(0.6, options.rng);
         if (options.playerDead) {
           current.state = 0;
