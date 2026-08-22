@@ -620,8 +620,10 @@ coordinates, RNG seeds at specific frames).
    skip pickup until they crest into state 1. Point value above PoC is
    full; below it degrades linearly with the rounded distance, and the
    rank award is +10 full / +3 partial, +1 per powerSmall, +5 per bomb
-   item. Collect draws: 4 u16 for full items and time orbs, 0 for
-   pointStar/pointSmall fragments. Crossing to full power runs
+   item. Collect checksum draws (FUN_00406e50 = 2 u32 = 4 u16) are
+   per-PATH: point/time always; powerSmall/powerBig only below full
+   power; bomb items only below stock 8; extends only when maxed lives
+   convert to a bomb; pointStar/pointSmall/powerFull never. Crossing to full power runs
    FUN_00415c60's mode-1 point-star field clear plus FUN_00441450's
    power→pointSmall conversion (2 u32 per converted item).
 4. **Damage pipeline** (FUN_00451670/0041ed50): shots during the player's

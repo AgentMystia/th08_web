@@ -5261,15 +5261,34 @@ export class StageScene implements GameHost {
       data: { type: it.type, slot: it.poolSlot, x: it.x, y: it.y }
     });
     this.playSfx(21); // TH08 item00 channel
-    // The collect presentation is type-dependent. Full items (0..5) and
-    // time orbs (7) re-arm a VM path that consumes four raw u16s: native
-    // Stage-1 power/point pickups and the dense Stage-2 time-orb census pin
-    // that cost independently. Point stars (6) and point-small fragments
-    // (8) use the cheap fragment tail and draw zero — native Stage-2 f663
-    // collects type 8 with an unchanged global counter, then f664 removes
-    // two type-6 fragments with the counter still unchanged. Charging every
-    // pickup advanced the first auto-fire lottery by four draws.
-    if (it.type !== 'pointStar' && it.type !== 'pointSmall' && it.type !== 'unknown9') {
+    // The collect switch's FUN_00406e50 checksum (two u32 integrity values
+    // = 4 raw u16) is per-PATH, not per-pickup: point and time-orb
+    // collects always pay it (FUN_00440e40's tail / FUN_004412b0 ->
+    // FUN_00418220); powerSmall/powerBig only below full power
+    // (FUN_00441850 lives inside the power<0x80 bracket, all.c:31138 vs
+    // the skipped full-power head); a bomb item only below stock 8
+    // (FUN_00439883 in case 3); an extend only when maxed lives convert
+    // it into a bomb (FUN_00439b29's else arm). pointStar, pointSmall,
+    // powerFull and unknown9 draw zero. Charging every pickup left two
+    // full-power stage-2 collects 8 draws ahead of native by f1237.
+    // The gates read the PRE-collect stock, matching the native head
+    // tests (collectItemTh08 below performs the mutations).
+    let paysIntegrityChecksum = false;
+    switch (it.type) {
+      case 'point': case 'time': case 'time2':
+        paysIntegrityChecksum = true;
+        break;
+      case 'powerSmall': case 'powerBig':
+        paysIntegrityChecksum = this.playerObj.power < 128;
+        break;
+      case 'bomb':
+        paysIntegrityChecksum = this.playerObj.bombs < 8;
+        break;
+      case 'extend':
+        paysIntegrityChecksum = this.playerObj.lives >= 8 && this.playerObj.bombs < 8;
+        break;
+    }
+    if (paysIntegrityChecksum) {
       this.rng.f();
       this.rng.f();
     }
