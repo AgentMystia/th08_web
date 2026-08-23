@@ -181,6 +181,11 @@ function auditSynthetic(stageNumber, difficulty, opts = {}) {
       scene.playerObj.invulnFrames = 999999;
       scene.playerObj.bombInvuln = 999999;
     }
+    if (opts.quotaMet != null) {
+      // Pin the time-orb count every frame: an 'unmet' run must not cross
+      // the quota through natural orb drops before the boss dies.
+      scene.runState.currentTimeOrbs = opts.quotaMet ? 99999 : 0;
+    }
     let word = 0x5;
     if (bombEvery && f % bombEvery === 0 && f > 4000) word |= 0x2;
     scene.update(inputBits(word));
@@ -216,7 +221,10 @@ for (const difficulty of [0, 1, 2]) {
     for (const c of spellCards) console.log(`card f${c.f} "${c.name}" maxBullets=${c.maxBullets}`);
     const cards = spellCards.filter((c) => c.maxBullets > 10);
     assert.ok(cards.length >= 2, `D${difficulty}: at least two cards emit bullets`);
-    assert.ok(!log.some((l) => l.includes('inv=1')), `D${difficulty}: the mode-1 hide latch never sticks`);
+    const hb = log.filter((l) => l.includes('hb '));
+    let streak = 0;
+    for (const l of hb) streak = l.includes('inv=1') ? streak + 1 : 0;
+    assert.ok(streak === 0, `D${difficulty}: the mode-1 hide latch never sticks (stuck across ${streak} heartbeats)`);
   });
 }
 

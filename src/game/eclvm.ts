@@ -2412,6 +2412,12 @@ export class StageRuntime {
     const s = e.ecl;
     if (script < 0) return;
     const anm = this.enemyAnmFor(s);
+    // Any (re-)arm of the main ANM re-shows the sprite: after a mode-1
+    // death the retained actor stays hidden (flags bit23, draw-side only)
+    // until the next phase's ins_54/ins_58 arms a fresh VM — stage-2's
+    // Sub22 runs ins_58(0) right after the mid-fight uncloak, which is
+    // what makes Mystia visible again in the original.
+    s.invisible = false;
     // The same script id can live in both TH08 enemy files — the cache key
     // must include the file or a file switch would keep the stale runner.
     if (s.currentAnm === script && s.anmRunnerAnm === anm) return;
@@ -4066,14 +4072,11 @@ export class StageRuntime {
       }
       case 129: {
         // Death type (all.c:12724-12728): flags = (flags & 0xff8fffff) |
-        // ((u8)arg & 7) << 20 — the mask clears bits 20-23, i.e. writing the
-        // mode ALSO clears bit23 (0x800000), the death-switch case-1 render
-        // HIDE. Mystia's post-spell transition (Sub22) re-declares ins_129(1)
-        // right after the uncloak; with the narrower ~0x700000 mask the hide
-        // latch survived forever and she stayed spriteless for the whole
-        // rest of the fight.
-        t.flags = (t.flags & 0xff8fffff) | ((gi(0) & 7) << 20);
-        s.invisible = (t.flags & 0x800000) !== 0;
+        // ((u8)arg & 7) << 20. The 0xff8fffff mask clears ONLY bits 20-22
+        // (the previous mode) — bit23 (0x800000), the death-switch case-1
+        // hide, is PRESERVED across ins_129 (native re-shows the sprite via
+        // the next phase's ins_54/58 ANM re-arm, not via ins_129).
+        t.flags = (t.flags & ~0x700000) | ((gi(0) & 7) << 20);
         return null;
       }
       case 130: s.deathCallbackSub = v.i32(a); return null;
