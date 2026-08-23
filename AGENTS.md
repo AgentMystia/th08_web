@@ -647,6 +647,53 @@ sim-visible past f3193/f1051-class windows only (the fixture's hard
 checkpoints f1237/f1276 sit before every affected site), so the pacing
 test stays intact while the advisory whole-stage numbers may move.
 
+### 2026-08-24 boss-fidelity pass (research/boss-fidelity-audit; port-side only)
+
+Wine/ptrace is CLOSED (user decision): all native questions are answered
+from the decompile + .rdata static reads; verification is the podman node
+runner (tmp/podman-node/run.sh — bind-mounted src/tests/scripts/assets,
+persistent th08-nm volume, node:22) plus CI for pushes.
+
+Four user-reported breaks, root-caused and fixed:
+
+1. **Mystia invincible + invisible after her mid-fight transition.** The
+   mode-1 death hide (flags bit23) is DRAW-SIDE ONLY in the native damage
+   settlement (all.c:21449+ gates on the semantic bits); the port gated
+   damage/shot/body on ecl.invisible, so the retained Mystia was permanently
+   immune to direct fire (damage only flowed via familiar shares). The
+   native re-show is the next phase's ins_54/ins_58 ANM re-arm (stage-2
+   Sub22 runs ins_58(0) right after the uncloak); ins_129's 0xff8fffff mask
+   clears bits 20-22 ONLY (bit23 survives — an earlier reading here was
+   wrong; do not "fix" it back). setCurrentAnm clears the render-hide.
+2. **Last Spell quota gate.** var 10098 (resolver case 0x2772,
+   all.c:14145-14152) = 2 when the stage time-orb quota (DAT_004c77f0) is
+   met; the boss bodies (stage-1 Sub37 / stage-2 Sub32) run their ins_50
+   against it and ins_1 immediately when unmet. The port's literal
+   fallback ran the bodies regardless of quota. A quota-unmet run has NO
+   Last Spell — native behavior, not a defect. canTakeDamage now also
+   honors flags bit4 (the ins_80(8) gate the Last Spell bodies use).
+3. **四重結界 beam visuals frozen.** FUN_004117b0 advances the wave-VM
+   angle ±pi/80 per tick (0x3d20d97c = f32(pi/80)) and renders from that
+   engine state; the etama scripts 88-95 carry only sprite/color/fade, so
+   the port's plain effect entries sat at identity rotation/scale.
+   Th08BorderBomb.beamVisualFrames() + StageScene render four additive
+   quads per group (etama sprite 225, authored wave colors), rotating for
+   the authored 140-frame life. §7: FUN_00464b00's instance fan-out is
+   the flagged approximation. .rdata-verified constants: 0x4b4300=8.0,
+   0x4b4308=4.0, 0x4b4524=pi/4, 0x4b4520=1/sqrt2, 384/192/32 radius bases,
+   88/80/50 size interp; op80/op81 are UV scroll velocities (stg6bg args
+   1/16000) — the beams stay CAST-anchored (pacing f1276 gauge pins it).
+4. **Dialogue confirm semantics re-verified native**: gui-run-msg.c case 4
+   requires a Z RISING edge with counter>=threshold (6/8/30); HELD Z never
+   confirms — long unskipped conversations are the authored timeout pace,
+   not a stall. Ctrl (0x100) skip bypasses wait bodies wholesale.
+
+Audit harness (tests/th08-boss-audit.test.mjs): full-fight phase ledger +
+card bullet censuses per stage (recorded replay and synthetic focus-fire),
+E/N/H/L sweeps, a bombing variant, a pinned-orb quota A/B, and the
+wave-anchor/beam-rotation locks in th08-border-bombs.test.mjs. 197/197
+local via the podman runner.
+
 ### 2026-08-23 scheduler-boundary + item/damage economy pass
 
 The interrupted follow-up to the 999b644 movement rework, rebuilt from
