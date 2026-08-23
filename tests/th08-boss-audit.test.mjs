@@ -76,7 +76,7 @@ function auditStage(stageNumber, extraFrames) {
   for (let f = 0; f < frames; f++) {
     scene.playerObj.invulnFrames = 999999;
     scene.playerObj.bombInvuln = 999999;
-    const word = f < inputs.length ? inputs[f] : 0x1;
+    const word = f < inputs.length ? inputs[f] : 0x5;
     scene.update(inputBits(word));
     const dialogue = scene.isDialogueActive();
     if (dialogue !== lastDialogue) { log.push(`f${f} dialogue ${dialogue ? 'start' : 'end'}`); lastDialogue = dialogue; }
@@ -105,6 +105,19 @@ function auditStage(stageNumber, extraFrames) {
       }
       prev.set(e.id, { key: key(p), p });
     }
+    // A boss enemy leaving the list entirely (mode-0 removal) or dying.
+    for (const [id, snap0] of prev) {
+      if (!scene.enemies.some((e) => e.ecl && e.ecl.isBoss && e.id === id && !e.dead)) {
+        log.push(`f${f} e${id} LEFT sub=${snap0.p.sub} hp=${snap0.p.hp} inv=${snap0.p.inv} sbd=${snap0.p.sbd} bt=${snap0.p.bt} tt=${snap0.p.tt}`);
+        prev.delete(id);
+      }
+    }
+  }
+  for (const e of scene.enemies) {
+    if (e.ecl && e.ecl.isBoss && !e.dead) {
+      const p = snap(e);
+      log.push(`END e${e.id} sub=${p.sub} hp=${e.hp} inv=${p.inv} sbd=${p.sbd} bt=${p.bt} tt=${p.tt}`);
+    }
   }
   return { log, spellCards, dmgFrames };
 }
@@ -115,8 +128,7 @@ test('stage 1 full boss fight: phases, cards, Last Spell', () => {
   for (const line of log) console.log(line);
   console.log('=== STAGE 1 CARDS ===');
   for (const c of spellCards) console.log(`f${c.f} "${c.name}" maxBullets=${c.maxBullets} hpDrop=${c.hpDrop}`);
-  const subs = [...new Set(log.match(/sub-?\d+/g) ?? [])];
-  console.log('sub ids seen:', subs.join(','));
+  console.log('sub transitions seen');
   assert.ok(log.some((l) => / sub38 /.test(l) || / sub38$/.test(l) || l.includes('sub38 ')), 'spell 1 sub 38 runs');
   assert.ok(log.some((l) => l.includes('sub44 ')), 'spell 2 sub 44 runs');
   assert.ok(log.some((l) => l.includes('sub37 ')), 'Last Spell body sub 37 spawns');
