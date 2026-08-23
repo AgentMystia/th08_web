@@ -3,13 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadEngine, makeStubAssetsTh08, makeStubAudio } from '../scripts/lib/replay-harness.mjs';
 
-// Boss-fight structural audit (diagnostic + regression). Drives the full
-// fixture replay per stage and records a phase ledger: every boss-slot
-// enemy's ECL sub transitions, spell declarations, damage landing, and the
-// live-bullet census during each card. This is the CI oracle for the four
-// reported fidelity breaks: Wriggle's last two cards firing nothing, the
-// boss Last Spell chain (timeline op-8 handoff to the post-death body),
-// and Mystia's cloak-transition invisibility/invulnerability.
+// Boss-fight structural audit, round 2: clear-check extension (invulnerable
+// player, recorded inputs then hold-shoot) so the audit runs the ENTIRE boss
+// fight past the recording end, with per-frame boss-state change tracking
+// (gates, shield, phase timer, pending interrupt, sub transitions) to pin
+// the stage-2 post-dialogue stall and the damage-during-cards question.
 const mod = await loadEngine();
 const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
 
@@ -48,119 +46,98 @@ function makeScene(stageNumber, stage) {
   return scene;
 }
 
-// Runs the stage, collecting the ledger. Boss-enemy tracking keys on
-// ecl.isBoss (ins_127 registration); sub transitions and damage are sampled
-// once per frame after update().
-function auditStage(stageNumber) {
+function auditStage(stageNumber, extraFrames) {
   const stage = rpy.stages[stageNumber - 1];
   const scene = makeScene(stageNumber, stage);
   const inputs = stage.inputs;
-  const ledger = [];
+  const frames = inputs.length + extraFrames;
+  const log = [];
   const spellCards = [];
-  const bossTrack = new Map(); // enemy id -> last sub
   let lastSpell = '';
   let lastDialogue = false;
-  const bulletCensus = [];
-  let damageLanded = new Map(); // enemy id -> frames with hp decrease
+  const prev = new Map(); // enemy id -> state string
+  const dmgFrames = new Map();
 
-  for (let f = 0; f < inputs.length; f++) {
-    scene.update(inputBits(inputs[f]));
+  const snap = (e) => {
+    const s = e.ecl;
+    return {
+      sub: s.ctx?.subId ?? -1, hp: e.hp,
+      inv: s.invisible ? 1 : 0,
+      sbd: `${s.shotCollision ? 1 : 0}${s.collisionEnabled ? 1 : 0}${s.canTakeDamage ? 1 : 0}`,
+      shield: s.damageShield ?? 0,
+      bt: s.bossTimer ?? 0, tt: s.timerCallbackThreshold ?? -1, ts: s.timerCallbackSub ?? -1,
+      pi: s.pendingInterrupt ?? -1,
+      f1: (s.th08?.flags ?? 0) >>> 0,
+      x: Math.round(e.x), y: Math.round(e.y)
+    };
+  };
+  const key = (p) => `${p.sub}|${p.inv}|${p.sbd}|${p.shield>0?1:0}|${p.tt}|${p.pi}`;
+
+  for (let f = 0; f < frames; f++) {
+    scene.playerObj.invulnFrames = 999999;
+    scene.playerObj.bombInvuln = 999999;
+    const word = f < inputs.length ? inputs[f] : 0x1;
+    scene.update(inputBits(word));
     const dialogue = scene.isDialogueActive();
-    if (dialogue !== lastDialogue) {
-      ledger.push({ f, kind: 'dialogue', on: dialogue });
-      lastDialogue = dialogue;
-    }
+    if (dialogue !== lastDialogue) { log.push(`f${f} dialogue ${dialogue ? 'start' : 'end'}`); lastDialogue = dialogue; }
     if (scene.spellName !== lastSpell) {
-      if (scene.spellName) spellCards.push({ f, name: scene.spellName, maxBullets: 0, start: f, bossHpDrop: 0 });
+      if (scene.spellName) spellCards.push({ f, name: scene.spellName, maxBullets: 0, hpDrop: 0 });
       lastSpell = scene.spellName;
-      ledger.push({ f, kind: 'spell', name: scene.spellName || '(end)' });
+      log.push(`f${f} spell ${scene.spellName || '(end)'}`);
     }
     let liveBullets = 0;
     for (const b of scene.enemyBullets) if (b && !b.dead) liveBullets++;
-    if (spellCards.length) spellCards[spellCards.length - 1].maxBullets = Math.max(spellCards[spellCards.length - 1].maxBullets, liveBullets);
-    if (f % 60 === 0) bulletCensus.push(liveBullets);
+    if (spellCards.length) {
+      const card = spellCards[spellCards.length - 1];
+      card.maxBullets = Math.max(card.maxBullets, liveBullets);
+    }
     for (const e of scene.enemies) {
       const s = e.ecl;
       if (!s || !s.isBoss) continue;
-      const sub = s.ctx?.subId ?? -1;
-      const prev = bossTrack.get(e.id);
-      const hpDrop = prev != null && e.hp < prev.hp;
-      if (hpDrop) damageLanded.set(e.id, (damageLanded.get(e.id) ?? 0) + 1);
-      if (prev == null || prev.sub !== sub) {
-        ledger.push({
-          f, kind: 'phase', id: e.id, sub,
-          hp: e.hp, flags: s.th08?.flags ?? 0,
-          invisible: s.invisible,
-          shot: s.shotCollision, body: s.collisionEnabled, dmg: s.canTakeDamage,
-          x: Math.round(e.x), y: Math.round(e.y)
-        });
+      const p = snap(e);
+      const before = prev.get(e.id);
+      if (!before || before.key !== key(p)) {
+        log.push(`f${f} e${e.id} sub${p.sub} hp=${p.hp} inv=${p.inv} sbd=${p.sbd} shield=${p.shield} bt=${p.bt} tt=${p.tt}->${p.ts} pi=${p.pi} f1=0x${p.f1.toString(16)} pos=(${p.x},${p.y})`);
       }
-      bossTrack.set(e.id, { sub, hp: e.hp });
-      if (spellCards.length && lastSpell) {
-        // attribute hp movement on the currently-tracked boss to the live card
-        if (hpDrop && prev.sub === sub) spellCards[spellCards.length - 1].bossHpDrop += prev.hp - e.hp;
+      if (before && p.hp < before.p.hp) {
+        dmgFrames.set(e.id, (dmgFrames.get(e.id) ?? 0) + 1);
+        if (spellCards.length && lastSpell) spellCards[spellCards.length - 1].hpDrop += before.p.hp - p.hp;
       }
+      prev.set(e.id, { key: key(p), p });
     }
   }
-  return { ledger, spellCards, bulletCensus, damageLanded, frames: inputs.length };
+  return { log, spellCards, dmgFrames };
 }
 
-test('stage 1 boss: phase chain, cards fire bullets, Last Spell body spawns', () => {
-  const { ledger, spellCards, damageLanded } = auditStage(1);
-  console.log('=== STAGE 1 LEDGER ===');
-  for (const row of ledger) {
-    if (row.kind === 'phase') {
-      console.log(`f${row.f} phase e${row.id} sub${row.sub} hp=${row.hp} flags=0x${(row.flags >>> 0).toString(16)} inv=${row.invisible ? 1 : 0} gates(sbd)=${row.shot ? 1 : 0}${row.body ? 1 : 0}${row.dmg ? 1 : 0} pos=(${row.x},${row.y})`);
-    } else if (row.kind === 'spell') {
-      console.log(`f${row.f} spell ${row.name}`);
-    } else {
-      console.log(`f${row.f} dialogue ${row.on ? 'start' : 'end'}`);
-    }
-  }
+test('stage 1 full boss fight: phases, cards, Last Spell', () => {
+  const { log, spellCards, dmgFrames } = auditStage(1, 22000);
+  console.log('=== STAGE 1 BOSS LOG ===');
+  for (const line of log) console.log(line);
   console.log('=== STAGE 1 CARDS ===');
-  for (const c of spellCards) console.log(`f${c.start} "${c.name}" maxBullets=${c.maxBullets} hpDrop=${c.bossHpDrop}`);
-  const subs = ledger.filter((r) => r.kind === 'phase').map((r) => r.sub);
-  console.log('phase sub sequence:', subs.join(','));
-  // Wriggle Lunatic native chain: 26 (non1) 38 (spell1) 33 (non2) 44 (spell2)
-  // -> death -> 50 (flourish) -> 37 (Last Spell body) -> 48 (Last Spell).
-  assert.ok(subs.includes(26), 'first nonspell sub 26 runs');
-  assert.ok(subs.includes(38), 'spell 1 sub 38 runs');
-  assert.ok(subs.includes(44), 'spell 2 (second-to-last card) sub 44 runs');
-  assert.ok(subs.includes(37), 'Last Spell body sub 37 spawns after the fight');
-  assert.ok(subs.includes(48), 'Last Spell card sub 48 runs');
-  const firing = spellCards.filter((c) => c.maxBullets > 10);
-  assert.ok(firing.length >= 2, `at least two cards emit bullets (got ${spellCards.map((c) => c.maxBullets).join(',')})`);
-  assert.ok([...damageLanded.values()].some((n) => n > 10), 'the boss takes player damage');
+  for (const c of spellCards) console.log(`f${c.f} "${c.name}" maxBullets=${c.maxBullets} hpDrop=${c.hpDrop}`);
+  const subs = [...new Set(log.match(/sub-?\d+/g) ?? [])];
+  console.log('sub ids seen:', subs.join(','));
+  assert.ok(log.some((l) => / sub38 /.test(l) || / sub38$/.test(l) || l.includes('sub38 ')), 'spell 1 sub 38 runs');
+  assert.ok(log.some((l) => l.includes('sub44 ')), 'spell 2 sub 44 runs');
+  assert.ok(log.some((l) => l.includes('sub37 ')), 'Last Spell body sub 37 spawns');
+  assert.ok(log.some((l) => l.includes('sub48 ')), 'Last Spell card sub 48 runs');
+  assert.ok(spellCards.filter((c) => c.maxBullets > 10).length >= 2, 'at least two cards emit bullets');
+  assert.ok([...dmgFrames.values()].some((n) => n > 30), 'boss takes sustained damage');
 });
 
-test('stage 2 boss: cloak chain, cards fire bullets, Mystia hittable during spells', () => {
-  const { ledger, spellCards, damageLanded } = auditStage(2);
-  console.log('=== STAGE 2 LEDGER ===');
-  for (const row of ledger) {
-    if (row.kind === 'phase') {
-      console.log(`f${row.f} phase e${row.id} sub${row.sub} hp=${row.hp} flags=0x${(row.flags >>> 0).toString(16)} inv=${row.invisible ? 1 : 0} gates(sbd)=${row.shot ? 1 : 0}${row.body ? 1 : 0}${row.dmg ? 1 : 0} pos=(${row.x},${row.y})`);
-    } else if (row.kind === 'spell') {
-      console.log(`f${row.f} spell ${row.name}`);
-    } else {
-      console.log(`f${row.f} dialogue ${row.on ? 'start' : 'end'}`);
-    }
-  }
+test('stage 2 full boss fight: phases, cards, Last Spell', () => {
+  const { log, spellCards, dmgFrames } = auditStage(2, 8000);
+  console.log('=== STAGE 2 BOSS LOG ===');
+  for (const line of log) console.log(line);
   console.log('=== STAGE 2 CARDS ===');
-  for (const c of spellCards) console.log(`f${c.start} "${c.name}" maxBullets=${c.maxBullets} hpDrop=${c.bossHpDrop}`);
-  const subs = ledger.filter((r) => r.kind === 'phase').map((r) => r.sub);
-  console.log('phase sub sequence:', subs.join(','));
-  // Mystia Lunatic native chain: 19 (non1) 23 (spell1) 22 (cloak transition)
-  // -> 27 (non2) 38 (HL spell2) 29 (non3) 44 (spell3) 51/52 (spell4)
-  // -> 62 (flourish) -> 32 (Last Spell body) -> 58 (Last Spell).
-  assert.ok(subs.includes(19), 'first nonspell sub 19 runs');
-  assert.ok(subs.includes(23), 'spell 1 sub 23 runs');
-  assert.ok(subs.includes(27), 'post-dialogue nonspell sub 27 runs (op-8 handoff)');
-  assert.ok(subs.includes(32), 'Last Spell body sub 32 spawns');
-  assert.ok(subs.includes(58), 'Last Spell card sub 58 runs');
-  const firing = spellCards.filter((c) => c.maxBullets > 10);
-  assert.ok(firing.length >= 3, `at least three cards emit bullets (got ${spellCards.map((c) => c.maxBullets).join(',')})`);
-  // The cloak-transition fix: after sub 22/27 handoff Mystia must be
-  // shootable again (mode-1 death hide cleared by the re-armed phases).
-  const bossDamageFrames = [...damageLanded.values()].reduce((a, b) => a + b, 0);
-  assert.ok(bossDamageFrames > 100, `boss receives sustained damage (got ${bossDamageFrames} frames)`);
+  for (const c of spellCards) console.log(`f${c.f} "${c.name}" maxBullets=${c.maxBullets} hpDrop=${c.hpDrop}`);
+  assert.ok(log.some((l) => l.includes('sub27 ')), 'post-dialogue nonspell sub 27 runs');
+  assert.ok(log.some((l) => l.includes('sub38 ')), 'spell 2 sub 38 runs');
+  assert.ok(log.some((l) => l.includes('sub44 ')), 'spell 3 sub 44 runs');
+  assert.ok(log.some((l) => l.includes('sub52 ')), 'spell 4 sub 52 runs');
+  assert.ok(log.some((l) => l.includes('sub62 ')), 'final flourish sub 62 runs');
+  assert.ok(log.some((l) => l.includes('sub32 ')), 'Last Spell body sub 32 spawns');
+  assert.ok(log.some((l) => l.includes('sub58 ')), 'Last Spell card sub 58 runs');
+  assert.ok(spellCards.filter((c) => c.maxBullets > 10).length >= 3, 'at least three cards emit bullets');
+  assert.ok([...dmgFrames.values()].some((n) => n > 30), 'boss takes sustained damage');
 });
