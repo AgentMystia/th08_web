@@ -1,6 +1,6 @@
 import { advanceBulletExBehavior, StageRuntime, type StageData } from './eclvm';
-import type {
-  GameHost, Enemy, EnemyBullet, EnemyLaser, ItemEntity, ItemType,
+import {
+  TH08_STAGE_ORB_QUOTAS, GameHost, Enemy, EnemyBullet, EnemyLaser, ItemEntity, ItemType,
   EffectParticle, ReplayTraceSink
 } from './types';
 import { Rng } from '../core/rng';
