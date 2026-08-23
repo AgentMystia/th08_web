@@ -24,6 +24,16 @@
  * Every constant below carries its native site. Slot damage fields that the
  * decompile shows explicitly are kept verbatim; the attack-slot pool plumbing
  * itself is represented by the damage/clear callbacks handed to the host.
+ *
+ * Beam-group constants verified against the .rdata image of Th08.exe
+ * (2026-08-24 static read): 0x4b4300=8.0 (attack width), 0x4b4308=4.0 (the
+ * clear box's BOTH dims and the attack height — so clear width = attack/2),
+ * 0x4b4524=pi/4, 0x4b4520=1/sqrt2, 0x4b4334=pi / 0x4b4460=2pi (wrap),
+ * 0x4b4528=384 / 0x4b4440=192 / 0x4b42cc=32 (radius bases), 0x4b452c=88 /
+ * 0x4b42e8=80 / 0x4b4530=50 (the size interpolation). The beam groups stay
+ * anchored at the CAST point: the fixture's native gauge trajectory
+ * (tests/th08-pacing.test.mjs f1276) pins this — the wave VMs' one-time
+ * player-pos stores at 0x410c40 feed the wave ANIMATION, not the boxes.
  */
 
 export interface Th08BombHost {
@@ -168,6 +178,46 @@ export class Th08BorderBomb {
   private fieldAttacks: { age: number; life: number; x: number; y: number }[] = [];
   private fieldClears: { age: number; life: number; x: number; y: number }[] = [];
   private boundaryBeams: BoundaryBeam[] = [];
+  // Per-group live visual state (FUN_004117b0's engine-driven fields): the
+  // VM rotation +0x318 advances ±pi/80 every tick for the group's whole
+  // life, so the four rendered frames keep spinning after the timer-50
+  // publish. The port freezes the DAMAGE record at publish; the visuals
+  // rotate about the group anchor at the published radius. Group colors are
+  // the authored ins_9 rows of etama scripts 88-91 / 92-95.
+  private beamGroupVisuals: {
+    anchor: { x: number; y: number };
+    angle: number;
+    spin: number;
+    radius: number;
+    width: number;
+    height: number;
+    age: number;
+  }[] = [];
+
+  // §7 APPROXIMATION: the native wave VMs render through FUN_00464b00's
+  // instance fan-out (FUN_004117b0's publish block passes +0x324*2+2), whose
+  // exact quad topology is not recoverable statically. The port draws the
+  // four proven beam quads per group, rotating at the native ±pi/80 rate.
+  beamVisualFrames(): { x: number; y: number; width: number; height: number; angle: number; group: number }[] {
+    const out: { x: number; y: number; width: number; height: number; angle: number; group: number }[] = [];
+    const QUARTER = F32(PI_F / 2);
+    for (let g = 0; g < this.beamGroupVisuals.length; g++) {
+      const v = this.beamGroupVisuals[g];
+      let radial = normalizeAngle(v.angle, F32(PI_F / 4));
+      for (let i = 0; i < 4; i++) {
+        out.push({
+          x: F32(v.anchor.x + F32(Math.cos(radial) * v.radius)),
+          y: F32(v.anchor.y + F32(Math.sin(radial) * v.radius)),
+          width: v.width,
+          height: v.height,
+          angle: normalizeAngle(radial, QUARTER),
+          group: g
+        });
+        radial = normalizeAngle(radial, QUARTER);
+      }
+    }
+    return out;
+  }
 
   constructor(type: Th08BombType, castX: number, castY: number) {
     this.type = type;
@@ -232,11 +282,9 @@ export class Th08BorderBomb {
     });
     host.addAttackSlot(x, y, 100, 70, 40, 5);
     host.clearBullets(x, y, 100);
-    // First wave VM 0x24/0x25 at angle 0x3f490fdb.
-    // Effect ids 0x24/0x25 map through DAT_004c6d30 to archive scripts
-    // 0x58/0x5c. Those scripts deliberately use etama3's tall blue/red
-    // boundary texture; the raw ids point at unrelated archive scripts.
-    host.effectVm(this.type === 1 ? 0x58 : 0x5c, x, y, 4, 0xffffffff);
+    // The cast VM (archive script 0x58/0x5c) renders through
+    // beamVisualFrames below — spawning a plain effect entry here drew an
+    // unrotated 1x quad at the player (the frozen-beam visual bug).
   }
 
   /**
@@ -244,6 +292,14 @@ export class Th08BorderBomb {
    * player position (the field bombs anchor on it every frame).
    */
   tick(host: Th08BombHost, playerX: number, playerY: number, shootHeld: boolean): void {
+    // The authored wave scripts live 140 frames (etama 88-95) and the VM
+    // rotation advance is unconditional in FUN_004117b0 — the visuals keep
+    // spinning after the active bomb ends.
+    for (const v of this.beamGroupVisuals) {
+      v.angle = normalizeAngle(v.angle, v.spin);
+      v.age++;
+    }
+    this.beamGroupVisuals = this.beamGroupVisuals.filter((v) => v.age < 140);
     if (this.ended) return;
     void shootHeld;
     if (this.type === 0) this.tickOrbSeek(host, playerX, playerY);
@@ -417,11 +473,9 @@ export class Th08BorderBomb {
           x: F32(playerX),
           y: F32(playerY)
         });
-        // The wave rings are etama VMs (archive scripts 0x59-0x5f), not
-        // player00 orb art. Native creates effect id 0x24/0x25 and replaces
-        // that same VM's base 0x58/0x5c script immediately; spawning both
-        // left an unrelated base effect behind in the port.
-        host.effectVm(w.script, playerX, playerY, 1, 0xffffffff);
+        // The wave rings (archive scripts 0x59-0x5f) render through
+        // beamVisualFrames below — see the cast-VM note.
+        void w.script;
       }
     }
     // FUN_004117b0 is installed on the cast VM (scale 4) and the three
@@ -508,6 +562,17 @@ export class Th08BorderBomb {
     let vmAngle = F32(F32(PI_F / 4) + F32(group * F32(PI_F / 8)));
     const spin = (scale & 1) === 0 ? F32(-PI_F / 80) : F32(PI_F / 80);
     for (let i = 0; i < 51; i++) vmAngle = normalizeAngle(vmAngle, spin);
+    // The visual keeps rotating from the publish-time VM angle at the same
+    // native ±pi/80 rate (FUN_004117b0 advances +0x318 unconditionally).
+    this.beamGroupVisuals.push({
+      anchor: { x: this.castOrigin.x, y: this.castOrigin.y },
+      angle: vmAngle,
+      spin,
+      radius,
+      width,
+      height,
+      age: 0
+    });
     let radial = normalizeAngle(vmAngle, F32(PI_F / 4));
     for (let i = 0; i < 4; i++) {
       const x = F32(this.castOrigin.x + F32(Math.cos(radial) * radius));

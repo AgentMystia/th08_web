@@ -198,11 +198,13 @@ test('type 1/3 field bombs re-arm the r100 aura and fire waves at 10/20/30', () 
     bomb.cast(host, 192, 200);
     const waveScripts = type === 1 ? [0x59, 0x5a, 0x5b] : [0x5d, 0x5e, 0x5f];
     for (let i = 0; i < 31; i++) bomb.tick(host, 192 + i, 200 + i, true);
-    // The wave rings ride the etama effect layer by archive script index.
+    // The cast/wave VMs no longer ride the plain effect layer — a plain
+    // entry drew the boundary frames frozen at identity (the visual bug);
+    // they render through beamVisualFrames with engine-driven rotation.
     const effectScripts = host.log.effects.map(e => e.script);
-    assert.ok(effectScripts.includes(type === 1 ? 0x58 : 0x5c), 'mapped cast effect');
-    for (const s of waveScripts) assert.ok(effectScripts.includes(s), `wave ${s.toString(16)} for type ${type}`);
-    assert.ok(!effectScripts.includes(type === 1 ? 0x24 : 0x25), 'raw effect id is not an archive script');
+    assert.ok(!effectScripts.includes(type === 1 ? 0x58 : 0x5c), 'no frozen cast entry');
+    for (const s of waveScripts) assert.ok(!effectScripts.includes(s), `no frozen wave ${s.toString(16)}`);
+    void waveScripts;
     // Each field stays at its allocation coordinate. The cast callback first
     // publishes the raw r100/life40 record at the manager tail; the first
     // ordinary callback then publishes r101/life39. The t10 record starts at
@@ -250,6 +252,27 @@ test('type 3 wave VMs publish the native timer-50 oriented beam group', () => {
   assert.ok(Math.abs(host.log.clearBoxes[0].width - 542.6235961914062) < 1e-6);
   assert.deepEqual(host.log.shakes, [{ duration: 16, from: 8, to: 0 }]);
   assert.deepEqual(host.log.flashes, [{ duration: 8, repeats: 1, argb: 0x8f6060f0 }]);
+});
+
+test('beam visuals rotate at the native pi/80 rate with the published geometry', () => {
+  const bomb = new Th08BorderBomb(3, 172, 126);
+  const host = makeHost();
+  bomb.cast(host, 172, 126);
+  for (let i = 0; i < 50; i++) bomb.tick(host, 172, 86, true);
+  let frames = bomb.beamVisualFrames();
+  assert.equal(frames.length, 4, 'the cast VM group publishes four frames');
+  const first = frames[0];
+  assert.ok(Math.abs(first.width - 1085.2471923828125) < 1e-6, 'native width');
+  assert.ok(Math.abs(first.height - 38.399993896484375) < 1e-6, 'native height');
+  const before = first.angle;
+  bomb.tick(host, 172, 86, true);
+  frames = bomb.beamVisualFrames();
+  const after = frames[0].angle;
+  assert.ok(Math.abs(Math.abs(after - before) - Math.PI / 80) < 1e-4,
+    `rotation advances pi/80 per tick (delta ${after - before})`);
+  // Groups 1-3 join at their publishes and everything keeps spinning.
+  for (let i = 0; i < 10; i++) bomb.tick(host, 172, 86, true);
+  assert.equal(bomb.beamVisualFrames().length, 8, 'wave group joined');
 });
 
 test('the machine pays the gauge +-26000/param_4 each frame (0x44c81b)', () => {

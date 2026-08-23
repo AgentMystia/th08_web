@@ -2683,6 +2683,44 @@ export class StageScene implements GameHost {
   // indexes the archive's script table, so index 37 = entry 1's 13th script
   // regardless of its negative on-disk id). color/scale carry the
   // FUN_00425430 host params (VM color / burst magnitude).
+  // The 四重結界 boundary frames: etama sprite 225 (entry 2) drawn as four
+  // rotating additive quads per live beam group, geometry from
+  // Th08BorderBomb#beamVisualFrames (FUN_004117b0's engine-driven VM state —
+  // the authored scripts only carry color/fade, so a plain effect entry sat
+  // frozen at identity rotation/scale). §7: FUN_00464b00's native instance
+  // fan-out topology is unrecoverable; the four proven beam quads per group
+  // are the approximation.
+  private th08BeamSpriteFrame: AnmFrame | null | undefined;
+  private drawTh08BeamVisuals(r: Renderer, ox: number, oy: number): void {
+    if (!this.th08Bomb) return;
+    const beams = this.th08Bomb.beamVisualFrames();
+    if (beams.length === 0) return;
+    if (this.th08BeamSpriteFrame === undefined) {
+      const etama = this.assets.anms.etama;
+      const ref = archiveScript(etama, 0x58);
+      let frame: AnmFrame | null = null;
+      if (etama.hasScriptInEntry(ref.entryIndex, ref.localId)) {
+        const runner = new AnmRunner(etama, ref.localId, { entryIndex: ref.entryIndex });
+        frame = runner.spriteFrame();
+      }
+      this.th08BeamSpriteFrame = frame;
+    }
+    const frame = this.th08BeamSpriteFrame;
+    if (!frame) return;
+    // Authored ins_9 rows of etama scripts 88-95 (0x58-0x5f): the cast VM is
+    // blue; the waves run blue / magenta / red.
+    const groupColors = [0x8080ff, 0x8080ff, 0xff80ff, 0xff8080];
+    for (const beam of beams) {
+      r.drawAnmFrame(frame, ox + beam.x, oy + beam.y, {
+        rotation: beam.angle,
+        scaleX: beam.width / Math.max(1, frame.w),
+        scaleY: beam.height / Math.max(1, frame.h),
+        color: groupColors[beam.group] ?? 0x8080ff,
+        blend: 'lighter'
+      });
+    }
+  }
+
   private spawnTh08Effect(
     archiveIndex: number, x: number, y: number, ttl = 240,
     opts: { color?: number; scale?: number; alpha?: number } = {}
@@ -5614,6 +5652,7 @@ export class StageScene implements GameHost {
       }
       this.playerEffects.draw(r, ox, oy);
       this.th08Effects.draw(r, ox, oy);
+      this.drawTh08BeamVisuals(r, ox, oy);
       // The declaration VMs self-position in 640x480 screen space
       // (banner strips at y=16 over the frame, name mid-playfield).
       this.th08Declaration?.draw(r);
