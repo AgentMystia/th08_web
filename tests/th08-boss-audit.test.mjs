@@ -95,6 +95,9 @@ function auditStage(stageNumber, extraFrames) {
       const s = e.ecl;
       if (!s || !s.isBoss) continue;
       const p = snap(e);
+      if (f % 300 === 0) {
+        log.push(`f${f} hb e${e.id} sub=${p.sub} hp=${e.hp} fr=${e.frame} ps=${e.poolSlot} owns=${scene.enemySlots[e.poolSlot] === e} bt=${p.bt} x=${Math.round(e.x)} y=${Math.round(e.y)} dead=${e.dead}`);
+      }
       const before = prev.get(e.id);
       if (!before || before.key !== key(p)) {
         log.push(`f${f} e${e.id} sub${p.sub} hp=${p.hp} inv=${p.inv} sbd=${p.sbd} shield=${p.shield} bt=${p.bt} tt=${p.tt}->${p.ts} pi=${p.pi} f1=0x${p.f1.toString(16)} pos=(${p.x},${p.y})`);
@@ -138,7 +141,7 @@ test('stage 1 full boss fight: phases, cards, Last Spell', () => {
 });
 
 test('stage 2 full boss fight: phases, cards, Last Spell', () => {
-  const { log, spellCards, dmgFrames } = auditStage(2, 8000);
+  const { log, spellCards, dmgFrames } = auditStage(2, 20000);
   console.log('=== STAGE 2 BOSS LOG ===');
   for (const line of log) console.log(line);
   console.log('=== STAGE 2 CARDS ===');
