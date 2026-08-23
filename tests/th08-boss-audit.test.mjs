@@ -156,3 +156,83 @@ test('stage 2 full boss fight: phases, cards, Last Spell', () => {
   assert.ok(spellCards.filter((c) => c.maxBullets > 10).length >= 3, 'at least three cards emit bullets');
   assert.ok([...dmgFrames.values()].some((n) => n > 30), 'boss takes sustained damage');
 });
+
+
+// Round 5: the recorded-input audits above prove the Lunatic chain under
+// replay pressure; the user-visible breaks must come from other play
+// conditions. Sweep difficulty (E/N/H rows of the same subs) and a bombing
+// variant (the user reports the Yukari bomb misbehaving during the last
+// cards), both with synthetic focus-fire pressure and no recorded inputs.
+function auditSynthetic(stageNumber, difficulty, opts = {}) {
+  const stage = rpy.stages[stageNumber - 1];
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), difficulty, rpy.team,
+    stageNumber, null, stage.rngSeed
+  );
+  scene.mode = 'test';
+  if (opts.quotaMet) scene.runState.currentTimeOrbs = 99999;
+  const log = [];
+  const spellCards = [];
+  let lastSpell = '';
+  const bombEvery = opts.bombEvery ?? 0;
+  const frames = opts.frames ?? 30000;
+  for (let f = 0; f < frames; f++) {
+    if (opts.invuln !== false) {
+      scene.playerObj.invulnFrames = 999999;
+      scene.playerObj.bombInvuln = 999999;
+    }
+    let word = 0x5;
+    if (bombEvery && f % bombEvery === 0 && f > 4000) word |= 0x2;
+    scene.update(inputBits(word));
+    if (scene.spellName !== lastSpell) {
+      if (scene.spellName) spellCards.push({ f, name: scene.spellName, maxBullets: 0 });
+      lastSpell = scene.spellName;
+      log.push(`f${f} spell ${scene.spellName || '(end)'}`);
+    }
+    let liveBullets = 0;
+    for (const b of scene.enemyBullets) if (b && !b.dead) liveBullets++;
+    if (spellCards.length) spellCards[spellCards.length - 1].maxBullets = Math.max(spellCards[spellCards.length - 1].maxBullets, liveBullets);
+    if (f % 3000 === 0) {
+      const boss = scene.enemies.find((e) => e.ecl?.isBoss && !e.dead);
+      log.push(`f${f} boss=${boss ? `sub${boss.ecl.ctx?.subId} hp=${boss.hp} inv=${boss.ecl.invisible ? 1 : 0}` : 'none'} bullets=${liveBullets}`);
+    }
+  }
+  return { log, spellCards };
+}
+
+for (const difficulty of [0, 1, 2]) {
+  test(`stage 1 difficulty ${difficulty}: cards fire through the fight`, () => {
+    const { log, spellCards } = auditSynthetic(1, difficulty, { frames: 24000 });
+    console.log(`=== S1 D${difficulty} ===`);
+    for (const l of log) console.log(l);
+    for (const c of spellCards) console.log(`card f${c.f} "${c.name}" maxBullets=${c.maxBullets}`);
+    const cards = spellCards.filter((c) => c.maxBullets > 10);
+    assert.ok(cards.length >= 2, `D${difficulty}: at least two cards emit bullets (got ${spellCards.map((c) => c.maxBullets).join(',')})`);
+  });
+  test(`stage 2 difficulty ${difficulty}: cards fire and Mystia stays visible after the mid-fight transition`, () => {
+    const { log, spellCards } = auditSynthetic(2, difficulty, { frames: 30000 });
+    console.log(`=== S2 D${difficulty} ===`);
+    for (const l of log) console.log(l);
+    for (const c of spellCards) console.log(`card f${c.f} "${c.name}" maxBullets=${c.maxBullets}`);
+    const cards = spellCards.filter((c) => c.maxBullets > 10);
+    assert.ok(cards.length >= 2, `D${difficulty}: at least two cards emit bullets`);
+    assert.ok(!log.some((l) => l.includes('inv=1')), `D${difficulty}: the mode-1 hide latch never sticks`);
+  });
+}
+
+test('stage 1 Lunatic with periodic bombs: the last two cards still fire', () => {
+  const { log, spellCards } = auditSynthetic(1, 3, { frames: 24000, bombEvery: 540 });
+  console.log('=== S1 LUNATIC + bombs every 540f ===');
+  for (const l of log) console.log(l);
+  for (const c of spellCards) console.log(`card f${c.f} "${c.name}" maxBullets=${c.maxBullets}`);
+  const cards = spellCards.filter((c) => c.maxBullets > 10);
+  assert.ok(cards.length >= 2, `cards emit under bombing (got ${spellCards.map((c) => c.maxBullets).join(',')})`);
+});
+
+test('stage 1 Last Spell requires the time quota (var 10098 gate)', () => {
+  const met = auditSynthetic(1, 3, { frames: 24000, quotaMet: true });
+  const unmet = auditSynthetic(1, 3, { frames: 24000, quotaMet: false });
+  const lastCard = (r) => r.spellCards[r.spellCards.length - 1]?.name ?? '';
+  console.log('quota met last card:', lastCard(met), '| unmet last card:', lastCard(unmet));
+  assert.ok(met.spellCards.length > unmet.spellCards.length, 'quota met plays strictly more cards');
+});

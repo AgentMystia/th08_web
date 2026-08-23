@@ -800,3 +800,15 @@ export interface Enemy {
   dead?: boolean;
   ecl: EclState;
 }
+
+// The stage time-orb quotas (.data 0x4c77f0, per stage and difficulty):
+// the tally's clock-advance switch (FUN_0043c35f) and the HUD Time row
+// both read this table. Extra's row reads 0.
+export const TH08_STAGE_ORB_QUOTAS: readonly (readonly number[])[] = [
+  [2000, 2500, 2700, 3000],
+  [6500, 7200, 7200, 7200],
+  [7500, 8500, 8800, 8800],
+  [9999, 9999, 9999, 9999],
+  [7500, 8500, 8500, 8500],
+  [9999, 9999, 9999, 9999],
+  [0, 0, 0, 0]

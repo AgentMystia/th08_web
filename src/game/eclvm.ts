@@ -7,6 +7,7 @@ import {
   NATIVE_PI_F32, NATIVE_TAU_F32, NATIVE_HALF_PI_F32
 } from '../core/util';
 import type { Rng } from '../core/rng';
+import { TH08_STAGE_ORB_QUOTAS } from './types';
 import type { GameHost, Enemy, EnemyBullet, EclState, EclContext, BulletProps, BulletExSlot, ItemType, EnemyLaser } from './types';
 
 // TH08 ECL virtual machine (single-path since the TH07 excision, AGENTS.md
@@ -2951,7 +2952,11 @@ export class StageRuntime {
     if (!t) return;
     s.shotCollision = (t.flags & 0x40) !== 0;
     s.collisionEnabled = (t.flags & 4) !== 0;
-    s.canTakeDamage = (t.flags & 8) !== 0;
+    // The native damage settlement's outer gate (all.c:21449) additionally
+    // requires flags bit4 CLEAR — ins_80(8) sets it (the Last Spell bodies
+    // spawn invulnerable until their ins_81(8)). Keep bit3 (the ECL-authored
+    // damage gate the spell declarations toggle) AND bit4 clear.
+    s.canTakeDamage = (t.flags & 8) !== 0 && (t.flags & 0x10) === 0;
   }
 
   killEnemy(game: GameHost, e: Enemy, bombContactThisFrame = false): boolean {
@@ -3264,11 +3269,20 @@ export class StageRuntime {
       // conditionals match the recording. A future T8RP browser playback
       // must revisit this (native reads DAT_0164d0b4's bits 9/2).
       case 10099: return 0;
-      // 10098 has NO case in the exe's own float resolver (all.c:14691 falls
-      // to the literal default) — boss sub37's op50 compares it against 2 and
-      // never matches, exactly like the literal below. Cased here only to
-      // keep the console clean.
-      case 10098: return 10098;
+      // 10098 (resolver case 0x2772, all.c:14145-14152): the boss Last
+      // Spell eligibility gate — `(timeOrbs + continues + misc < quota) - 1
+      // & 2`, i.e. 2 when the night's time-orb quota is met, else 0. The
+      // boss ECLs compare it >= 2 (ins_50) to run the post-death Last Spell
+      // body (stage-1 Sub37 / stage-2 Sub32); failing it makes that body
+      // ins_1 immediately. The quota is the same DAT_004c77f0 stage×difficulty
+      // table the tally reads; the two extra addends (FUN_00453cc0's
+      // continue count, FUN_004417e0's linked-list count) are zero for the
+      // slice's no-continue runs.
+      case 10098: {
+        const quota = TH08_STAGE_ORB_QUOTAS[(game.stageNumber ?? 1) - 1]?.[game.difficulty] ?? 0;
+        const orbs = (game as { runState?: { currentTimeOrbs?: number } }).runState?.currentTimeOrbs ?? 0;
+        return orbs >= quota ? 2 : 0;
+      }
       case 10092: return s.itemDrop;
       case 10093: return e.score;
       case 10096: {
@@ -4050,7 +4064,18 @@ export class StageRuntime {
         // original draws no gameplay RNG here.
         return null;
       }
-      case 129: t.flags = (t.flags & ~0x700000) | ((gi(0) & 7) << 20); return null;
+      case 129: {
+        // Death type (all.c:12724-12728): flags = (flags & 0xff8fffff) |
+        // ((u8)arg & 7) << 20 — the mask clears bits 20-23, i.e. writing the
+        // mode ALSO clears bit23 (0x800000), the death-switch case-1 render
+        // HIDE. Mystia's post-spell transition (Sub22) re-declares ins_129(1)
+        // right after the uncloak; with the narrower ~0x700000 mask the hide
+        // latch survived forever and she stayed spriteless for the whole
+        // rest of the fight.
+        t.flags = (t.flags & 0xff8fffff) | ((gi(0) & 7) << 20);
+        s.invisible = (t.flags & 0x800000) !== 0;
+        return null;
+      }
       case 130: s.deathCallbackSub = v.i32(a); return null;
       case 131: { // set the bullet pool ("HP") + copies
         e.hp = gi(0);

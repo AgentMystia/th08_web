@@ -62,17 +62,7 @@ export interface RunCarry {
   nextPointItemExtendThreshold?: number;
 }
 
-// The stage time-orb quotas (.data 0x4c77f0, per stage and difficulty):
-// the tally's clock-advance switch (FUN_0043c35f) and the HUD Time row
-// both read this table. Extra's row reads 0.
-export const TH08_STAGE_ORB_QUOTAS: readonly (readonly number[])[] = [
-  [2000, 2500, 2700, 3000],
-  [6500, 7200, 7200, 7200],
-  [7500, 8500, 8800, 8800],
-  [9999, 9999, 9999, 9999],
-  [7500, 8500, 8500, 8500],
-  [9999, 9999, 9999, 9999],
-  [0, 0, 0, 0]
+
 ];
 
 // TH08 ItemType enum (ItemManager.hpp:9-21) in declaration order; the item's
@@ -3269,7 +3259,12 @@ export class StageScene implements GameHost {
   // exe, hits on an invulnerable boss still award score and cherry (the
   // bit2 check only guards the HP subtraction).
   damageEnemy(e: Enemy, damage: number, kind: 'shot' | 'bomb' = 'shot'): void {
-    if (!e.ecl.interactable || e.ecl.invisible) return;
+    if (!e.ecl.interactable) return;
+    // TH08 death-switch case 1's bit23 (0x800000) hides the enemy SPRITE
+    // only (all.c:21649-21652); the native damage settlement (all.c:21449+)
+    // gates on flags bits 4/5/11 and the shot/body/damage semantic bits —
+    // never on the hide flag. Gating here made Mystia permanently
+    // shot-immune after her mid-fight mode-1 death until ins_129 cleared it.
     // TH08 familiar side gate (all.c:21448, flags bit 11): an ETHEREAL
     // familiar (player in youkai form) takes no player-shot or attack-slot
     // damage at all — the whole settlement block is behind bit11==0.
@@ -3490,7 +3485,7 @@ export class StageScene implements GameHost {
     // damage merely vetoed, starving the master (native replay f1680-1698:
     // the master took ~280 damage through the ethereal familiars).
     if (e.ecl.th08?.familiar && e.ecl.th08.sideBit === 1) return;
-    if (!e.ecl.shotCollision || !e.ecl.interactable || e.ecl.invisible || e.dead) return;
+    if (!e.ecl.shotCollision || !e.ecl.interactable || e.dead) return;
     this.collidePlayerShotsInBox(e, e.ecl.hitbox);
     const second = e.ecl.hitbox2;
     if (!second || second.x <= 0) return;
@@ -3898,7 +3893,7 @@ export class StageScene implements GameHost {
     const p = this.playerObj;
     if (this.gameOver || !p.alive || !e.ecl.collisionEnabled ||
         (e.ecl.th08 && (e.ecl.th08.flags & 0x10) !== 0) ||
-        !e.ecl.interactable || e.ecl.invisible || e.dead) return;
+        !e.ecl.interactable || e.dead) return;
     // TH08 familiar body contact — two stacked gates:
     // 1. Ethereal familiars (bit 11, player in youkai form) never contact
     //    (the all.c:21448 bit11==0 gate ahead of the contact block).
