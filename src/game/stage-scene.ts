@@ -63,8 +63,6 @@ export interface RunCarry {
 }
 
 
-];
-
 // TH08 ItemType enum (ItemManager.hpp:9-21) in declaration order; the item's
 // etama.anm visual script is 61 + id (ItemManager.cpp:112).
 const TH08_ITEM_TYPE_IDS: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];

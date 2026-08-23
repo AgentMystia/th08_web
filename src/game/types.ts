@@ -812,3 +812,4 @@ export const TH08_STAGE_ORB_QUOTAS: readonly (readonly number[])[] = [
   [7500, 8500, 8500, 8500],
   [9999, 9999, 9999, 9999],
   [0, 0, 0, 0]
+];
