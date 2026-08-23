@@ -1379,7 +1379,7 @@ export class StageScene implements GameHost {
   // native RNG draw order; the resulting ItemEntity joins the same list the
   // renderer/updater already walks, linked by poolSlot so the pool's `active`
   // flag tracks the entity's life.
-  private spawnItemTh08(type: ItemType, x: number, y: number, options: { state?: number; vx?: number; vy?: number; tweenTarget?: { tx: number; ty: number } }): void {
+  private spawnItemTh08(type: ItemType, x: number, y: number, options: { state?: number }): void {
     this.th08ItemPool ??= new Th08ItemSpawnPool();
     const pool = this.th08ItemPool;
     const spawned = pool.spawn({
@@ -1412,7 +1412,7 @@ export class StageScene implements GameHost {
     });
   }
 
-  spawnItem(type: ItemType, x: number, y: number, options: { state?: number; vx?: number; vy?: number; tweenTarget?: { tx: number; ty: number } } = {}): void {
+  spawnItem(type: ItemType, x: number, y: number, options: { state?: number } = {}): void {
     // TH08: allocate through the committed Th08ItemSpawnPool, which encodes
     // ItemManager::SpawnItem's exact decisions (2096-slot rotating cursor,
     // out-of-bounds x reject, full-power power→pointSmall, time/time2 state
@@ -3033,9 +3033,10 @@ export class StageScene implements GameHost {
     // Th08.exe FUN_00449ff0's pool probe (player+0xbb834): the familiar
     // master-death quads. Same contact shape as the bomb regions above, but
     // the kill enters state 5 directly — no time-orb award (DAT_018b8988 is
-    // -1 outside bomb/spell context, all.c:23535-23552). The exe defers the
-    // state-5 entry of SPAWN-STATE bullets to their transition-VM completion
-    // (all.c:23589-23644); the port fades those immediately (flagged).
+    // -1 outside bomb/spell context, all.c:23535-23552). Spawn-state bullets
+    // never reach this probe: updateBullets returns them into the deferred
+    // quadKillType latch (below), which pays the conversion on the
+    // transition-VM's ending tick exactly as the exe does (all.c:23589-23644).
     for (const z of this.th08DeathClearZones) {
       if (z.framesLeft <= 0) continue;
       const dx = b.x - z.x;
@@ -3044,8 +3045,6 @@ export class StageScene implements GameHost {
         // Bullet->item conversion on the quad kill (all.c:23597-23651):
         // the quad's param6 (surfaced via player+0xe2a90) is the item type;
         // 9 pays two time orbs, any other type > -1 pays one of that type.
-        // Spawn-state bullets defer this to their transition-VM completion
-        // natively (all.c:23589-23644); we convert on the kill frame (§7).
         if (z.convertType === 9) {
           this.spawnItem('time', b.x, b.y, {});
           this.spawnItem('time', b.x, b.y, {});
@@ -3104,17 +3103,15 @@ export class StageScene implements GameHost {
     this.playerEffects.clear();
   }
 
-  // Th07.exe FUN_00430970 spawn mode 2 (all.c:21852-21862): every death drop
-  // launches from the fixed death point toward its own random target at
-  // x = rand*288+48, y = rand*192-64 (playfield coords; constants @
-  // 0x48eccc/0x48eb94/0x48ecc8/0x48eb68), riding a 60-frame positional lerp
-  // (FUN_00430c10 all.c:21936-21956) before dropping to normal fall from
-  // rest. Velocity starts zeroed — the exe reuses those fields as the tween
-  // origin while state==2.
+  // TH08 death drops are pool state-2 spawns: FUN_0043dca0's miss block calls
+  // FUN_004400a0(pos, type, 2) per item (all.c:37886-37909), and param_4==2
+  // pays its two draws inside the found-slot block — target = rand01*304+48 /
+  // rand01*192-64 — with the velocity fields reused as the tween origin. The
+  // former caller-side `rng.f()*288+48` pre-draw kept the draw count aligned
+  // by accident but discarded the tween, so every miss drop fell straight
+  // down instead of lerping to its scattered target over 60 frames.
   private spawnDeathDrop(type: ItemType, x: number, y: number): void {
-    const tx = this.rng.f() * 288 + 48;
-    const ty = this.rng.f() * 192 - 64;
-    this.spawnItem(type, x, y, { vx: 0, vy: 0, tweenTarget: { tx, ty } });
+    this.spawnItem(type, x, y, { state: 2 });
   }
 
   // Fires once when the death squish finishes (tickDeath 'respawn'): teleport

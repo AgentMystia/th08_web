@@ -217,3 +217,50 @@ test('Stage-2 native contact enters the 27-frame window and starts type-3 on the
     }
   }
 });
+
+test('miss drops are pool state-2 spawns: scattered tween targets, not straight falls', async () => {
+  const { loadEngine, makeStubAssetsTh08, makeStubAudio } = await import('../scripts/lib/replay-harness.mjs');
+  const mod = await loadEngine();
+  const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
+  const scene = new mod.StageScene(
+    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team, 1, null,
+    rpy.stages[0].rngSeed
+  );
+  scene.mode = 'test';
+  scene.playerObj.lives = 6;
+  scene.playerObj.bombs = 3;
+  for (let f = 0; f < 100; f++) scene.update(idle());
+  const p = scene.playerObj;
+  p.invulnFrames = 0;
+  p.bombInvuln = 0;
+  p.materializeFrame = -1;
+  p.power = 50;
+  p.x = 192;
+  p.y = 240;
+  p.hit();
+  for (let f = 0; f < 29; f++) scene.update(idle());
+  assert.equal(p.hitState, false, 'window lapsed, miss committed');
+
+  // FUN_0043dca0 (all.c:37886-37909): power >= 1 drops 1x powerBig + 5x
+  // powerSmall, every one a FUN_004400a0(pos, type, 2) pool spawn. State 2
+  // pays its two draws in the found-slot block and arms the 60-frame
+  // positional tween; the death point itself only supplies the origin.
+  const drops = scene.items.filter((it) => it.type === 'powerBig' || it.type === 'powerSmall');
+  assert.equal(drops.length, 6);
+  for (const it of drops) {
+    assert.equal(it.state, 2, 'death drop spawns in tween state');
+    assert.ok(it.tween, 'tween target captured');
+    assert.ok(it.tween.tx >= 48 && it.tween.tx < 48 + 304, `targetX in [48,352): ${it.tween.tx}`);
+    assert.ok(it.tween.ty >= -64 && it.tween.ty < -64 + 192, `targetY in [-64,128): ${it.tween.ty}`);
+    assert.ok(it.tween.sx === 192 && it.tween.sy === 240, 'origin is the death point');
+  }
+  // Mid-tween items lerp toward their targets instead of falling: after one
+  // tick every drop moved strictly toward its target.
+  scene.update(idle());
+  for (const it of drops) {
+    const before = Math.hypot(it.tween.tx - 192, it.tween.ty - 240);
+    const after = Math.hypot(it.tween.tx - it.x, it.tween.ty - it.y);
+    assert.ok(after < before, `drop moved toward its target (${after} < ${before})`);
+    assert.notEqual(it.vy, Math.fround(-2.2), 'no ordinary fall during the tween');
+  }
+});

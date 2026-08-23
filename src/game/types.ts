@@ -276,7 +276,7 @@ export interface GameHost {
   // Bullet-time visual state for the global spell-background ANM VMs.
   setBulletTimeVisual?(active: boolean): void;
   addScore(v: number): void;
-  spawnItem(type: ItemType, x: number, y: number, options?: { state?: number; vx?: number; vy?: number; tweenTarget?: { tx: number; ty: number } }): void;
+  spawnItem(type: ItemType, x: number, y: number, options?: { state?: number }): void;
   // seed = op118's 3-float operand (exe writes it to the particle's velocity-
   // seed field +0x96/97/98, NOT a position offset); op117 passes none. Some
   // effect types' per-particle RNG draw count branches on its x sign.

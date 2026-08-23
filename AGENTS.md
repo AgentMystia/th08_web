@@ -694,6 +694,77 @@ E/N/H/L sweeps, a bombing variant, a pinned-orb quota A/B, and the
 wave-anchor/beam-rotation locks in th08-border-bombs.test.mjs. 197/197
 local via the podman runner.
 
+### 2026-08-24 draw-economy audit pass (port-side only; podman runner)
+
+A full static/exe audit of the standing stage-2 f677..1237 +8 u16 draw
+residual (the root of the st1 f3192 / st2 f3367 advisory auto-fire
+lotteries), plus one real fidelity fix that fell out of it.
+
+**The audit (every family reconciled against the v1.00d binary).** The
+port's window decomposes EXACTLY (17 610 u16 over f677..1237): fx51 14 560
+(560 arms × 26, unthrottled like native — stage-2 pool occupancy is low),
+fx4 1 792 + fx8 12 (kill/drop bursts; gauge-pinned), fx5 468 (117 shot
+settles), fx3 144 (36 tally arms), collects 192 (48 paying), itemSpawn 88
+(22 arms = exactly the 22 time-item spawns; state-0/1 spawns pay 0 natively
+— FUN_004400a0 draws only for param_4 ∈ {2,3,5}), ins_106 96 (48 deadline
+draws), root 258 (240 shake + 8 deathbomb-window integrity + 8 bomb-cast
+tail + 2 aura). Each family was then verified against the decompile and
+SURVIVED: the FUN_00451670 settle's type∈{4,5,6} skip is dead for Border
+Team (ply00a/as use only shotTypes 0/1 — dumped via the real Sht parser);
+the funcs[3] collision callbacks (FUN_00450ee0 = every-8th-tally effect-5,
+resolved through the four .data tables at 0x4c7ee0/0x4c7f04/0x4c7f1c/
+0x4c7f24 loaded by FUN_0044dd70) are never set by Border Team records
+(funcs [0,1,0,0]/[1,0,0,0]); the attack-slot tally's slot+0x3d suppression
+byte is set only by the type-1/unfocused-bomb family (FUN_0040c010's and
+FUN_0040c910's 16-amulet casts + FUN_0040e3b0's %4 slots), never by the
+type-3 machine FUN_00410fe0 our fixture actually deathbombs with (whose
+cast/t10/t20/t30 each publish one r100/growth-1/damage-70/cadence-5 slot +
+kill quad, none suppressed); the hit frame's draws are exe-exact
+(FUN_0044e160's 5×u32InRange(100000)+3×range(100000) before
+FUN_0044ab40's FUN_00406e50 + effect-6 ×16); the collect-payment gates and
+the item-pool probe/cursor semantics line-match FUN_004400a0 (bounds
+[-64,448], cursor+1-per-probe, time-orb single-probe give-up — and the
+stage-2 entry pool provably starts near slot 0 natively, f472's slot-1
+pin). The f676 contact oracle pins the stream draw-exact through the hit,
+so the +8 opens on 2-4 events among the contact-derived arms (fx5/fx3/
+time-spawn/collect) — i.e. it is the already-recorded kill-timing cascade
+class: Sub2's ins_106 arms only at ECL t35, so a fairy killed one frame
+early flips a 2-u16 arm, and each such flip moves a collect by a frame.
+There is no count-level defect left to fix in this window; closing it
+needs a native per-frame draw profile (wine — closed). Do NOT paper over
+it. The CI profiling note's earlier suspicion (ins_105/106 spawn arms vs
+the authored timeline) is REFUTED: spawn times are pure timeline data and
+the arms match.
+
+**Stage budget oracles (mod 65536, from the fixture's own seeds).** The
+fixture th8_udLy01.rpy is a FULL Lunatic run (stages 1,2,3,5,6,8 — earlier
+docs implied a 2-stage slice). LFSR-walk oracles: stage-1 total native
+draws ≡ 32 816 (0x8fbe→0x32fb; the measured full budget 294 960 ≡ this
+mod 65 536), stage-2 ≡ 63 672 (0x32fb→0xf84a, the stage-3 entry seed).
+When a run is count-exact to the end of a stage, its total draw count must
+hit these residues — a cheap whole-stage economy check that needs no
+per-frame native data.
+
+**The fix: death drops are pool state-2 spawns.** FUN_0043dca0's miss
+block (all.c:37886-37909) drops 5×powerFull (power<1) or powerBig+5×
+powerSmall (+bomb for teams 2/8/9), every one a FUN_004400a0(pos,type,2)
+call: param_4==2 pays its two draws in the found-slot block and arms the
+60-frame scattered tween, target = rand01*304+48 / rand01*192-64 (the
+0x43900000 literal — 304, NOT the TH07 288). The port pre-drew
+rng.f()*288+48 at the call site (count-accidentally-right, wrong constant)
+and then DISCARDED the tween — every miss item fell straight down from the
+death point. Fixed: spawnDeathDrop routes through spawnItem({state:2});
+the pool's state-2 amplitude corrected to 304; the dead vx/vy/tweenTarget
+spawn options removed (the pool owns velocity). Count-neutral for the
+pinned replays (no misses in their windows); test-locked in
+th08-item-spawn/th08-death-white. The stale §7 comment claiming spawn-state
+quad conversions fade immediately was also corrected — the deferred
+quadKillType latch is the real path.
+
+Verifier at this checkpoint: st1 f3192 / st2 f3367 (unchanged, as
+designed — both fixes are outside the pinned windows); npm run
+check/build/test green (198 tests).
+
 ### 2026-08-23 scheduler-boundary + item/damage economy pass
 
 The interrupted follow-up to the 999b644 movement rework, rebuilt from

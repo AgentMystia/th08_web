@@ -559,16 +559,21 @@ test('Stage-2 graze/familiar-death alignment holds to f1276; the f680+ draw-econ
     [1808, [-8665, 27796]],
     [2218, [-9156, 28334]]
   ]);
-  // KNOWN RESIDUAL (see AGENTS.md §0, 2026-08-23 pass): somewhere in
-  // f680..1237 the port draws 8 u16s the native run does not (0.05% of the
-  // window's 17.6k draws; per-source CI profiling narrowed it to the small
-  // u32 consumers — auto-fire phase arms, state-3 item scatters, or paying
-  // collects — every one of which is individually exe-verified). The
-  // gauge/prefix checkpoints that still hold stay hard-asserted; everything
-  // downstream of the first diverging checkpoint is logged as a residual
-  // (LFSR-walked draw distance to the native seed) instead of asserted, so
-  // the number stays visible in CI until a native per-frame draw profile
-  // pins the missing consumer. Do NOT "fix" this by clamping draw counts.
+  // KNOWN RESIDUAL (see AGENTS.md §0, 2026-08-24 draw-economy audit): the
+  // port draws 8 u16s the native run does not inside f677..1237 (0.05% of
+  // the window's 17.6k draws). The 2026-08-24 pass decomposed the window
+  // family-by-family and verified EVERY consumer against the v1.00d binary
+  // (fx51/fx4/fx8/fx5/fx3/collect/itemSpawn/ins_106/shake/integrity/aura
+  // all reconcile — see the AGENTS entry); the earlier suspicion on
+  // ins_105/106 spawn arms is refuted (spawn times are pure timeline data).
+  // The gap therefore lives in 2-4 contact-derived arm-count differences
+  // (kill-timing cascade: e.g. Sub2's ins_106 arms only at ECL t35, so a
+  // one-frame kill shift flips a 2-u16 arm). Pinning it needs a native
+  // per-frame draw profile. The gauge/prefix checkpoints that still hold
+  // stay hard-asserted; everything downstream of the first diverging
+  // checkpoint is logged as a residual (LFSR-walked draw distance to the
+  // native seed) instead of asserted, so the number stays visible in CI.
+  // Do NOT "fix" this by clamping draw counts.
   const stepSeed = (seed) => {
     const a = ((seed ^ 0x9630) - 0x6553) & 0xffff;
     return (((a & 0xc000) >> 14) + a * 4) & 0xffff;

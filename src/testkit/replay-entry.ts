@@ -9,6 +9,7 @@ export { Th08SpellDeclaration, th08BombSpellName, archiveScript } from '../game/
 export { Rpy } from '../formats/rpy';
 export { ReplayInputSource } from '../core/replay-input';
 export { Anm, AnmRunner } from '../formats/anm';
+export { Ecl } from '../formats/ecl';
 export { Sht } from '../formats/sht';
 export { TH08_DATA } from '../data/th08-data';
 export { stageSnapshot } from '../game/snapshot';

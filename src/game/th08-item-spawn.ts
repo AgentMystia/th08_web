@@ -99,7 +99,10 @@ export class Th08ItemSpawnPool {
       current.targetX = current.targetY = current.targetZ = undefined;
 
       if (state === 2) {
-        current.targetX = f32(f32(options.rng.range(288)) + 48);
+        // FUN_004400a0 param_4==2 (all.c:30776+): target.x =
+        // rand01*304 + 48 (0x43900000 literal), target.y = rand01*192 - 64.
+        // The 304 amplitude (not 288) spans the full playfield width.
+        current.targetX = f32(f32(options.rng.range(304)) + 48);
         current.targetY = f32(f32(options.rng.range(192)) - 64);
         current.targetZ = 0;
         current.vx = current.x;
