@@ -4113,7 +4113,10 @@ export class StageScene implements GameHost {
     // (item type 10 -> time/state-5) at the contact — the native orb
     // income stream (all.c:36844-36862).
     const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
-    if (!this.bombActiveThisFrame) this.graze++;
+    // FUN_0044a930 head: the displayed graze counter is +1, +2 past the
+    // human tint (−2000), +3 past the human effects threshold (−8000).
+    // Score/rank/time-orb awards stay per-event; only the counter steps.
+    if (!this.bombActiveThisFrame) this.graze += this.runState.grazeCounterIncrement();
     this.traceReplayEvent?.({
       kind: 'graze', frame: this.frame,
       data: { x: sourceX, y: sourceY, total: this.graze }
