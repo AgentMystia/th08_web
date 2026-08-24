@@ -4506,8 +4506,9 @@ export class StageScene implements GameHost {
       }
       const wasInSpawnState = (b.spawnAge ?? b.spawnDuration) < b.spawnDuration;
       // Native spawn states 2/3/4 skip behavior, cull, bomb and player
-      // collision until their authored ANM ends. On the ending tick control
-      // falls through into state 1 and performs the normal move as well.
+      // collision until their authored ANM ends. On the ending tick the
+      // extra full-velocity move still runs; et_ex stays until the first
+      // exclusive state-1 tick (TH08 jump table @ 0x432156).
       const motion = this.updateBulletMotion(b);
       const enteredNormalState = motion.enteredNormalState;
       // TH08 spawn-state quad probe (all.c:23589-23591/23615-23617/
@@ -4693,13 +4694,19 @@ export class StageScene implements GameHost {
     let transitionX: number | undefined;
     let transitionY: number | undefined;
     const spawnAge = b.spawnAge ?? b.spawnDuration;
+    // TH08 OnUpdate (0x431240) dispatches spawn through a jump table at
+    // 0x432156 (state 2→0x43176e, 3→0x431880, 4→0x431991). Those cases
+    // are isolated: they never run the et_ex handlers that live in state 1.
+    // Capture this before the ending tick promotes spawnAge, so the extra
+    // full-velocity add still happens without advancing dir-change clocks.
+    const startedInSpawn = spawnAge < b.spawnDuration;
     // FUN_004069f0 executes the prototype VM's t0 synchronously at arm. The
     // native slot trace resolves the old +2 fixture workaround: a time-10
     // flash returns after nine creep-only manager ticks, then its tenth tick
     // performs the fractional move, reports remove, and falls through to the
     // full move (Stage-2 replay slots 14/15, native f655..664). At 1/3 rate a
     // time-24 flash likewise ends on wall tick 70, not 72.
-    if (spawnAge < b.spawnDuration) {
+    if (startedInSpawn) {
       // Enemy-bullet storage is float32. FUN_004241c0 performs its spawn-
       // state multiply/add on x87, then writes the result back to the slot's
       // f32 position fields every manager tick. Keeping JS doubles here
@@ -4732,12 +4739,17 @@ export class StageScene implements GameHost {
       }
       // State 2/3/4 probes the player quad and settles a latched conversion
       // at this creep-only position before LAB_00431306 promotes the bullet
-      // and runs the ordinary behavior/full-speed move.
+      // and runs the extra full-speed move (et_ex stays on the next tick).
       transitionX = b.x;
       transitionY = b.y;
       // Th07.exe FUN_004241c0 @ 0x424843-0x424860: an ending spawn ANM
       // changes state to 1, resets the normal age counter, and falls through
       // to the ordinary behavior/full-velocity move on this same tick.
+      // TH08's jump-table spawn cases do not share that fallthrough: they
+      // still perform the extra full-velocity add (pacing tick-10 pin) but
+      // skip et_ex. Wriggle Sub16's 0x40 rain (flags 0x242, interval 70)
+      // otherwise burns one wait tick here, SET-heading 1 frame early, and
+      // the interval-70 spoke overlaps the fixture player at f3206.
       b.spawnAge = b.spawnDuration;
       b.spawnAgeFrac = 0;
       b.age = 0;
@@ -4746,6 +4758,9 @@ export class StageScene implements GameHost {
     // manager tick performs exactly one further queue pass BEFORE executing
     // active behavior routines (FUN_004241c0 @ all.c:16120). TH08's 0x20000
     // wait gate parks the queue here while the bullet's motion continues.
+    // Spawn-state ticks — including the ending extra-move tick — skip this
+    // block; the first exclusive state-1 tick is the first et_ex increment.
+    if (!startedInSpawn) {
     if ((b.exWaitFrames ?? 0) > 0) {
       b.exWaitFrames = (b.exWaitFrames ?? 0) - 1;
     } else {
@@ -4843,9 +4858,11 @@ export class StageScene implements GameHost {
     if ((b.exFlags & 0x100) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x100);
     if ((b.exFlags & 0x80) && b.exDir) this.dirChangeBullet(b, 'aimed', 0x80);
     if ((b.exFlags & 0xc00) && b.exBounce) this.bounceBullet(b, (b.exFlags & 0x400) !== 0);
+    }
     // Default bullet integration is the same f32 store-back (`pos += vel`)
     // at all.c:16147-16149. Math.fround is therefore state semantics, not a
-    // rendering approximation.
+    // rendering approximation. Spawn-end still takes this extra add; only
+    // the et_ex handlers above are skipped.
     b.x = Math.fround(b.x + b.vx);
     b.y = Math.fround(b.y + b.vy);
     return { enteredNormalState: true, transitionX, transitionY };
