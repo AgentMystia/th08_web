@@ -152,6 +152,10 @@ const PLAYER_BULLET_POOL_CAP = 0x80;
 // saturated during Wriggle's final card and silently vetoed the familiars'
 // volleys.
 const ENEMY_BULLET_POOL_CAP = 0x600;
+// Effect 39's settled ring radius: the authored scale interp ends at 15
+// (etama archive script 76, 192->15 over 120 frames) and the declaration-
+// time 600px screen radius fixes the strip's px-per-scale at 3.125.
+const SPELL_RING_SETTLED_RADIUS = 15 * 3.125;
 const BOMB_CLEAR_REGION_CAP = 0x60;
 const EFFECT_POOL_CAP = 400;
 // TH08's effect pool is 512 slots (FUN_00425430's 0x200-slot scan with 0xd8
@@ -6545,11 +6549,22 @@ export class StageScene implements GameHost {
     if (!ring || !sc || !img) return;
     const age = Math.max(0, sc.declAge);
     const settle = Math.min(1, age / 120);
-    // The special 3D callback maps the authored 192->15 strip scale to the
-    // measured ~600->240px screen radius during the settle.
-    const radius = 240 + 360 * (1 - settle);
-    const alpha = Math.min(1, age / 70);
+    // The authored effect-39 scale interp is 192->15 over the 120-frame
+    // settle (etama archive script 76). At the measured declaration-time
+    // ~600px screen radius that is 3.125 px per scale unit, so the ring
+    // SHRINKS ONTO THE BOSS and spins there for the card's duration (the
+    // native look) instead of parking at a playfield-wide 240px annulus.
+    const radius = SPELL_RING_SETTLED_RADIUS + (600 - SPELL_RING_SETTLED_RADIUS) * (1 - settle);
+    // The script's fade-in tops out at the authored alpha 192 (of 255).
+    const alpha = Math.min(1, age / 70) * (192 / 255);
     if (alpha <= 0) return;
+    // FUN_004152a0 arms the VM on the boss (all.c:9110-9126) and the slot VM
+    // rides its owner: follow the live boss, not the declaration snapshot.
+    const boss = this.bossActive;
+    if (boss) {
+      ring.x = boss.x;
+      ring.y = boss.y;
+    }
     const cx = ox + ring.x;
     const cy = oy + ring.y;
     const ctx = r.ctx;
@@ -6618,7 +6633,7 @@ export class StageScene implements GameHost {
   private spellRingCache: HTMLCanvasElement | null = null;
 
   private bakeSpellRing(img: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement | null {
-    const radius = 240;
+    const radius = SPELL_RING_SETTLED_RADIUS;
     const size = Math.ceil(radius + 24) * 2;
     const surface = document.createElement('canvas');
     surface.width = size;
