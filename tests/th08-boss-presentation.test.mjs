@@ -133,3 +133,16 @@ test('night blindness paints four cover rects plus the rim sprite centered on th
   scene.setNightBlindness(0, 0);
   assert.equal(scene.nightBlindIntensity, 0);
 });
+
+test('sidebar label VMs tick from update(), not only from draw()', () => {
+  const scene = makeScene(1);
+  for (let f = 0; f < 120; f++) scene.update(inputBits(0));
+  const runners = scene.th08HudRunners;
+  assert.ok(Array.isArray(runners) && runners.length === 10, 'HUD runners arm without draw()');
+  for (const runner of runners) {
+    assert.ok(
+      runner.frame >= 100,
+      `script ${runner.scriptId} ticked during update (frame ${runner.frame})`
+    );
+  }
+});

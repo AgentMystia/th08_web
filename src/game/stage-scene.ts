@@ -33,6 +33,7 @@ import {
   TH08_DIFFICULTY_TAG,
   TH08_FORM_GAUGE,
   TH08_HUD,
+  bossLifebarFillRatio,
   formGaugeCursorX,
   formGaugePercentX
 } from './th08-hud-layout';
@@ -2510,6 +2511,12 @@ export class StageScene implements GameHost {
     for (const runner of this.stageIntroRunners) {
       if (!runner.removed) runner.update(this.slowRate);
     }
+    // Native Gui ticks the front.anm sidebar label VMs every sim frame
+    // (FUN_0043625d's callers). Headless update() never reaches draw(), so
+    // these must advance here — otherwise the fade-in scripts stay parked
+    // at t0 and bomb/replay screenshots stack Player/Spell over missing
+    // Graze/Point/Time.
+    this.tickTh08HudRunners();
     if (this.dialogueBgmRunner && !this.dialogueBgmRunner.runner.removed) {
       this.dialogueBgmRunner.runner.update(this.slowRate);
     }
@@ -5738,9 +5745,11 @@ export class StageScene implements GameHost {
       this.markPass('items');
       const p = this.playerObj;
       // TH08 miss white-out: FUN_0044d2c0 draws FUN_0044de60(player, 768,
-      // 896, 0xffffffff, 0) EVERY frame while the +0xe2a70 countdown runs —
-      // a solid white playfield quad through the death squish and 60 frames
-      // past it (not the deathbomb window; that has no white flash).
+      // 896, 0xffffffff, 0) EVERY frame while the +0xe2a70 countdown runs.
+      // 768×896 centered on the player with opaque white always covers the
+      // 384×448 playfield, so the clipped result is a solid white playfield
+      // quad (tests/th08-death-white.test.mjs). There is no white during
+      // the deathbomb window itself.
       if (this.th08DeathWhiteFrames > 0) {
         r.ctx.fillStyle = '#ffffff';
         r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
@@ -6774,22 +6783,32 @@ export class StageScene implements GameHost {
   // themselves at their authored resting coordinates (x~416-448 column).
   private th08HudRunners: AnmRunner[] | null = null;
 
-  private drawSidebarTh08(r: Renderer): void {
+  private ensureTh08HudRunners(): void {
+    if (this.th08HudRunners) return;
     const front = this.assets.anms.front;
-    if (!this.th08HudRunners) {
-      const base = front.entries[0].spriteBase;
-      const mk = (script: number) =>
-        new AnmRunner(front, script, { entryIndex: 0, spriteIndexOffset: base });
-      // logo (-27), caption (-26), then the eight value labels (-25..-18).
-      this.th08HudRunners = [-27, -26, -25, -24, -23, -22, -21, -20, -19, -18].map(mk);
-      for (const runner of this.th08HudRunners) runner.update();
+    if (!front) return;
+    const base = front.entries[0].spriteBase;
+    const mk = (script: number) =>
+      new AnmRunner(front, script, { entryIndex: 0, spriteIndexOffset: base });
+    // logo (-27), caption (-26), then the eight value labels (-25..-18).
+    this.th08HudRunners = [-27, -26, -25, -24, -23, -22, -21, -20, -19, -18].map(mk);
+  }
+
+  private tickTh08HudRunners(): void {
+    this.ensureTh08HudRunners();
+    if (!this.th08HudRunners) return;
+    for (const runner of this.th08HudRunners) {
+      if (!runner.removed) runner.update(this.slowRate);
     }
+  }
+
+  private drawSidebarTh08(r: Renderer): void {
+    this.ensureTh08HudRunners();
+    if (!this.th08HudRunners) return;
     const p = this.playerObj;
     const run = this.runState;
     const valueX = 488; // TH08_HUD_FIELDS value column
-    // The label scripts fade themselves in (entry alpha 32 -> 255); they
-    // must tick every frame like every other ANM VM.
-    for (const runner of this.th08HudRunners) runner.update();
+    // VMs tick from update(); draw only blits the current pose.
     // Logo panel + caption (authors' own positions, 480,208 / 448,336).
     r.drawAnmFrame(this.th08HudRunners[0].spriteFrame(), 0, 0);
     r.drawAnmFrame(this.th08HudRunners[1].spriteFrame(), 0, 0);
@@ -6891,17 +6910,24 @@ export class StageScene implements GameHost {
     }
 
     // Native boss HP strip (geometry/colors in TH08_HUD.bossLifebar,
-    // measured on the native demo captures; fills drains right-to-left).
+    // measured on the native demo captures; fill drains right-to-left).
+    // The strip shows the CURRENT PHASE segment, not the whole-fight life:
+    // it refills to full at every nonspell/spell entry (phaseHpCeiling is
+    // re-latched at each ins_131 arm and callback clamp) and drains to the
+    // next armed ins_133 threshold — one attack = one full bar drain.
     if (this.bossActive) {
+      const boss = this.bossActive;
       const bar = TH08_HUD.bossLifebar;
-      const hp = Math.max(0, this.bossActive.hp);
-      const max = Math.max(1, this.bossActive.maxHp);
+      const hp = Math.max(0, boss.hp);
+      const frac = bossLifebarFillRatio(
+        hp, boss.phaseHpCeiling || boss.maxHp, boss.ecl.lifeThresholds
+      );
       const px = (n: number): string =>
         `#${((n >> 24) & 0xff).toString(16).padStart(2, '0')}${((n >> 16) & 0xff).toString(16).padStart(2, '0')}${((n >> 8) & 0xff).toString(16).padStart(2, '0')}`;
       ctx.fillStyle = px(bar.emptyColor);
       ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
       ctx.fillStyle = px(bar.fillColor);
-      ctx.fillRect(bar.x, bar.y, bar.width * (hp / max), bar.height);
+      ctx.fillRect(bar.x, bar.y, bar.width * frac, bar.height);
     }
   }
 

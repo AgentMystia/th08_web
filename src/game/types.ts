@@ -789,6 +789,11 @@ export interface Enemy {
   z: number;
   hp: number;
   maxHp: number;
+  // Current boss-phase HP ceiling for the HUD lifebar: re-latched at every
+  // ins_131 life arm and at every life/timer callback clamp, so the strip
+  // refills to full at each nonspell/spell phase entry (native TH08 bar
+  // behavior — one attack = one full drain of the strip).
+  phaseHpCeiling: number;
   // Damage taken this frame, settled once per frame through the exe's
   // pipeline (Th07.exe FUN_0041ed50: cherry from the pre-cap sum, cap 70,
   // spell-card /7, op-142 shield /9) — see StageScene#settlePendingDamage.

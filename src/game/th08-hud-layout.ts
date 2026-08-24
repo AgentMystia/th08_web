@@ -157,3 +157,23 @@ export function gaugeQuad(power: number): readonly Th08HudPoint[] {
     { x: TH08_HUD.gauge.x, y: TH08_HUD.gauge.bottom }
   ];
 }
+
+// Native Gui draws the 2px boss strip as the CURRENT PHASE segment:
+// ins_131 (and the life/timer callback clamp) re-latches the ceiling so the
+// bar refills to full at every nonspell/spell entry, then drains toward the
+// highest still-armed ins_133 threshold below live HP. One attack = one
+// full drain of the strip — never the whole-fight hp/maxHp fraction.
+export function bossLifebarFillRatio(
+  hp: number,
+  phaseHpCeiling: number,
+  lifeThresholds: readonly { threshold: number; sub: number }[]
+): number {
+  let lower = 0;
+  for (const t of lifeThresholds) {
+    if (t.threshold >= 0 && t.sub >= 0 && t.threshold < hp && t.threshold > lower) {
+      lower = t.threshold;
+    }
+  }
+  const ceiling = Math.max(lower + 1, phaseHpCeiling);
+  return Math.max(0, Math.min(1, (hp - lower) / (ceiling - lower)));
+}
