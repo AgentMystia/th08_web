@@ -4827,9 +4827,18 @@ export class StageScene implements GameHost {
         b.exAngleElapsed++;
       }
     }
-    if ((b.exFlags & 0x40) && b.exDir) this.dirChangeBullet(b, 'relative');
-    if ((b.exFlags & 0x100) && b.exDir) this.dirChangeBullet(b, 'absolute');
-    if ((b.exFlags & 0x80) && b.exDir) this.dirChangeBullet(b, 'aimed');
+    // TH08 et_ex 0x40 is SET heading. TH07's BulletManager.cpp:763 mapped
+    // 0x40 as relative ADD (`angle += f0`); carrying that into TH08 rotated
+    // Wriggle midboss Sub16's 20-way fan (FIRE0, aimMode 0, angle2=π/16,
+    // flags 0x242) by +π/2 instead of dropping every spoke as rain.
+    // Stage-1 ECL only ever writes large cardinals into 0x40's f0 (±π/2,
+    // ±2π/3, π, ±1.8326) — SET targets, not nudges. 0x100 (also SET) is
+    // unused on stages 1–2; 0x80 stays aimed. Clear the live flag bit
+    // explicitly: inferring it from mode would leave 0x40 armed forever
+    // because absolute previously only cleared 0x100.
+    if ((b.exFlags & 0x40) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x40);
+    if ((b.exFlags & 0x100) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x100);
+    if ((b.exFlags & 0x80) && b.exDir) this.dirChangeBullet(b, 'aimed', 0x80);
     if ((b.exFlags & 0xc00) && b.exBounce) this.bounceBullet(b, (b.exFlags & 0x400) !== 0);
     // Default bullet integration is the same f32 store-back (`pos += vel`)
     // at all.c:16147-16149. Math.fround is therefore state semantics, not a
@@ -4839,7 +4848,11 @@ export class StageScene implements GameHost {
     return { enteredNormalState: true, transitionX, transitionY };
   }
 
-  private dirChangeBullet(b: EnemyBullet, mode: 'relative' | 'absolute' | 'aimed'): void {
+  private dirChangeBullet(
+    b: EnemyBullet,
+    mode: 'relative' | 'absolute' | 'aimed',
+    flagBit: number
+  ): void {
     const d = b.exDir!;
     const interval = Math.max(1, d.interval | 0);
     const maxTimes = Math.max(1, d.maxTimes | 0);
@@ -4850,7 +4863,7 @@ export class StageScene implements GameHost {
     if (b.exDirElapsed >= interval) {
       b.dirTimes = times + 1;
       if (b.dirTimes >= maxTimes) {
-        b.exFlags &= mode === 'relative' ? ~0x40 : mode === 'absolute' ? ~0x100 : ~0x80;
+        b.exFlags &= ~flagBit;
       }
       // Native BulletManager.cpp:763 (relative) is a plain f32 `angle += d.angle`
       // with NO wrap — the heading accumulates unbounded (matching the f32 LHS

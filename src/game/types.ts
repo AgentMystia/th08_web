@@ -133,7 +133,7 @@ export interface EnemyBullet {
 // FIRE. Fields mirror the exe's queue entry pfVar1[0..5] (audit-bullet-motion
 // §op79): opcode=arg1, cond=arg2, arg3=duration, arg4=maxTimes, f0/f1=floats.
 export interface BulletExSlot {
-  opcode: number; // 1 ramp / 0x10 accel / 0x20 angle / 0x40|0x80|0x100 dir / 0x400|0x800 bounce
+  opcode: number; // 1 ramp / 0x10 accel / 0x20 angle / 0x40|0x80|0x100 dir (TH08 0x40=SET) / 0x400|0x800 bounce
   cond: number; // arg2: cond gate — a cond==0 slot activates only before any other behavior
   arg3: number; // duration / interval / limit / bounce-maxTimes
   arg4: number; // dir-change maxTimes
