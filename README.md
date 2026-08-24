@@ -53,14 +53,13 @@ pointItems/gauge/clock/RNG 残差）。CI 以 advisory（非阻塞）方式运�
 - **范围**：垂直切片 = Stage 1 + Stage 2 + Border Team。无 Stage 3+/其他
   队伍/全难度完整回归。
 - **Replay 收敛**：两面的逐帧 oracle 在 CI 分别运行（advisory），以
-  `EARLIEST DIVERGENCE` 输出作为收敛反馈通道。当前残差：Stage 1 首个
-  意外弹着 f3193、Stage 2 f3368（新版更严的意外弹着判据，与旧版
-  f2884/f1052 口径不可直接比较）；其上游是 Stage 2 f680..1237 窗口内
-  一次 8-u16 的抽签经济残差（占该窗口 17.6k 抽的 0.05%，事件面完全
-  对齐），根因候选与完整分析记录在 `AGENTS.md` §0 与 `HANDOFF.md`。
-  2026-08-23 第二轮修复了弹幕池上限（TH07 1024 → TH08 原生 1536）、
-  相位跳转释放 ins_135 子上下文、FIRE count=0 的发射钳位等 exe 对齐
-  问题——advisory 数字可能因此移动。
+  `EARLIEST DIVERGENCE` 输出作为收敛反馈通道。2026-08-25 的 CALL 参数
+  通道修复（ins_52 帧变量 + 运行全局 bank 的 int 写路径）使 Stage 1 全程
+  **零分歧**（f13057 通关）；Stage 2 的当前残差是 f676 的原生接触
+  oracle（fixture 记录在案的死亡炸弹链窗口，双方均能通关）。其上游是
+  Stage 2 f680..1237 窗口内一次 8-u16 的抽签经济残差（占该窗口 17.6k
+  抽的 0.05%，事件面完全对齐），根因候选与完整分析记录在 `AGENTS.md`
+  §0 与 `HANDOFF.md`。advisory 数字随保真度修复可能移动。
   playable 路径本身（弹幕、对话、HUD、炸弹、Boss 呈现）由 th08-* 回归
   测试与 CI 浏览器启动检查守护。
 - 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序、对话

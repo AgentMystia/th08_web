@@ -334,6 +334,12 @@ export interface GameHost {
   // from->to over duration) and type-3 repeating full-screen tint flash.
   startScreenShake?(duration: number, from: number, to: number): void;
   startScreenFlash?(duration: number, repeats: number, argb: number): void;
+  // TH08 night blindness (ins_136 builtin 0 → FUN_00423390): the executing
+  // ECL context exports int var 10000 (intensity 0-255) and float var 10016
+  // (lit radius) to DAT_004e3d28/24; FUN_00405420 (all.c:1583-1609) renders
+  // the playfield darkness around the player from them. ins_123 clears the
+  // intensity at spell end (all.c:9422).
+  setNightBlindness?(intensity: number, radius: number): void;
   // FUN_00422ea0's laser half: graceful-cancel non-bomb-immune lasers
   // (unconditional = the bombType-10 spell-timeout variant).
   cancelLasers?(unconditional: boolean): void;
@@ -755,7 +761,7 @@ export interface Th08EclState {
   // popped the Sub32→Sub58 call frame, so the sub-context re-entered Sub32
   // and re-called Sub58 EVERY frame — boss hp refilled per cycle, then the
   // spell re-declared per frame).
-  subContexts: { ctx: EclContext; vars: Float64Array; stack: EclFrame[] }[];
+  subContexts: { ctx: EclContext; vars: Float64Array; interps: (EclInterpSlot | null)[]; stack: EclFrame[] }[];
 }
 
 export interface BulletProps {

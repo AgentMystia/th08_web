@@ -229,6 +229,28 @@ export class Th08BorderBomb {
     return !this.ended;
   }
 
+  /** Whether any beam group is inside its authored 140-frame visual life. */
+  hasLiveBeamGroups(): boolean {
+    return this.beamGroupVisuals.length > 0;
+  }
+
+  /**
+   * Visual-only advance for a bomb whose machine has ended: FUN_004117b0's
+   * VM rotation/age advance runs unconditionally, so a retired sim keeps
+   * spinning its groups until they age out of the 140-frame life.
+   */
+  tickVisualsOnly(): void {
+    this.advanceBeamVisuals();
+  }
+
+  private advanceBeamVisuals(): void {
+    for (const v of this.beamGroupVisuals) {
+      v.angle = normalizeAngle(v.angle, v.spin);
+      v.age++;
+    }
+    this.beamGroupVisuals = this.beamGroupVisuals.filter((v) => v.age < 140);
+  }
+
   /** Live orb state for the visual layer (index 0..15). */
   orbAt(index: number): { x: number; y: number; angle: number; state: number } | null {
     const orb = this.orbs[index];
@@ -295,11 +317,7 @@ export class Th08BorderBomb {
     // The authored wave scripts live 140 frames (etama 88-95) and the VM
     // rotation advance is unconditional in FUN_004117b0 — the visuals keep
     // spinning after the active bomb ends.
-    for (const v of this.beamGroupVisuals) {
-      v.angle = normalizeAngle(v.angle, v.spin);
-      v.age++;
-    }
-    this.beamGroupVisuals = this.beamGroupVisuals.filter((v) => v.age < 140);
+    this.advanceBeamVisuals();
     if (this.ended) return;
     void shootHeld;
     if (this.type === 0) this.tickOrbSeek(host, playerX, playerY);

@@ -53,6 +53,7 @@ function auditStage(stageNumber, extraFrames) {
   const frames = inputs.length + extraFrames;
   const log = [];
   const spellCards = [];
+  const nightBlindSamples = [];
   let lastSpell = '';
   let lastDialogue = false;
   const prev = new Map(); // enemy id -> state string
@@ -78,6 +79,7 @@ function auditStage(stageNumber, extraFrames) {
     scene.playerObj.bombInvuln = 999999;
     const word = f < inputs.length ? inputs[f] : 0x5;
     scene.update(inputBits(word));
+    if (f % 10 === 0) nightBlindSamples.push({ f, i: scene.nightBlindIntensity, spell: scene.spellName });
     const dialogue = scene.isDialogueActive();
     if (dialogue !== lastDialogue) { log.push(`f${f} dialogue ${dialogue ? 'start' : 'end'}`); lastDialogue = dialogue; }
     if (scene.spellName !== lastSpell) {
@@ -122,7 +124,7 @@ function auditStage(stageNumber, extraFrames) {
       log.push(`END e${e.id} sub=${p.sub} hp=${e.hp} inv=${p.inv} sbd=${p.sbd} bt=${p.bt} tt=${p.tt}`);
     }
   }
-  return { log, spellCards, dmgFrames };
+  return { log, spellCards, dmgFrames, nightBlindSamples };
 }
 
 test('stage 1 full boss fight: phases, cards, Last Spell', () => {
@@ -141,7 +143,7 @@ test('stage 1 full boss fight: phases, cards, Last Spell', () => {
 });
 
 test('stage 2 full boss fight: phases, cards, Last Spell', () => {
-  const { log, spellCards, dmgFrames } = auditStage(2, 20000);
+  const { log, spellCards, dmgFrames, nightBlindSamples } = auditStage(2, 20000);
   console.log('=== STAGE 2 BOSS LOG ===');
   for (const line of log) console.log(line);
   console.log('=== STAGE 2 CARDS ===');
@@ -155,6 +157,28 @@ test('stage 2 full boss fight: phases, cards, Last Spell', () => {
   assert.ok(log.some((l) => l.includes('sub58 ')), 'Last Spell card sub 58 runs');
   assert.ok(spellCards.filter((c) => c.maxBullets > 10).length >= 3, 'at least three cards emit bullets');
   assert.ok([...dmgFrames.values()].some((n) => n > 30), 'boss takes sustained damage');
+  // 夜盲「夜雀の歌」: the darkness persists from the card through the
+  // flourish bridge into the Last Spell. Decompile basis: Mystia's card
+  // subs contain NO ins_123 (the timeout path rewires via ins_134 → sub62,
+  // the kill path walks the death callback), so the only native clears are
+  // the ins_123 handler (all.c:9422) and stage transitions — DAT_004e3d28
+  // retains its last exported value across the gap, and sub60 re-drives it
+  // during the Last Spell. Locking the persistence guards against a future
+  // regression that flashes the field bright mid-finale.
+  const blind = spellCards.find((c) => c.name.includes('夜盲'));
+  if (blind) {
+    const nextCard = spellCards.find((c) => c.f > blind.f && c.name !== blind.name);
+    if (nextCard) {
+      const gap = nightBlindSamples.filter(
+        (s) => s.f > blind.f && s.f < nextCard.f && s.spell === ''
+      );
+      assert.ok(gap.length > 0, 'a nonspell window exists after 夜盲');
+      assert.ok(
+        gap.every((s) => s.i === 255),
+        `darkness persists through the bridge gap (got ${JSON.stringify(gap.slice(0, 4))})`
+      );
+    }
+  }
 });
 
 
@@ -173,6 +197,7 @@ function auditSynthetic(stageNumber, difficulty, opts = {}) {
   if (opts.quotaMet) scene.runState.currentTimeOrbs = 99999;
   const log = [];
   const spellCards = [];
+  const nightBlind = [];
   let lastSpell = '';
   const bombEvery = opts.bombEvery ?? 0;
   const frames = opts.frames ?? 30000;
@@ -190,19 +215,51 @@ function auditSynthetic(stageNumber, difficulty, opts = {}) {
     if (bombEvery && f % bombEvery === 0 && f > 4000) word |= 0x2;
     scene.update(inputBits(word));
     if (scene.spellName !== lastSpell) {
-      if (scene.spellName) spellCards.push({ f, name: scene.spellName, maxBullets: 0 });
+      if (scene.spellName) spellCards.push({ f, name: scene.spellName, maxBullets: 0, famSubs: new Map() });
       lastSpell = scene.spellName;
       log.push(`f${f} spell ${scene.spellName || '(end)'}`);
     }
     let liveBullets = 0;
     for (const b of scene.enemyBullets) if (b && !b.dead) liveBullets++;
-    if (spellCards.length) spellCards[spellCards.length - 1].maxBullets = Math.max(spellCards[spellCards.length - 1].maxBullets, liveBullets);
+    if (spellCards.length) {
+      const card = spellCards[spellCards.length - 1];
+      card.maxBullets = Math.max(card.maxBullets, liveBullets);
+      // Per-owner provenance: which emitter sub fired each bullet spawned
+      // THIS frame during this card (counted once per bullet, attributed by
+      // the owner's static spawn sub — familiars carry their own sub id,
+      // distinct from the boss body's).
+      for (const b of scene.enemyBullets) {
+        if (!b || b.dead || b.spawnFrame !== f) continue;
+        const owner = scene.enemies.find((e) => e.id === b.ownerId);
+        const sub = owner?.ecl?.subId ?? -1;
+        card.famSubs.set(sub, (card.famSubs.get(sub) ?? 0) + 1);
+      }
+    }
+    if (f % 10 === 0) {
+      nightBlind.push({
+        f,
+        i: scene.nightBlindIntensity,
+        r: Math.round(scene.nightBlindRadius),
+        spell: scene.spellName
+      });
+    }
     if (f % 3000 === 0) {
       const boss = scene.enemies.find((e) => e.ecl?.isBoss && !e.dead);
       log.push(`f${f} boss=${boss ? `sub${boss.ecl.ctx?.subId} hp=${boss.hp} inv=${boss.ecl.invisible ? 1 : 0}` : 'none'} bullets=${liveBullets}`);
     }
   }
-  return { log, spellCards };
+  // Immortal-marker invariant: every familiar death/removal path must
+  // release the ttl-Infinity rune-circle VM (the 道中魔法阵残留 leak). At
+  // fight end the leaked count must not exceed the still-live familiars.
+  // The player's focus aura (effect 0x16 → etama archive 54) is a LEGITIMATE
+  // permanent Infinity-ttl tenant of the same pool and is excluded.
+  const auraRef = mod.archiveScript(new mod.Anm(mod.TH08_DATA.anm.etama, 'etama'), 54);
+  const leakedMarkers = scene.th08Effects.entries.filter(
+    (e) => e.ttl === Infinity && e.scriptId !== auraRef.localId
+  ).length;
+  const liveFamiliars = scene.enemies.filter((e) => !e.dead && e.ecl.th08?.familiar).length;
+  log.push(`END markers=${leakedMarkers} liveFamiliars=${liveFamiliars}`);
+  return { log, spellCards, nightBlind, leakedMarkers, liveFamiliars };
 }
 
 for (const difficulty of [0, 1, 2]) {
@@ -243,4 +300,83 @@ test('stage 1 Last Spell requires the time quota (var 10098 gate)', () => {
   const lastCard = (r) => r.spellCards[r.spellCards.length - 1]?.name ?? '';
   console.log('quota met last card:', lastCard(met), '| unmet last card:', lastCard(unmet));
   assert.ok(met.spellCards.length > unmet.spellCards.length, 'quota met plays strictly more cards');
+});
+
+// Round 6 (2026-08-25): the user-visible boss breaks. 灯符「ファイヤフライ
+// フェノメノン」's familiars fired ZERO bullets because ins_52 CALL zeroed
+// the callee's vars 10053-10060 instead of copying the run-global bank —
+// Sub39 read [10054] (familiar life) as 0, so every Sub43 spawned hp=0,
+// died on its first manager pass, and FIRE's hp>0 gate vetoed everything.
+test('stage 1: both familiar cards fire at every difficulty (per-owner census)', () => {
+  for (const difficulty of [0, 1, 2, 3]) {
+    const { spellCards } = auditSynthetic(1, difficulty, { frames: 24000 });
+    const fly = spellCards.find((c) => c.name.includes('ファイヤフライ'));
+    const storm = spellCards.find((c) => c.name.includes('バグ'));
+    assert.ok(fly, `D${difficulty}: 灯符 card declared`);
+    // Familiar emitter subs: spell-1 children are Sub43 spawns (firing via
+    // their Sub42 sub-contexts), final-card children are Sub46 spawns. The
+    // histograms also carry the boss body's own volleys (sub 25 spawn).
+    console.log(`D${difficulty} 灯符 owners:`, [...fly.famSubs.entries()]);
+    const famFly = [...fly.famSubs.entries()].filter(([sub]) => sub === 42 || sub === 43);
+    assert.ok(
+      famFly.some(([, n]) => n > 0),
+      `D${difficulty}: 灯符 familiars fire bullets (owners ${[...fly.famSubs.entries()]})`
+    );
+    assert.ok(storm, `D${difficulty}: final card declared`);
+    console.log(`D${difficulty} 蠢符 owners:`, [...storm.famSubs.entries()]);
+    const famStorm = [...storm.famSubs.entries()].filter(([sub]) => sub === 45 || sub === 46);
+    assert.ok(
+      famStorm.some(([, n]) => n > 0),
+      `D${difficulty}: final-card familiars fire bullets (owners ${[...storm.famSubs.entries()]})`
+    );
+  }
+});
+
+// The 道中魔法阵残留 leak: familiars that self-delete (ins_1) or get culled
+// died inside tickEnemyCore, whose early block freed the pool slot WITHOUT
+// releasing the ttl-Infinity rune-circle marker VM. A full fight used to end
+// with ~210 leaked markers (the whole effect pool).
+test('stage 1: immortal rune-circle markers release through the whole fight', () => {
+  const { log, leakedMarkers, liveFamiliars } = auditSynthetic(1, 2, { frames: 24000 });
+  console.log('=== S1 D2 marker tail ===');
+  console.log(log[log.length - 1]);
+  assert.ok(
+    leakedMarkers <= liveFamiliars,
+    `no immortal markers beyond live familiars (leaked ${leakedMarkers} vs ${liveFamiliars} live)`
+  );
+});
+
+// 夜盲「夜雀の歌」: Mystia's sub56 drives the playfield darkness through
+// ins_136 builtin 0 (intensity var 10000, radius var 10016; radius
+// interpolates 320→192 over 120f then toward 128). ins_123 must clear it;
+// the Last Spell's sub60 re-arms it.
+test('stage 2: 夜盲 arms the darkness, shrinks the circle, and ins_123 clears it', () => {
+  const { spellCards, nightBlind } = auditSynthetic(2, 1, { frames: 30000 });
+  const names = spellCards.map((c) => c.name);
+  console.log('=== S2 cards ===');
+  for (const n of names) console.log(n);
+  const card = spellCards.find((c) => c.name.includes('夜盲'));
+  assert.ok(card, '夜盲「夜雀の歌」 declared');
+  const during = nightBlind.filter((s) => s.f >= card.f && s.spell === card.name);
+  assert.ok(during.length > 0 && during.some((s) => s.i >= 200), 'intensity arms within the card (sub56 exports 255)');
+  const radii = during.filter((s) => s.i > 0).map((s) => s.r);
+  assert.ok(radii.length >= 2, 'radius samples recorded while dark');
+  assert.ok(
+    radii[radii.length - 1] < radii[0],
+    `the lit circle shrinks through the card (first ${radii[0]} → last ${radii[radii.length - 1]})`
+  );
+  const after = nightBlind.find((s) => s.f > card.f && s.spell !== card.name);
+  assert.ok(after, 'the card ends');
+  // NOTE: intensity need NOT be 0 immediately after the card — the Last
+  // Spell's sub60 and the boss-defeat chain's sub57 legitimately keep the
+  // darkness alive outside card windows. The ins_123 clear is locked where
+  // a nonspell gap actually occurs (the replay-driven full-fight test).
+  // The Last Spell keeps the darkness (its sub60 re-exports from t120).
+  const ls = spellCards.find((c) => c.name.includes('コーラス'));
+  if (ls) {
+    const lsDark = nightBlind.filter((s) => s.spell === ls.name && s.i > 0);
+    if (spellCards.indexOf(ls) === spellCards.length - 1) {
+      assert.ok(lsDark.length > 0, 'the Last Spell re-arms the darkness');
+    }
+  }
 });

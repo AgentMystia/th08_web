@@ -694,6 +694,103 @@ E/N/H/L sweeps, a bombing variant, a pinned-orb quota A/B, and the
 wave-anchor/beam-rotation locks in th08-border-bombs.test.mjs. 197/197
 local via the podman runner.
 
+### 2026-08-25 boss-fidelity acceptance pass (port-side; podman runner + podman playwright visual gate)
+
+Five user-reported boss-fight breaks root-caused and fixed; every fix is
+decompile-anchored, test-locked (205 tests, 0 fail), and visually accepted
+in a real browser (podman `mcr.microsoft.com/playwright:v1.60.0-noble`,
+screenshots under ignored `tmp/pw-driver/shots/`, zero PAGE ERRORS).
+
+1. **灯符「ファイヤフライフェノメノン」使魔零弹幕 — TWO stacked CALL-channel
+   defects.** (a) eclvm case 52 zeroed the callee's vars 10053-10060
+   instead of copying the run-global float bank (native all.c:15505-15512
+   copies DAT_004ece20..3c into frame+0x70) — the "TH08 has no run-global
+   bus" comment was wrong. (b) The bank's int write path had NO mapping:
+   the real data writes [10062] (familiar life) through INT ops
+   (varWriteInt8 dropped ids 10061-10068 silently; the native resolver
+   write switch does not split int/float). Stacked effect: Sub39 read
+   [10054]=0 → every Sub43 familiar spawned hp=0, died on its first
+   manager pass, and FIRE's hp>0 gate vetoed everything (measured: zero
+   owner-43 bullets at every difficulty; after both fixes 27/53/96/222 at
+   E/N/H/L). The 蠢符 final-card familiars (Sub46) fire 72/card at every
+   difficulty — the earlier "final card familiars don't fire" reports were
+   this same starvation plus the retired 1024-pool saturation.
+2. **道中魔法阵残留 — the early-death block leaked markers.** Enemies dying
+   inside tickEnemyCore (ins_1 self-deletes — every stage-1 familiar
+   family — and offscreen culls) hit the loop-head early block that nulled
+   the slot WITHOUT calling releaseTh08EnemyVisuals; the post-loop sweep
+   could not recover (slot already null). A no-shoot run leaked ~210
+   Infinity-ttl rune circles (the whole effect pool, also starving later
+   effect arms); now 0 (audit test asserts leaked ≤ live familiars,
+   excluding the player focus aura's legitimate permanent slot).
+3. **八云紫 bomb 必崩 — AnmRunner built without the entry sprite base.**
+   drawTh08BeamVisuals constructed `new AnmRunner(etama, ref.localId,
+   { entryIndex })`; etama is multi-entry (entry2 base 389) and the
+   constructor executes t0 ops, so the set-sprite threw "references
+   missing sprite 225" ~50 frames after every focused/deathbomb cast (the
+   first beam group arms at t49) — draw-phase halt + red ERROR banner.
+   New shared helper archiveScriptRunner() (th08-declaration.ts) resolves
+   archive indices WITH spriteIndexOffset. Follow-ons fixed in the same
+   rewrite: per-group authored runners (cast 0x58/0x5c + waves
+   0x59-0x5b/0x5d-0x5f) so the authored alpha fade actually plays (the old
+   cached t0 frame was alpha 0 = invisible forever), and the visuals now
+   OUTLIVE the active machine to their authored 140-frame life
+   (tickRetiredBombVisuals drives the retired sim from the per-frame
+   effect tail — the bomb choreography itself only runs while bombTimer
+   is live). Acceptance note: the Yukari side needs the form byte (focus
+   held >6 frames), not a one-frame key tap — native 0x40be30 EDX reads
+   the FORM, so a tap-focus bomb correctly casts Reimu's orb bomb.
+4. **夜盲「夜雀の歌」黑夜效果 — entirely missing, now implemented.** ECL
+   mechanism (decompile-proven): the card subs arm ins_135 drivers
+   (鷹符 sub50, 夜盲 sub56@t210, Last Spell sub60@t120, defeat sub57)
+   that write int var 10000 (intensity) + interp float var 10016 (radius
+   320→192@120f→128@1800f) and re-export via ins_136 builtin 0
+   (FUN_00423390 → DAT_004e3d28/24). Draw (FUN_00405420, all.c:1583-
+   1609): four black quads close the playfield to a square around the
+   player, then etama archive script 105 (etama5 radial-gradient sprite
+   229) draws scaled radius/63 with alpha=intensity — smooth rim, HUD
+   untouched. Port: GameHost.setNightBlindness + the draw pass after all
+   world layers; ins_123 clears the intensity (all.c:9422).
+   **Persistence semantics (decompile-derived, test-locked):** Mystia's
+   card subs contain NO ins_123 (timeout rewires via ins_134 → sub62,
+   kills walk the death callback), so the darkness RETAINS through the
+   bridge into the Last Spell and the defeat animation — the finale plays
+   dark natively; clears happen only at a formal ins_123 or stage
+   transition.
+5. **Sub-context interpolation isolation.** tickTh08SubContexts swapped
+   ctx/vars/stack but NOT interpSlots: sub-context op36 tweens armed onto
+   the main context's slots (stomped by the boss body's own interps) and
+   never ticked. subContexts now carry private interp slots and advance
+   with the same hp gate as the main tick — without this the 夜盲 circle
+   froze at its first waypoint (radius stuck 288 at N). This also
+   un-breaks any authored sub-context tween (boss walk-ins etc.).
+
+**Verifier movement (fidelity change, honestly recorded):** stage 1
+replay now converges with **EARLIEST DIVERGENCE: none observed**
+(previously f3192) and clears at f13057; stage 2 clears at f27784 with
+the standing native-contact oracle at f676 (the documented fixture
+deathbomb-chain residual). The CALL-channel fixes resolved the auto-fire
+RNG lottery upstream: familiar spawns/volleys now draw from the authored
+parameter paths. `npm run check/build/test` green (205 tests; the 6
+skips are the browser-only suite). New regression surfaces:
+per-owner-sub card censuses at every difficulty (owner 43 on 灯符, 46 on
+蠢符), the marker-pool invariant, the CALL frame-copy unit test
+(th08-subcontext), and tests/th08-boss-presentation.test.mjs (beam
+runner resolution no-throw + authored fade + retired outlive through a
+real scene, night-blindness geometry: four cover rects + rim sprite
+centered/scaled on the player, ins_123 clear).
+
+**Visual acceptance methodology (wine stays closed):** `?test=1&paused=1`
++ the __TH08_TEST__ hooks driven from podman playwright; the tally chains
+stage 1→2 only under `arcade=1` (test mode intentionally never advances
+the results screen). Twelve acceptance frames verified frame-by-frame:
+mid-bomb beams (4 rotating colored strips + declaration banner),
+post-machine beams dimming, midboss card, post-midboss field (zero
+residual circles), both familiar cards (familiars on rune arrays firing,
+HP strip visible), stage-1 tally rows + night clock, bright nonspell
+reference, 夜盲 full circle, shrunk circle, still-dark bridge gap, and
+the Last Spell singing in the dark.
+
 ### 2026-08-24 draw-economy audit pass (port-side only; podman runner)
 
 A full static/exe audit of the standing stage-2 f677..1237 +8 u16 draw

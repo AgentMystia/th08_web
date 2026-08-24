@@ -230,3 +230,32 @@ test('the bullet pool accepts TH08-native densities past TH07\'s 0x400', () => {
     'a 1500-bullet volley must fully allocate (TH07-era 1024 cap dropped 476)'
   );
 });
+
+// TH08 CALL copies the eight run-global floats (vars 10061-10068 =
+// DAT_004ece20..3c) into the callee's vars 10053-10060 at frame+0x70
+// (all.c:15505-15512) — the caller→callee parameter channel. Regression:
+// zeroing the callee frame instead starved every parameterized child;
+// Wriggle's Sub38 wrote [10062] (familiar life) before each CALL Sub39 and
+// Sub39 read [10054] as 0, so every spell-1 familiar spawned hp=0, died on
+// its first manager pass, and fired nothing (灯符使魔不发弹).
+test('CALL copies the run-global bank into the callee frame (vars 10053-10060)', () => {
+  const runtime = makeRuntime([
+    [
+      // Caller writes float run-global 10062 = 60 (the bank is FLOAT — the
+      // int write path intentionally has no bank mapping, matching native).
+      instruction(0, 7, [f32(10062), f32(60)]),
+      instruction(0, 52, [i32(1)]), // ...then CALLs Sub1
+      instruction(1, 2, [i32(60000)])
+    ],
+    // Callee body: just wait. The channel values sit in its live vars.
+    [instruction(0, 2, [i32(60000)])]
+  ]);
+  const game = makeHost();
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });
+  runTicks(runtime, game, 3);
+  assert.equal(enemy.ecl.ctx.subId, 1, 'inside the callee');
+  // Callee var 10054 (= vars[21]) carries the caller's 10062 value; an
+  // untouched slot mirrors its bank value (zero here).
+  assert.equal(enemy.ecl.vars[21], 60, 'callee var 10054 carries run-global 10062');
+  assert.equal(enemy.ecl.vars[20], 0, 'untouched slot mirrors the bank (zero)');
+});

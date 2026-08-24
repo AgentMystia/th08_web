@@ -1,4 +1,4 @@
-import { AnmRunner, type Anm } from '../formats/anm';
+import { AnmRunner, type Anm, type AnmRunnerOptions } from '../formats/anm';
 import type { Renderer } from '../gfx/renderer';
 
 // TH08 player spell-card declaration (the bomb cut-in). Th08.exe v1.00d:
@@ -49,6 +49,25 @@ export function archiveScript(anm: Anm, index: number): { entryIndex: number; lo
     rest -= ids.length;
   }
   throw new Error(`${anm.name}: archive script index ${index} out of range`);
+}
+
+// Construct a runner for an ARCHIVE script index. Multi-entry archives key
+// sprites globally as entryBase + embedded id, so the entry's sprite base is
+// NOT optional: a runner built without spriteIndexOffset throws on its first
+// set-sprite (etama's wave scripts reference sprites that only exist as
+// entry2's 389+id). Returns null when the entry lookup misses.
+export function archiveScriptRunner(
+  anm: Anm,
+  index: number,
+  options: AnmRunnerOptions = {}
+): AnmRunner | null {
+  const ref = archiveScript(anm, index);
+  if (!anm.hasScriptInEntry(ref.entryIndex, ref.localId)) return null;
+  return new AnmRunner(anm, ref.localId, {
+    ...options,
+    entryIndex: ref.entryIndex,
+    spriteIndexOffset: anm.entries[ref.entryIndex].spriteBase
+  });
 }
 
 export class Th08SpellDeclaration {

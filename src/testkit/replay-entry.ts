@@ -5,7 +5,7 @@
 // sees). Not imported by src/main.ts — ships nothing.
 export { StageScene } from '../game/stage-scene';
 export type { RunCarry } from '../game/stage-scene';
-export { Th08SpellDeclaration, th08BombSpellName, archiveScript } from '../game/th08-declaration';
+export { Th08SpellDeclaration, th08BombSpellName, archiveScript, archiveScriptRunner } from '../game/th08-declaration';
 export { Rpy } from '../formats/rpy';
 export { ReplayInputSource } from '../core/replay-input';
 export { Anm, AnmRunner } from '../formats/anm';

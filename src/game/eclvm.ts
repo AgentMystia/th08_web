@@ -1021,6 +1021,7 @@ export class StageRuntime {
     const mainCtx = s.ctx;
     const mainVars = s.vars;
     const mainStack = s.stack;
+    const mainInterps = s.interpSlots;
     const rate = game.slowRate ?? 1;
     for (const sub of s.th08!.subContexts) {
       if (!sub) continue;
@@ -1029,6 +1030,12 @@ export class StageRuntime {
       // The sub-context ticks with its OWN call stack: a callee's ins_53
       // must never pop the main context's frames.
       s.stack = sub.stack;
+      // ...and its own interpolation slots (see the case-135 note).
+      s.interpSlots = sub.interps;
+      // Those slots also advance WITH the sub-context (the same hp gate as
+      // the main-context tick above): without this, Mystia's 夜盲 driver
+      // armed its radius tween and the circle froze at the starting value.
+      if (e.hp > 0) this.tickInterpSlots(game, e);
       let ended = false;
       let waited = false;
       for (let guard = 0; guard < 64; guard++) {
@@ -1086,6 +1093,7 @@ export class StageRuntime {
     s.ctx = mainCtx;
     s.vars = mainVars;
     s.stack = mainStack;
+    s.interpSlots = mainInterps;
   }
 
   private updateHighSpellBombCollisionGate(game: GameHost, e: Enemy): void {
@@ -3321,6 +3329,11 @@ export class StageRuntime {
     if (id >= 10000 && id <= 10007) { s.vars[id - 10000] = integer; return; }
     if (id >= 10036 && id <= 10039) { s.vars[16 + (id - 10036)] = integer; return; }
     if (id >= 10053 && id <= 10056) { s.vars[20 + (id - 10053)] = integer; return; }
+    // The run-global bank holds raw dwords — the native resolver write
+    // switch does not split int/float for ids 10061-10068, and the real
+    // stage data writes it through INT ops (stage-1 Sub38's ins_6([10062],
+    // life)). Dropping int writes starved every parameterized child again.
+    if (id >= 10061 && id <= 10068) { this.th08RunFloats[id - 10061] = integer; return; }
     if (id >= 10008 && id <= 10015) { t.enemyInts[id - 10008] = integer; return; }
     if (id >= 10088 && id <= 10093) { t.scratch88[id - 10088] = integer; return; }
     if (id >= 10094 && id <= 10095) { s.vars[28 + (id - 10094)] = integer; return; }
@@ -3551,10 +3564,15 @@ export class StageRuntime {
         this.jumpTo(s, v.i32(a + 12), v.i32(a + 8));
         return 'flow';
       }
-      case 52: { // CALL (FUN_00421bd0): push the 0x228-byte frame, then ZERO
-        // the callee's vars 10053-10060 (frame+0x70) — TH07 copied the
-        // run-globals there instead; TH08 has no run-global bus. The saved
-        // return cursor is instr + size (the next instruction).
+      case 52: { // CALL (FUN_00421bd0): push the 0x228-byte frame, then copy
+        // the eight run-global floats DAT_004ece20..3c into the callee's
+        // vars 10053-10060 at frame+0x70 (all.c:15505-15512). This IS the
+        // TH08 caller→callee parameter channel — e.g. Wriggle's Sub38 writes
+        // [10062]/[10061]/[10065]-[10067] before each CALL Sub39, and Sub39's
+        // spawn rows read them back as [10054]/[10053]/[10057]-[10059].
+        // Zeroing here instead starved every parameterized child (stage-1
+        // spell-1 familiars spawned hp=0 and never fired). The saved return
+        // cursor is instr + size (the next instruction).
         if (!s.disableCallStack) {
           s.stack.push({
             ctx: { ...ctx, index: ctx.index + 1 },
@@ -3564,7 +3582,7 @@ export class StageRuntime {
           });
         }
         this.enterSub(s, v.i32(a));
-        s.vars.fill(0, 20, 28);
+        for (let i = 0; i < 8; i++) s.vars[20 + i] = this.th08RunFloats[i];
         return 'flow';
       }
       case 53: { // RETURN (FUN_00421cb0)
@@ -4013,6 +4031,9 @@ export class StageRuntime {
         s.spellName = '';
         this.spellActive = false;
         this.currentSpellId = -1;
+        // FUN_004161b0 clears DAT_004e3d28 (the night-blindness intensity)
+        // when a spell ends (all.c:9422); the radius field is left alone.
+        game.setNightBlindness?.(0, 0);
         const sweep = game.endBossSpell?.() ?? true;
         if (sweep) {
           let total = game.sweepBulletsToItems();
@@ -4111,6 +4132,11 @@ export class StageRuntime {
         t.subContexts[slot] = {
           ctx: { subId: sub, index: 0, time: 0, timeFrac: 0, waitTimer: 0 },
           vars: s.vars.slice(),
+          // The native sub-context is a full ECL context: its op27/op36
+          // interpolation slots are private too. Sharing the main context's
+          // slots let the boss body's interps stomp the driver's radius
+          // tweens (Mystia's 夜盲 circle froze at its first waypoint).
+          interps: s.interpSlots.map((x) => (x ? { ...x } : null)),
           // A context-private call stack (see the type note): the native
           // sub-context is a full ECL context, call stack included.
           stack: []
@@ -4119,18 +4145,21 @@ export class StageRuntime {
       }
       case 136: {
         // ins_136(n) = call builtin n from the rdata table PTR_FUN_004c6cb0
-        // (exe case 0x87). Slice usage: Sub50/Sub60 call 0 every frame
-        // (FUN_00423390: export two ECL-context floats to DAT_004e3d28/24 —
-        // bookkeeping; no mapped consumer in the slice, §7) and Sub58 calls
-        // 1 once (FUN_004233d0: a 21-frame type-1 screen shake at the ring
-        // burst, FUN_0045b8b0(1, 0xffffffff, 0, 0x15); the native struct's
-        // magnitude fields are unrecovered — the port keeps the authored
-        // duration with a zero ramp, §7).
+        // (exe case 0x87). Builtin 1 = FUN_004233d0's 21-frame type-1 screen
+        // shake at the ring burst (FUN_0045b8b0(1, 0xffffffff, 0, 0x15); the
+        // native struct's magnitude fields are unrecovered — the port keeps
+        // the authored duration with a zero ramp, §7). Builtin 0 =
+        // FUN_00423390: copy the executing context's int local 10000
+        // (intensity) and float local 10016 (radius) into DAT_004e3d28/24 —
+        // the night-blindness state FUN_00405420 renders (all.c:1583-1609).
+        // Mystia's sub50/sub56/sub57/sub60 drive it from ins_135
+        // sub-contexts; the dispatcher swaps s.vars in, so the reads below
+        // see the driving context's values.
         const index = gi(0);
         if (index === 1) game.startScreenShake?.(0x15, 0, 0);
-        // index 0: globals export, inert here (no consumer).
+        else if (index === 0) game.setNightBlindness?.(s.vars[0] | 0, s.vars[8]);
         // Other table entries have no slice user; warn keeps new uses loud.
-        else if (index !== 0) warnOnce(`ins136-${index}`, `unhandled TH08 ECL builtin ${index} (ins_136)`);
+        else warnOnce(`ins136-${index}`, `unhandled TH08 ECL builtin ${index} (ins_136)`);
         return null;
       }
       case 142: {

@@ -21,7 +21,12 @@ import { PlayerEffects, type PlayerEffectHandle } from './player-effects';
 import { Th08RunState } from './th08-state';
 import { Th08SeekingOptionShot } from './th08-option-shot';
 import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-border-bombs';
-import { Th08SpellDeclaration, th08BombSpellName, archiveScript } from './th08-declaration';
+import {
+  Th08SpellDeclaration,
+  th08BombSpellName,
+  archiveScript,
+  archiveScriptRunner
+} from './th08-declaration';
 import { Th08ItemSpawnPool } from './th08-item-spawn';
 import { Th08DialogueMachine, TH08_DIALOGUE_INPUT_BITS } from './th08-dialogue';
 import {
@@ -1219,6 +1224,59 @@ export class StageScene implements GameHost {
   } | null = null;
   private shakeX = 0;
   private shakeY = 0;
+
+  // TH08 night blindness (DAT_004e3d24/28): the lit-circle radius and cover
+  // intensity exported by ins_136 builtin 0; rendered by draw()'s nightBlind
+  // pass. Fresh per stage — StageScene is constructed per stage start.
+  private nightBlindIntensity = 0;
+  private nightBlindRadius = 128;
+  private th08NightBlindFrame: AnmFrame | null | undefined;
+
+  setNightBlindness(intensity: number, radius: number): void {
+    // FUN_00423390 exports the raw ECL locals. Intensity 0 (ins_123's clear,
+    // all.c:9422) switches the effect off regardless of the radius word.
+    this.nightBlindIntensity = intensity;
+    if (intensity > 0 && Number.isFinite(radius) && radius > 0) {
+      this.nightBlindRadius = radius;
+    }
+  }
+
+  // TH08 night blindness (FUN_00405420, all.c:1583-1609): four black quads
+  // close the playfield down to a square around the player, then etama
+  // archive script 105 (entry 4's radial gradient, etama5.png sprite 229)
+  // draws scaled radius/63 centered on the player with alpha = intensity —
+  // its opaque rim meets the rects and its transparent middle keeps the lit
+  // hole. Everything world-side drawn before this pass darkens; the
+  // HUD/frame/sidebar do not. The shrinking radius (320→192→128) and fade
+  // variants are ECL-authored via sub56/50/57/60 re-exports; ins_123 zeroes
+  // the intensity.
+  private drawNightBlindness(r: Renderer, ox: number, oy: number): void {
+    const p = this.playerObj;
+    const alpha = Math.min(1, this.nightBlindIntensity / 255);
+    const scale = this.nightBlindRadius / 63;
+    const half = 64 * scale;
+    const cx = ox + p.x;
+    const cy = oy + p.y;
+    const left = PLAYFIELD.x;
+    const top = PLAYFIELD.y;
+    const right = left + PLAYFIELD.width;
+    const bottom = top + PLAYFIELD.height;
+    r.ctx.save();
+    r.ctx.globalAlpha = alpha;
+    r.ctx.fillStyle = '#000';
+    const mx0 = Math.max(left, cx - half);
+    const mx1 = Math.min(right, cx + half);
+    if (mx0 > left) r.ctx.fillRect(left, top, mx0 - left, bottom - top);
+    if (mx1 < right) r.ctx.fillRect(mx1, top, right - mx1, bottom - top);
+    if (cy - half > top) r.ctx.fillRect(mx0, top, mx1 - mx0, cy - half - top);
+    if (cy + half < bottom) r.ctx.fillRect(mx0, cy + half, mx1 - mx0, bottom - cy - half);
+    r.ctx.restore();
+    if (this.th08NightBlindFrame === undefined) {
+      const runner = archiveScriptRunner(this.assets.anms.etama, 105);
+      this.th08NightBlindFrame = runner ? runner.spriteFrame() : null;
+    }
+    r.drawAnmFrame(this.th08NightBlindFrame, cx, cy, { scaleX: scale, scaleY: scale, alpha });
+  }
 
   startScreenShake(duration: number, from: number, to: number): void {
     // FUN_004459c0 allocates one scheduler object per request. Concurrent
@@ -2538,6 +2596,7 @@ export class StageScene implements GameHost {
     this.prevBombTimer = p.bombTimer;
     this.playerEffects.update(this.slowRate);
     this.th08Effects.update(this.slowRate);
+    this.tickRetiredBombVisuals();
     if (this.th08Declaration) {
       this.th08Declaration.update(this.slowRate);
       if (this.th08Declaration.done) this.th08Declaration = null;
@@ -2580,6 +2639,7 @@ export class StageScene implements GameHost {
     // 0x40c910+0x410fe0 the side-inverted deathbombs. Durations come from
     // the shared cast helper 0x40be30 (260/200/260/300).
     this.th08Bomb = null;
+    this.resetTh08BeamVisualState();
     this.th08BombPendingStart = true;
     this.th08BombOrbActors = [];
     // FUN_0044c650 completes a deathbomb rescue and selects the inverted form
@@ -2634,6 +2694,16 @@ export class StageScene implements GameHost {
     }
   }
 
+  // The wave visuals outlive the active machine (authored 140-frame scripts
+  // vs the 150-frame type-1 bomb): keep spinning the retired sim's groups
+  // until they age out. Driven from the per-frame effect tail — the bomb
+  // choreography itself only runs while p.bombTimer is live.
+  private tickRetiredBombVisuals(): void {
+    if (this.th08Bomb || !this.th08RetiredBombVisual) return;
+    this.th08RetiredBombVisual.tickVisualsOnly();
+    if (!this.th08RetiredBombVisual.hasLiveBeamGroups()) this.resetTh08BeamVisualState();
+  }
+
   private tickTh08Bomb(): void {
     const sim = this.th08Bomb;
     if (!sim) return;
@@ -2660,6 +2730,9 @@ export class StageScene implements GameHost {
     // be30's param_4 (200/150/200/250), NOT the bomb duration.
     this.runState.addYoukaiGauge(sim.gaugeDeltaThisFrame(), true);
     if (!sim.active) {
+      // The wave visuals outlive the active machine — hand the sim to the
+      // visual-only ticker until its groups age out (orb bombs have none).
+      if (sim.hasLiveBeamGroups()) this.th08RetiredBombVisual = sim;
       this.th08Bomb = null;
       this.th08BombOrbActors = [];
       // FUN_0044c650 dispatches the selected callback before the ordinary
@@ -2686,36 +2759,50 @@ export class StageScene implements GameHost {
   // The 四重結界 boundary frames: etama sprite 225 (entry 2) drawn as four
   // rotating additive quads per live beam group, geometry from
   // Th08BorderBomb#beamVisualFrames (FUN_004117b0's engine-driven VM state —
-  // the authored scripts only carry color/fade, so a plain effect entry sat
+  // the authored scripts only carry sprite/color/fade, so a plain effect entry sat
   // frozen at identity rotation/scale). §7: FUN_00464b00's native instance
   // fan-out topology is unrecoverable; the four proven beam quads per group
-  // are the approximation.
-  private th08BeamSpriteFrame: AnmFrame | null | undefined;
+  // are the approximation. FUN_004117b0 also runs one authored VM PER GROUP
+  // — the cast VM (script 0x58, deathbomb 0x5c) plus three wave VMs
+  // (0x59-0x5b / 0x5d-0x5f) — so each group renders through its own runner:
+  // the script supplies sprite/authored fade/color, beamVisualFrames()
+  // supplies position/rotation/size.
+  private readonly th08BeamRunners = new Map<number, AnmRunner>();
+  // A bomb whose active machine ended keeps spinning its groups for their
+  // authored 140-frame life (tickBombChoreography advances it visual-only).
+  private th08RetiredBombVisual: Th08BorderBomb | null = null;
+
+  private resetTh08BeamVisualState(): void {
+    this.th08RetiredBombVisual = null;
+    this.th08BeamRunners.clear();
+  }
+
   private drawTh08BeamVisuals(r: Renderer, ox: number, oy: number): void {
-    if (!this.th08Bomb) return;
-    const beams = this.th08Bomb.beamVisualFrames();
-    if (beams.length === 0) return;
-    if (this.th08BeamSpriteFrame === undefined) {
-      const etama = this.assets.anms.etama;
-      const ref = archiveScript(etama, 0x58);
-      let frame: AnmFrame | null = null;
-      if (etama.hasScriptInEntry(ref.entryIndex, ref.localId)) {
-        const runner = new AnmRunner(etama, ref.localId, { entryIndex: ref.entryIndex });
-        frame = runner.spriteFrame();
-      }
-      this.th08BeamSpriteFrame = frame;
+    const bomb = this.th08Bomb ?? this.th08RetiredBombVisual;
+    if (!bomb) return;
+    const beams = bomb.beamVisualFrames();
+    if (beams.length === 0) {
+      if (!this.th08Bomb) this.resetTh08BeamVisualState();
+      return;
     }
-    const frame = this.th08BeamSpriteFrame;
-    if (!frame) return;
-    // Authored ins_9 rows of etama scripts 88-95 (0x58-0x5f): the cast VM is
-    // blue; the waves run blue / magenta / red.
-    const groupColors = [0x8080ff, 0x8080ff, 0xff80ff, 0xff8080];
+    const scripts = bomb.type === 3 ? [0x5c, 0x5d, 0x5e, 0x5f] : [0x58, 0x59, 0x5a, 0x5b];
     for (const beam of beams) {
+      let runner = this.th08BeamRunners.get(beam.group);
+      if (!runner) {
+        const built = archiveScriptRunner(this.assets.anms.etama, scripts[beam.group] ?? scripts[0]);
+        if (!built) continue;
+        runner = built;
+        this.th08BeamRunners.set(beam.group, built);
+      }
+      // One update per drawn frame mirrors the native per-tick VM advance at
+      // full rate; headless batch-skip frames simply don't age the visuals.
+      runner.update(1);
+      const frame = runner.spriteFrame();
+      if (!frame) continue;
       r.drawAnmFrame(frame, ox + beam.x, oy + beam.y, {
         rotation: beam.angle,
         scaleX: beam.width / Math.max(1, frame.w),
         scaleY: beam.height / Math.max(1, frame.h),
-        color: groupColors[beam.group] ?? 0x8080ff,
         blend: 'lighter'
       });
     }
@@ -2884,6 +2971,7 @@ export class StageScene implements GameHost {
       const p = this.playerObj;
       p.completePendingDeathbombRescue();
       p.th08BombFocusOverride = (p.th08BombType & 1) !== 0;
+      this.resetTh08BeamVisualState();
       this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
       this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
       // The callback writes param_4 on this second tick. Add one because the
@@ -2903,6 +2991,7 @@ export class StageScene implements GameHost {
     if (!this.th08BombPendingStart) return;
     this.th08BombPendingStart = false;
     const p = this.playerObj;
+    this.resetTh08BeamVisualState();
     this.th08Bomb = new Th08BorderBomb(p.th08BombType, p.x, p.y);
     this.th08Bomb.cast(this.th08BombHost(), p.x, p.y);
     this.homeAllItemsTh08();
@@ -4188,6 +4277,11 @@ export class StageScene implements GameHost {
       } while (transitioned);
       if (e.dead) {
         if (this.enemySlots[slot] === e) {
+          // Deaths inside tickEnemyCore (ins_1 self-deletes, offscreen culls)
+          // bypass the killEnemy/settle chokepoints below, so release the
+          // familiar marker VMs here — the slot null below ends the post-loop
+          // sweep's ability to find this enemy (the 道中魔法阵残留 leak).
+          this.releaseTh08EnemyVisuals(e);
           this.enemySlots[slot] = null;
           this.runtime.releaseEnemy(this, e);
         }
@@ -5678,6 +5772,10 @@ export class StageScene implements GameHost {
         r.ctx.strokeStyle = '#f66';
         r.ctx.stroke();
       }
+      // TH08 night blindness (FUN_00405420, all.c:1583-1609): see
+      // drawNightBlindness below.
+      if (this.nightBlindIntensity > 0) this.drawNightBlindness(r, ox, oy);
+      this.markPass('nightBlind');
       if (this.screenFlash) {
         const f = this.screenFlash;
         const a = ((f.color >>> 24) & 0xff) / 255;
