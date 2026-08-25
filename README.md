@@ -53,13 +53,17 @@ pointItems/gauge/clock/RNG 残差）。CI 以 advisory（非阻塞）方式运�
 - **范围**：垂直切片 = Stage 1 + Stage 2 + Border Team。无 Stage 3+/其他
   队伍/全难度完整回归。
 - **Replay 收敛**：两面的逐帧 oracle 在 CI 分别运行（advisory），以
-  `EARLIEST DIVERGENCE` 输出作为收敛反馈通道。2026-08-25 的 CALL 参数
-  通道修复（ins_52 帧变量 + 运行全局 bank 的 int 写路径）使 Stage 1 全程
-  **零分歧**（f13057 通关）；Stage 2 的当前残差是 f676 的原生接触
-  oracle（fixture 记录在案的死亡炸弹链窗口，双方均能通关）。其上游是
-  Stage 2 f680..1237 窗口内一次 8-u16 的抽签经济残差（占该窗口 17.6k
-  抽的 0.05%，事件面完全对齐），根因候选与完整分析记录在 `AGENTS.md`
-  §0 与 `HANDOFF.md`。advisory 数字随保真度修复可能移动。
+  `EARLIEST DIVERGENCE` 输出作为收敛反馈通道。当前诚实基线（2026-08-26，
+  formal 模式）：**Stage 1 f3192 / Stage 2 f3367**，两处均为亚像素级
+  接触（余量 1.4px / 3.0px），相关运动学成分（et_ex 方向变更族、
+  spawn 态结束直落、构造期行为标志、graze 盒、加速段常数、rank 速度
+  界）已全部对 v1.00d 二进制机器码钉死；残余属于击杀时序级联类，需
+  native 帧级追踪才能进一步定位（wine 已封禁）。2026-08-25 的
+  "Stage 1 零分歧"说法后来确认是 `--clear-check`（无敌模式不记录
+  接触）的读数伪象。`--clear-check` 下两面均可通关（st1 f13057 /
+  st2 f27784）；其终点快照差异是首个幻影死亡的下游噪声。Stage 2
+  f676 的原生接触 + 决死炸弹链 oracle 在 formal 模式逐位通过。
+  advisory 数字随保真度修复可能移动。
   playable 路径本身（弹幕、对话、HUD、炸弹、Boss 呈现）由 th08-* 回归
   测试与 CI 浏览器启动检查守护。
 - 近似项登记在 `AGENTS.md §7`（graze 计步、ghost tint 通道序、对话
