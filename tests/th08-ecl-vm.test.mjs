@@ -516,17 +516,19 @@ test('TH08 Stage-1 opening mob waves retain the authored Lunatic spawn and FIRE 
   ]);
 });
 
-test('every raw opcode in Stage 1 is covered by the TH08-native dispatcher', () => {
-  const runtime = new StageRuntime(TH08_DATA.stages[1], {
-    etama, enemy: enemyAnm, effect: effectAnm
-  });
-  const used = new Set();
-  for (let sub = 0; sub < runtime.ecl.subCount; sub++) {
-    for (const instr of runtime.ecl.sub(sub)) used.add(instr.id);
+test('every raw opcode in Stage 1 and Stage 2 is covered by the TH08-native dispatcher', () => {
+  for (const stageId of [1, 2]) {
+    const runtime = new StageRuntime(TH08_DATA.stages[stageId], {
+      etama, enemy: enemyAnm, effect: effectAnm
+    });
+    const used = new Set();
+    for (let sub = 0; sub < runtime.ecl.subCount; sub++) {
+      for (const instr of runtime.ecl.sub(sub)) used.add(instr.id);
+    }
+    const missing = [...used].filter((opcode) => !TH08_RAW_OPCODE_COVERAGE.has(opcode));
+    assert.deepEqual(missing, [], `unhandled Stage-${stageId} raw opcodes: ${missing.join(', ')}`);
+    assert.ok(used.size > 80, `unexpectedly small Stage-${stageId} opcode census: ${used.size}`);
   }
-  const missing = [...used].filter((opcode) => !TH08_RAW_OPCODE_COVERAGE.has(opcode));
-  assert.deepEqual(missing, [], `unhandled Stage-1 raw opcodes: ${missing.join(', ')}`);
-  assert.ok(used.size > 80, `unexpectedly small opcode census: ${used.size}`);
 });
 
 // ---- timeline v2 (FUN_0042a8a0) --------------------------------------------

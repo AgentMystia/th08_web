@@ -89,6 +89,18 @@ test('point collection reproduces PoC, tens, human-gauge, and score scaling', ()
   assert.equal(doubled.creditedScore, 60000);
 });
 
+test('graze counter steps +1/+2/+3 from the human-side gauge tiers', () => {
+  const state = new Th08RunState(3);
+  assert.equal(state.grazeCounterIncrement(), 1, 'neutral gauge is +1');
+  state.addYoukaiGauge(-2000);
+  assert.equal(state.grazeCounterIncrement(), 2, 'human tint (−2000) is +2');
+  state.addYoukaiGauge(-6000);
+  assert.equal(state.grazeCounterIncrement(), 3, 'human effects (−8000) is +3');
+  const youkai = new Th08RunState(3);
+  youkai.addYoukaiGauge(8000);
+  assert.equal(youkai.grazeCounterIncrement(), 1, 'youkai extreme stays +1');
+});
+
 test('small point and time-orb awards use native score divisions', () => {
   const state = new Th08RunState(3);
   const point = state.collectPointSmall({ atOrAbovePoC: true, abovePoCRandom: 100 });

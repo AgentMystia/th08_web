@@ -33,6 +33,7 @@ import {
   TH08_DIFFICULTY_TAG,
   TH08_FORM_GAUGE,
   TH08_HUD,
+  bossLifebarFillRatio,
   formGaugeCursorX,
   formGaugePercentX
 } from './th08-hud-layout';
@@ -152,6 +153,10 @@ const PLAYER_BULLET_POOL_CAP = 0x80;
 // saturated during Wriggle's final card and silently vetoed the familiars'
 // volleys.
 const ENEMY_BULLET_POOL_CAP = 0x600;
+// Effect 39's settled ring radius: the authored scale interp ends at 15
+// (etama archive script 76, 192->15 over 120 frames) and the declaration-
+// time 600px screen radius fixes the strip's px-per-scale at 3.125.
+const SPELL_RING_SETTLED_RADIUS = 15 * 3.125;
 const BOMB_CLEAR_REGION_CAP = 0x60;
 const EFFECT_POOL_CAP = 400;
 // TH08's effect pool is 512 slots (FUN_00425430's 0x200-slot scan with 0xd8
@@ -2506,6 +2511,12 @@ export class StageScene implements GameHost {
     for (const runner of this.stageIntroRunners) {
       if (!runner.removed) runner.update(this.slowRate);
     }
+    // Native Gui ticks the front.anm sidebar label VMs every sim frame
+    // (FUN_0043625d's callers). Headless update() never reaches draw(), so
+    // these must advance here — otherwise the fade-in scripts stay parked
+    // at t0 and bomb/replay screenshots stack Player/Spell over missing
+    // Graze/Point/Time.
+    this.tickTh08HudRunners();
     if (this.dialogueBgmRunner && !this.dialogueBgmRunner.runner.removed) {
       this.dialogueBgmRunner.runner.update(this.slowRate);
     }
@@ -4102,7 +4113,10 @@ export class StageScene implements GameHost {
     // (item type 10 -> time/state-5) at the contact — the native orb
     // income stream (all.c:36844-36862).
     const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
-    if (!this.bombActiveThisFrame) this.graze++;
+    // FUN_0044a930 head: the displayed graze counter is +1, +2 past the
+    // human tint (−2000), +3 past the human effects threshold (−8000).
+    // Score/rank/time-orb awards stay per-event; only the counter steps.
+    if (!this.bombActiveThisFrame) this.graze += this.runState.grazeCounterIncrement();
     this.traceReplayEvent?.({
       kind: 'graze', frame: this.frame,
       data: { x: sourceX, y: sourceY, total: this.graze }
@@ -4492,8 +4506,9 @@ export class StageScene implements GameHost {
       }
       const wasInSpawnState = (b.spawnAge ?? b.spawnDuration) < b.spawnDuration;
       // Native spawn states 2/3/4 skip behavior, cull, bomb and player
-      // collision until their authored ANM ends. On the ending tick control
-      // falls through into state 1 and performs the normal move as well.
+      // collision until their authored ANM ends. On the ending tick the
+      // extra full-velocity move still runs; et_ex stays until the first
+      // exclusive state-1 tick (TH08 jump table @ 0x432156).
       const motion = this.updateBulletMotion(b);
       const enteredNormalState = motion.enteredNormalState;
       // TH08 spawn-state quad probe (all.c:23589-23591/23615-23617/
@@ -4679,13 +4694,19 @@ export class StageScene implements GameHost {
     let transitionX: number | undefined;
     let transitionY: number | undefined;
     const spawnAge = b.spawnAge ?? b.spawnDuration;
+    // TH08 OnUpdate (0x431240) dispatches spawn through a jump table at
+    // 0x432156 (state 2→0x43176e, 3→0x431880, 4→0x431991). Those cases
+    // are isolated: they never run the et_ex handlers that live in state 1.
+    // Capture this before the ending tick promotes spawnAge, so the extra
+    // full-velocity add still happens without advancing dir-change clocks.
+    const startedInSpawn = spawnAge < b.spawnDuration;
     // FUN_004069f0 executes the prototype VM's t0 synchronously at arm. The
     // native slot trace resolves the old +2 fixture workaround: a time-10
     // flash returns after nine creep-only manager ticks, then its tenth tick
     // performs the fractional move, reports remove, and falls through to the
     // full move (Stage-2 replay slots 14/15, native f655..664). At 1/3 rate a
     // time-24 flash likewise ends on wall tick 70, not 72.
-    if (spawnAge < b.spawnDuration) {
+    if (startedInSpawn) {
       // Enemy-bullet storage is float32. FUN_004241c0 performs its spawn-
       // state multiply/add on x87, then writes the result back to the slot's
       // f32 position fields every manager tick. Keeping JS doubles here
@@ -4718,12 +4739,17 @@ export class StageScene implements GameHost {
       }
       // State 2/3/4 probes the player quad and settles a latched conversion
       // at this creep-only position before LAB_00431306 promotes the bullet
-      // and runs the ordinary behavior/full-speed move.
+      // and runs the extra full-speed move (et_ex stays on the next tick).
       transitionX = b.x;
       transitionY = b.y;
       // Th07.exe FUN_004241c0 @ 0x424843-0x424860: an ending spawn ANM
       // changes state to 1, resets the normal age counter, and falls through
       // to the ordinary behavior/full-velocity move on this same tick.
+      // TH08's jump-table spawn cases do not share that fallthrough: they
+      // still perform the extra full-velocity add (pacing tick-10 pin) but
+      // skip et_ex. Wriggle Sub16's 0x40 rain (flags 0x242, interval 70)
+      // otherwise burns one wait tick here, SET-heading 1 frame early, and
+      // the interval-70 spoke overlaps the fixture player at f3206.
       b.spawnAge = b.spawnDuration;
       b.spawnAgeFrac = 0;
       b.age = 0;
@@ -4732,6 +4758,9 @@ export class StageScene implements GameHost {
     // manager tick performs exactly one further queue pass BEFORE executing
     // active behavior routines (FUN_004241c0 @ all.c:16120). TH08's 0x20000
     // wait gate parks the queue here while the bullet's motion continues.
+    // Spawn-state ticks — including the ending extra-move tick — skip this
+    // block; the first exclusive state-1 tick is the first et_ex increment.
+    if (!startedInSpawn) {
     if ((b.exWaitFrames ?? 0) > 0) {
       b.exWaitFrames = (b.exWaitFrames ?? 0) - 1;
     } else {
@@ -4816,19 +4845,34 @@ export class StageScene implements GameHost {
         b.exAngleElapsed++;
       }
     }
-    if ((b.exFlags & 0x40) && b.exDir) this.dirChangeBullet(b, 'relative');
-    if ((b.exFlags & 0x100) && b.exDir) this.dirChangeBullet(b, 'absolute');
-    if ((b.exFlags & 0x80) && b.exDir) this.dirChangeBullet(b, 'aimed');
+    // TH08 et_ex 0x40 is SET heading. TH07's BulletManager.cpp:763 mapped
+    // 0x40 as relative ADD (`angle += f0`); carrying that into TH08 rotated
+    // Wriggle midboss Sub16's 20-way fan (FIRE0, aimMode 0, angle2=π/16,
+    // flags 0x242) by +π/2 instead of dropping every spoke as rain.
+    // Stage-1 ECL only ever writes large cardinals into 0x40's f0 (±π/2,
+    // ±2π/3, π, ±1.8326) — SET targets, not nudges. 0x100 (also SET) is
+    // unused on stages 1–2; 0x80 stays aimed. Clear the live flag bit
+    // explicitly: inferring it from mode would leave 0x40 armed forever
+    // because absolute previously only cleared 0x100.
+    if ((b.exFlags & 0x40) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x40);
+    if ((b.exFlags & 0x100) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x100);
+    if ((b.exFlags & 0x80) && b.exDir) this.dirChangeBullet(b, 'aimed', 0x80);
     if ((b.exFlags & 0xc00) && b.exBounce) this.bounceBullet(b, (b.exFlags & 0x400) !== 0);
+    }
     // Default bullet integration is the same f32 store-back (`pos += vel`)
     // at all.c:16147-16149. Math.fround is therefore state semantics, not a
-    // rendering approximation.
+    // rendering approximation. Spawn-end still takes this extra add; only
+    // the et_ex handlers above are skipped.
     b.x = Math.fround(b.x + b.vx);
     b.y = Math.fround(b.y + b.vy);
     return { enteredNormalState: true, transitionX, transitionY };
   }
 
-  private dirChangeBullet(b: EnemyBullet, mode: 'relative' | 'absolute' | 'aimed'): void {
+  private dirChangeBullet(
+    b: EnemyBullet,
+    mode: 'relative' | 'absolute' | 'aimed',
+    flagBit: number
+  ): void {
     const d = b.exDir!;
     const interval = Math.max(1, d.interval | 0);
     const maxTimes = Math.max(1, d.maxTimes | 0);
@@ -4839,7 +4883,7 @@ export class StageScene implements GameHost {
     if (b.exDirElapsed >= interval) {
       b.dirTimes = times + 1;
       if (b.dirTimes >= maxTimes) {
-        b.exFlags &= mode === 'relative' ? ~0x40 : mode === 'absolute' ? ~0x100 : ~0x80;
+        b.exFlags &= ~flagBit;
       }
       // Native BulletManager.cpp:763 (relative) is a plain f32 `angle += d.angle`
       // with NO wrap — the heading accumulates unbounded (matching the f32 LHS
@@ -5734,9 +5778,11 @@ export class StageScene implements GameHost {
       this.markPass('items');
       const p = this.playerObj;
       // TH08 miss white-out: FUN_0044d2c0 draws FUN_0044de60(player, 768,
-      // 896, 0xffffffff, 0) EVERY frame while the +0xe2a70 countdown runs —
-      // a solid white playfield quad through the death squish and 60 frames
-      // past it (not the deathbomb window; that has no white flash).
+      // 896, 0xffffffff, 0) EVERY frame while the +0xe2a70 countdown runs.
+      // 768×896 centered on the player with opaque white always covers the
+      // 384×448 playfield, so the clipped result is a solid white playfield
+      // quad (tests/th08-death-white.test.mjs). There is no white during
+      // the deathbomb window itself.
       if (this.th08DeathWhiteFrames > 0) {
         r.ctx.fillStyle = '#ffffff';
         r.ctx.fillRect(PLAYFIELD.x, PLAYFIELD.y, PLAYFIELD.width, PLAYFIELD.height);
@@ -6545,11 +6591,22 @@ export class StageScene implements GameHost {
     if (!ring || !sc || !img) return;
     const age = Math.max(0, sc.declAge);
     const settle = Math.min(1, age / 120);
-    // The special 3D callback maps the authored 192->15 strip scale to the
-    // measured ~600->240px screen radius during the settle.
-    const radius = 240 + 360 * (1 - settle);
-    const alpha = Math.min(1, age / 70);
+    // The authored effect-39 scale interp is 192->15 over the 120-frame
+    // settle (etama archive script 76). At the measured declaration-time
+    // ~600px screen radius that is 3.125 px per scale unit, so the ring
+    // SHRINKS ONTO THE BOSS and spins there for the card's duration (the
+    // native look) instead of parking at a playfield-wide 240px annulus.
+    const radius = SPELL_RING_SETTLED_RADIUS + (600 - SPELL_RING_SETTLED_RADIUS) * (1 - settle);
+    // The script's fade-in tops out at the authored alpha 192 (of 255).
+    const alpha = Math.min(1, age / 70) * (192 / 255);
     if (alpha <= 0) return;
+    // FUN_004152a0 arms the VM on the boss (all.c:9110-9126) and the slot VM
+    // rides its owner: follow the live boss, not the declaration snapshot.
+    const boss = this.bossActive;
+    if (boss) {
+      ring.x = boss.x;
+      ring.y = boss.y;
+    }
     const cx = ox + ring.x;
     const cy = oy + ring.y;
     const ctx = r.ctx;
@@ -6618,7 +6675,7 @@ export class StageScene implements GameHost {
   private spellRingCache: HTMLCanvasElement | null = null;
 
   private bakeSpellRing(img: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement | null {
-    const radius = 240;
+    const radius = SPELL_RING_SETTLED_RADIUS;
     const size = Math.ceil(radius + 24) * 2;
     const surface = document.createElement('canvas');
     surface.width = size;
@@ -6759,22 +6816,32 @@ export class StageScene implements GameHost {
   // themselves at their authored resting coordinates (x~416-448 column).
   private th08HudRunners: AnmRunner[] | null = null;
 
-  private drawSidebarTh08(r: Renderer): void {
+  private ensureTh08HudRunners(): void {
+    if (this.th08HudRunners) return;
     const front = this.assets.anms.front;
-    if (!this.th08HudRunners) {
-      const base = front.entries[0].spriteBase;
-      const mk = (script: number) =>
-        new AnmRunner(front, script, { entryIndex: 0, spriteIndexOffset: base });
-      // logo (-27), caption (-26), then the eight value labels (-25..-18).
-      this.th08HudRunners = [-27, -26, -25, -24, -23, -22, -21, -20, -19, -18].map(mk);
-      for (const runner of this.th08HudRunners) runner.update();
+    if (!front) return;
+    const base = front.entries[0].spriteBase;
+    const mk = (script: number) =>
+      new AnmRunner(front, script, { entryIndex: 0, spriteIndexOffset: base });
+    // logo (-27), caption (-26), then the eight value labels (-25..-18).
+    this.th08HudRunners = [-27, -26, -25, -24, -23, -22, -21, -20, -19, -18].map(mk);
+  }
+
+  private tickTh08HudRunners(): void {
+    this.ensureTh08HudRunners();
+    if (!this.th08HudRunners) return;
+    for (const runner of this.th08HudRunners) {
+      if (!runner.removed) runner.update(this.slowRate);
     }
+  }
+
+  private drawSidebarTh08(r: Renderer): void {
+    this.ensureTh08HudRunners();
+    if (!this.th08HudRunners) return;
     const p = this.playerObj;
     const run = this.runState;
     const valueX = 488; // TH08_HUD_FIELDS value column
-    // The label scripts fade themselves in (entry alpha 32 -> 255); they
-    // must tick every frame like every other ANM VM.
-    for (const runner of this.th08HudRunners) runner.update();
+    // VMs tick from update(); draw only blits the current pose.
     // Logo panel + caption (authors' own positions, 480,208 / 448,336).
     r.drawAnmFrame(this.th08HudRunners[0].spriteFrame(), 0, 0);
     r.drawAnmFrame(this.th08HudRunners[1].spriteFrame(), 0, 0);
@@ -6876,17 +6943,24 @@ export class StageScene implements GameHost {
     }
 
     // Native boss HP strip (geometry/colors in TH08_HUD.bossLifebar,
-    // measured on the native demo captures; fills drains right-to-left).
+    // measured on the native demo captures; fill drains right-to-left).
+    // The strip shows the CURRENT PHASE segment, not the whole-fight life:
+    // it refills to full at every nonspell/spell entry (phaseHpCeiling is
+    // re-latched at each ins_131 arm and callback clamp) and drains to the
+    // next armed ins_133 threshold — one attack = one full bar drain.
     if (this.bossActive) {
+      const boss = this.bossActive;
       const bar = TH08_HUD.bossLifebar;
-      const hp = Math.max(0, this.bossActive.hp);
-      const max = Math.max(1, this.bossActive.maxHp);
+      const hp = Math.max(0, boss.hp);
+      const frac = bossLifebarFillRatio(
+        hp, boss.phaseHpCeiling || boss.maxHp, boss.ecl.lifeThresholds
+      );
       const px = (n: number): string =>
         `#${((n >> 24) & 0xff).toString(16).padStart(2, '0')}${((n >> 16) & 0xff).toString(16).padStart(2, '0')}${((n >> 8) & 0xff).toString(16).padStart(2, '0')}`;
       ctx.fillStyle = px(bar.emptyColor);
       ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
       ctx.fillStyle = px(bar.fillColor);
-      ctx.fillRect(bar.x, bar.y, bar.width * (hp / max), bar.height);
+      ctx.fillRect(bar.x, bar.y, bar.width * frac, bar.height);
     }
   }
 

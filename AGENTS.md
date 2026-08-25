@@ -791,6 +791,46 @@ HP strip visible), stage-1 tally rows + night clock, bright nonspell
 reference, 夜盲 full circle, shrunk circle, still-dark bridge gap, and
 the Last Spell singing in the dark.
 
+### 2026-08-24 boss-presentation visual pass (headless-Chromium host; draw-only)
+
+Host note: this VM has NO wine and NO podman, but DOES have local headless
+Chromium (`/opt/pw-browsers`), so dev-shot/visual acceptance runs locally.
+Baseline re-run of committed main on this host: stage 1 EARLIEST DIVERGENCE
+f3192, stage 2 f3367 — the 2026-08-25 entry's "none observed" claim does
+NOT reproduce here; treat f3192/f3367 as the standing advisory numbers.
+
+Boss-fight fixes, each verified by frame-stepped browser captures of the
+full Wriggle and Mystia fights (probe: alternate held/released Z per
+30-frame batch — the dialogue machine confirms on held-bit RISING edges,
+so a continuously held Z never advances the pre-boss chat):
+
+1. **Effect-39 spell ring settle/tracking (the user-visible boss-fight
+ presentation break).** drawSpellRing parked the ring at a 240px
+ playfield-wide annulus at the DECLARATION-time boss position, at full
+ alpha, forever. The authored script's scale interp is 192→15 over the
+ 120-frame settle and its fade-in tops at alpha 192/255; at the measured
+ declaration-time ~600px screen radius (3.125 px/scale), the settled
+ radius is 46.875px — the ring shrinks ONTO the boss and spins there,
+ and the VM rides its owner (FUN_004152a0 arms it on the boss,
+ all.c:9110-9126) so the draw now follows the live boss position. The
+ bake path uses the same settled radius. Verified on 灯符 (familiars
+ arranged around the settled ring, native look), 蠢符, and Mystia's
+ 猛毒/鷹符/夜盲 cards.
+2. **?stage=2 test boot** (main.ts, test-only): direct probe boot of the
+ Stage-2 slice so the Mystia fight is reachable without chaining a
+ Stage-1 clear. snapshot.ts bulletDump cap raised 64→512 (probe
+ visibility into dense boss patterns).
+
+Non-defects confirmed this pass (do not re-chase): Wriggle N1's rice
+"wing" hugging the boss is the authored EX chain (0x40 decel 60-90f →
+turn -1.83rad → 0x10 accel [10023]≈0.045/f — frame-tracked working); the
+purple rounded-rect plate behind bosses is the authored enemy.anm boss
+aura; the vertical strips + kanji-card sprites above the player are the
+Border-Team homing-amulet family; the kanji item boxes (刻/点) are the
+authored etama2 item row. Mystia's card chain (声符 midboss → 猛毒 →
+鷹符 → 夜盲, finale quota-gated) and 夜盲's player-centred vision circle
+render native-faithful in the browser.
+
 ### 2026-08-24 draw-economy audit pass (port-side only; podman runner)
 
 A full static/exe audit of the standing stage-2 f677..1237 +8 u16 draw

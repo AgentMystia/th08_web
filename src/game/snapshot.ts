@@ -125,7 +125,7 @@ export function stageSnapshot(scene: StageScene): Record<string, unknown> {
       }
       return h;
     }, {}),
-    bulletDump: scene.enemyBullets.slice(0, 64).map((b) => ({
+    bulletDump: scene.enemyBullets.slice(0, 512).map((b) => ({
       id: b.id,
       x: Math.round(b.x),
       y: Math.round(b.y),

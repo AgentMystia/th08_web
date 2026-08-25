@@ -203,11 +203,12 @@ async function boot(): Promise<void> {
     audio.preloadBgm(['th08_01']);
     audio.playBgm('th08_01');
   } else {
-    // Direct probe boot is limited to the delivered Stage-1 Border Team
-    // slice; the menu follows the same restriction.
+    // Direct probe boot defaults to the delivered Stage-1 Border Team
+    // slice; ?stage=2 (test-only) boots the Stage-2 slice directly so the
+    // Mystia fight is reachable without chaining a full Stage-1 clear.
     const difficulty = Math.min(3, Math.max(0, Number(params.get('difficulty') ?? 1)));
     const team: Th08TeamId = 'reimuYukari';
-    const stageNumber = 1;
+    const stageNumber = Math.min(2, Math.max(1, Number(params.get('stage') ?? 1)));
     const s = startStage(difficulty, team, stageNumber);
     // Test-only override so scripts/dev-shot.mjs can snapshot a shot pattern
     // at an arbitrary power bracket without needing to grind for it in-game.

@@ -17,7 +17,8 @@ const {
   formGaugeCursorX,
   formGaugePercentX,
   hudValuePosition,
-  gaugeQuad
+  gaugeQuad,
+  bossLifebarFillRatio
 } = await import('../tests/.build/th08-hud-layout.mjs');
 
 test('TH08 playfield and front label positions match v1.00d', () => {
@@ -97,4 +98,18 @@ test('the boss lifebar is the native 2px strip at y=19', () => {
     fillColor: 0x959595ff,
     emptyColor: 0x00001cff
   });
+});
+
+test('the boss lifebar fill is the current phase segment, not whole-fight life', () => {
+  const disarmed = { threshold: -1, sub: -1 };
+  const next = { threshold: 1000, sub: 40 };
+  // Fresh spell/nonspell: ins_131 latched ceiling=2000, hp full, next
+  // ins_133 armed at 1000 → the strip reads full.
+  assert.equal(bossLifebarFillRatio(2000, 2000, [next, disarmed, disarmed, disarmed]), 1);
+  // Mid-phase: half of the current attack remains.
+  assert.equal(bossLifebarFillRatio(1500, 2000, [next, disarmed, disarmed, disarmed]), 0.5);
+  // Life-callback clamp: hp snaps to 1000, ceiling re-latches to 1000,
+  // the fired slot disarms → the next attack's strip reads full again.
+  assert.equal(bossLifebarFillRatio(1000, 1000, [disarmed, disarmed, disarmed, disarmed]), 1);
+  assert.equal(bossLifebarFillRatio(0, 1000, [disarmed, disarmed, disarmed, disarmed]), 0);
 });

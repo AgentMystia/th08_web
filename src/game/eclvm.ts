@@ -197,8 +197,8 @@ export const TH08_RAW_OPCODE_COVERAGE = new Set<number>([
   96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108,
   109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120,
   121, 122, 123, 124, 126, 127, 128, 129, 130, 131, 132, 133,
-  134, 135, 139, 140, 144, 148, 153, 158, 160, 173, 174, 175,
-  176, 184
+  134, 135, 136, 139, 140, 142, 144, 145, 146, 148, 152, 153, 158, 160, 168,
+  173, 174, 175, 176, 184
 ]);
 
 // Th08.exe .rdata table @ VA 0x4b4ad8 (file offset 0xb44d8): 21 bullet
@@ -603,6 +603,7 @@ export class StageRuntime {
       // latter and only appears to improve survival by removing danmaku.
       hp: hasLife ? life | 0 : 1,
       maxHp: hasLife ? life | 0 : 1,
+      phaseHpCeiling: hasLife ? life | 0 : 1,
       pendingShotDmg: 0,
       pendingBombDmg: 0,
       // DAT_018b8a24 is 40 in the v1.00d Border-Team replay runtime; the
@@ -665,6 +666,7 @@ export class StageRuntime {
     e.ecl.itemDrop = item;
     if (hasScore) e.score = score | 0;
     e.maxHp = Math.max(1, e.hp);
+    e.phaseHpCeiling = e.maxHp;
     return e;
   }
 
@@ -1394,6 +1396,7 @@ export class StageRuntime {
       const t = s.lifeThresholds[i];
       if (t.threshold >= 0 && t.sub >= 0 && e.hp < t.threshold) {
         e.hp = t.threshold;
+        e.phaseHpCeiling = Math.max(1, t.threshold);
         t.threshold = -1;
         s.timerCallbackThreshold = -1; // exe: cleared on every life-cb fire
         s.timerCallbackSub = s.deathCallbackSub;
@@ -1408,7 +1411,11 @@ export class StageRuntime {
       for (let i = 0; i < 4; i++) {
         if (s.lifeThresholds[i].threshold > best) { best = s.lifeThresholds[i].threshold; bestIdx = i; }
       }
-      if (best > 0 && bestIdx >= 0) { e.hp = best; s.lifeThresholds[bestIdx].threshold = -1; }
+      if (best > 0 && bestIdx >= 0) {
+        e.hp = best;
+        e.phaseHpCeiling = Math.max(1, best);
+        s.lifeThresholds[bestIdx].threshold = -1;
+      }
       s.timerCallbackThreshold = -1;
       s.timerCallbackSub = s.deathCallbackSub;
       s.bossTimer = 0;
@@ -4104,6 +4111,7 @@ export class StageRuntime {
       case 131: { // set the bullet pool ("HP") + copies
         e.hp = gi(0);
         e.maxHp = Math.max(1, e.hp);
+        e.phaseHpCeiling = e.maxHp;
         t.poolCopyA = e.hp;
         t.poolCopyB = e.hp;
         return null;
