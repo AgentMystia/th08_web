@@ -4695,10 +4695,10 @@ export class StageScene implements GameHost {
     let transitionY: number | undefined;
     const spawnAge = b.spawnAge ?? b.spawnDuration;
     // TH08 OnUpdate (0x431240) dispatches spawn through a jump table at
-    // 0x432156 (state 2→0x43176e, 3→0x431880, 4→0x431991). Those cases
-    // are isolated: they never run the et_ex handlers that live in state 1.
-    // Capture this before the ending tick promotes spawnAge, so the extra
-    // full-velocity add still happens without advancing dir-change clocks.
+    // 0x432156 (state 2→0x43176e, 3→0x431880, 4→0x431991). Capture the
+    // spawn-state entry BEFORE the ending tick promotes spawnAge: the ending
+    // tick still performs the fractional move above, then falls through to
+    // the full state-1 body (extra full-velocity move AND et_ex) below.
     const startedInSpawn = spawnAge < b.spawnDuration;
     // FUN_004069f0 executes the prototype VM's t0 synchronously at arm. The
     // native slot trace resolves the old +2 fixture workaround: a time-10
@@ -4738,18 +4738,16 @@ export class StageScene implements GameHost {
         return { enteredNormalState: false };
       }
       // State 2/3/4 probes the player quad and settles a latched conversion
-      // at this creep-only position before LAB_00431306 promotes the bullet
-      // and runs the extra full-speed move (et_ex stays on the next tick).
+      // at this creep-only position before LAB_00431306 (0x431106) promotes
+      // the bullet to state 1 and falls through into the complete case-1
+      // body — extra full-velocity move AND the et_ex dispatch — this tick.
       transitionX = b.x;
       transitionY = b.y;
-      // Th07.exe FUN_004241c0 @ 0x424843-0x424860: an ending spawn ANM
-      // changes state to 1, resets the normal age counter, and falls through
-      // to the ordinary behavior/full-velocity move on this same tick.
-      // TH08's jump-table spawn cases do not share that fallthrough: they
-      // still perform the extra full-velocity add (pacing tick-10 pin) but
-      // skip et_ex. Wriggle Sub16's 0x40 rain (flags 0x242, interval 70)
-      // otherwise burns one wait tick here, SET-heading 1 frame early, and
-      // the interval-70 spoke overlaps the fixture player at f3206.
+      // The exe's spawn cases (jump table @ 0x432156) end with `movw $1,
+      // slot+0xdb8` at 0x431106 then jump straight into the case-1 body at
+      // 0x43110c+ (FUN_004065f0 timer reset, FUN_0042ffc0 queue pass, et_ex
+      // handlers, full-velocity integrate, collision, ANM tick) — one
+      // machine-code-verified fallthrough, not an early return.
       b.spawnAge = b.spawnDuration;
       b.spawnAgeFrac = 0;
       b.age = 0;
@@ -4758,9 +4756,10 @@ export class StageScene implements GameHost {
     // manager tick performs exactly one further queue pass BEFORE executing
     // active behavior routines (FUN_004241c0 @ all.c:16120). TH08's 0x20000
     // wait gate parks the queue here while the bullet's motion continues.
-    // Spawn-state ticks — including the ending extra-move tick — skip this
-    // block; the first exclusive state-1 tick is the first et_ex increment.
-    if (!startedInSpawn) {
+    // The spawn-state ENDING tick runs this block too: the exe's case-2/3/4
+    // VM-finished path writes state=1 at 0x431106 then falls through into
+    // the complete case-1 body (0x431122 = FUN_0042ffc0, then the 0xdac
+    // et_ex dispatch) on the SAME tick.
     if ((b.exWaitFrames ?? 0) > 0) {
       b.exWaitFrames = (b.exWaitFrames ?? 0) - 1;
     } else {
@@ -4845,24 +4844,23 @@ export class StageScene implements GameHost {
         b.exAngleElapsed++;
       }
     }
-    // TH08 et_ex 0x40 is SET heading. TH07's BulletManager.cpp:763 mapped
-    // 0x40 as relative ADD (`angle += f0`); carrying that into TH08 rotated
-    // Wriggle midboss Sub16's 20-way fan (FIRE0, aimMode 0, angle2=π/16,
-    // flags 0x242) by +π/2 instead of dropping every spoke as rain.
-    // Stage-1 ECL only ever writes large cardinals into 0x40's f0 (±π/2,
-    // ±2π/3, π, ±1.8326) — SET targets, not nudges. 0x100 (also SET) is
-    // unused on stages 1–2; 0x80 stays aimed. Clear the live flag bit
-    // explicitly: inferring it from mode would leave 0x40 armed forever
-    // because absolute previously only cleared 0x100.
-    if ((b.exFlags & 0x40) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x40);
+    // TH08 et_ex dir-change mapping is machine-code-pinned: bit 0x40 →
+    // FUN_00432460 does `flds 0xd74; fadds 0x1014; fstps 0xd74` = RELATIVE
+    // `angle += f0` (0x4322ef-0x4322fe), while bit 0x100 → FUN_004325a0
+    // STORES f0 to 0xd74 = ABSOLUTE set (0x43237f+). Bit 0x80 stays aimed.
+    // An earlier pass inverted 0x40/0x100 ("0x40 is SET") on the theory that
+    // Wriggle Sub16's rain needed absolute headings — the rotation IS the
+    // authored pattern (fireflies kick ±π/2 per interval while their speed
+    // sawtooths f1→0, FUN_00432460's waiting branch `f1·(1−t/interval)`).
+    // Each family clears its OWN flag bit at the maxTimes fire.
+    if ((b.exFlags & 0x40) && b.exDir) this.dirChangeBullet(b, 'relative', 0x40);
     if ((b.exFlags & 0x100) && b.exDir) this.dirChangeBullet(b, 'absolute', 0x100);
     if ((b.exFlags & 0x80) && b.exDir) this.dirChangeBullet(b, 'aimed', 0x80);
     if ((b.exFlags & 0xc00) && b.exBounce) this.bounceBullet(b, (b.exFlags & 0x400) !== 0);
-    }
     // Default bullet integration is the same f32 store-back (`pos += vel`)
     // at all.c:16147-16149. Math.fround is therefore state semantics, not a
-    // rendering approximation. Spawn-end still takes this extra add; only
-    // the et_ex handlers above are skipped.
+    // rendering approximation. The spawn-end fallthrough takes this extra
+    // full-velocity add on its ending tick (pacing tick-10 pin).
     b.x = Math.fround(b.x + b.vx);
     b.y = Math.fround(b.y + b.vy);
     return { enteredNormalState: true, transitionX, transitionY };

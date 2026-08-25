@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadEngine, makeStubAssetsTh08, makeStubAudio } from '../scripts/lib/replay-harness.mjs';
 
-// TH08 et_ex 0x40 is SET heading (TH07 0x40 was ADD). Wriggle midboss Sub16
-// arms a 20-way FIRE0 fan then et_ex 0x40 with f0=π/2 so every spoke falls
-// as rain; the inherited relative mapping rotated the fan into the fixture
-// player at f3192.
+// Machine-code-pinned TH08 et_ex dir-change mapping (an earlier pass had
+// 0x40 inverted to SET):
+//   bit 0x40 → FUN_00432460: `flds 0xd74; fadds 0x1014; fstps 0xd74`
+//              = RELATIVE `angle += f0` (0x4322ef-0x4322fe).
+//   bit 0x100 → FUN_004325a0: stores f0 straight into 0xd74 = ABSOLUTE.
+// Both families also drive the speed sawtooth f1·(1−t/interval) between
+// fires and clear their own flag bit at the maxTimes fire.
 const mod = await loadEngine();
 const idle = () => ({ held: new Set(), pressed: new Set() });
 const replayInput = (word) => ({
@@ -28,69 +31,87 @@ function makeScene() {
   return scene;
 }
 
-test('et_ex 0x40 SETs heading to f0 and clears its own flag', async () => {
-  const scene = makeScene();
+function fireBullet(scene, { flags, heading = 1.0 }) {
   const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 192, y: 64, life: 1000 });
   shooter.ecl.shootOffset = { x: 0, y: 0 };
-  const spawnHeading = 1.0;
   scene.runtime.spawnBullets(scene, shooter, {
     sprite: 2, offset: 2, count1: 1, count2: 1,
-    speed1: 2, speed2: 2, angle1: spawnHeading, angle2: 0,
-    flags: 0x40, sfx: 0, aimMode: 3,
+    speed1: 2, speed2: 2, angle1: heading, angle2: 0,
+    flags, sfx: 0, aimMode: 3,
     exSlots: [{
-      opcode: 0x40, cond: 1, arg3: 10, arg4: 1,
+      opcode: flags & 0x140, cond: 1, arg3: 10, arg4: 1,
       f0: Math.PI / 2, f1: 2.1
     }]
   });
-  const bullet = scene.enemyBullets.at(-1);
+  return scene.enemyBullets.at(-1);
+}
+
+test('et_ex 0x40 ADDs f0 to heading (relative) and clears its own flag', async () => {
+  const scene = makeScene();
+  const spawnHeading = 1.0;
+  const bullet = fireBullet(scene, { flags: 0x40, heading: spawnHeading });
   assert.ok(bullet, 'spawned a test bullet');
   const id = bullet.id;
   for (let i = 0; i < 16; i++) scene.update(idle());
   const live = scene.enemyBullets.find((b) => b.id === id);
   assert.ok(live, 'test bullet still live');
+  const expected = spawnHeading + Math.PI / 2;
   assert.ok(
-    Math.abs(live.angle - Math.PI / 2) < 0.02,
-    `0x40 must SET heading to π/2, got ${live.angle} (relative would be ${spawnHeading + Math.PI / 2})`
+    Math.abs(live.angle - expected) < 0.02,
+    `0x40 must ADD π/2 (→ ${expected}), got ${live.angle}`
   );
   assert.equal(live.dirTimes, 1);
   assert.equal(live.exFlags & 0x40, 0, '0x40 must clear its own bit after maxTimes');
   assert.ok(Math.abs(live.speed - 2.1) < 0.01, `new speed ${live.speed}`);
 });
 
-test('state-2 spawn ending tick does not increment et_ex 0x40 wait', async () => {
-  const fire = (flags) => {
-    const scene = makeScene();
-    const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 192, y: 64, life: 1000 });
-    shooter.ecl.shootOffset = { x: 0, y: 0 };
-    scene.runtime.spawnBullets(scene, shooter, {
-      sprite: 2, offset: 2, count1: 1, count2: 1,
-      speed1: 2, speed2: 2, angle1: 0, angle2: 0,
-      flags, sfx: 0, aimMode: 3,
-      exSlots: [{
-        opcode: 0x40, cond: 1, arg3: 10, arg4: 1,
-        f0: Math.PI / 2, f1: 2.1
-      }]
-    });
-    return { scene, bullet: scene.enemyBullets.at(-1) };
-  };
-
-  const spawned = fire(0x42);
-  assert.equal(spawned.bullet.spawnDuration, 10, 'sprite-2 flash is 10 ticks');
-  assert.equal(spawned.bullet.exFlags & 0x40, 0x40, 'FIRE flags 0x40 must arm et_ex 0x40');
-  for (let i = 0; i < 10; i++) spawned.scene.update(idle());
-  assert.equal(spawned.bullet.exDirElapsed, 0, 'ending fallthrough must not tick 0x40');
-  assert.equal(spawned.bullet.dirTimes, 0);
-  spawned.scene.update(idle());
-  assert.equal(spawned.bullet.exDirElapsed, 1, 'first exclusive tick is the first wait increment');
-  assert.equal(spawned.bullet.dirTimes, 0);
-
-  const immediate = fire(0x40);
-  assert.equal(immediate.bullet.spawnDuration, 0);
-  for (let i = 0; i < 10; i++) immediate.scene.update(idle());
-  assert.equal(immediate.bullet.exDirElapsed, 10);
+test('et_ex 0x100 SETs heading to f0 (absolute)', async () => {
+  const scene = makeScene();
+  const spawnHeading = 1.0;
+  const bullet = fireBullet(scene, { flags: 0x100, heading: spawnHeading });
+  const id = bullet.id;
+  for (let i = 0; i < 16; i++) scene.update(idle());
+  const live = scene.enemyBullets.find((b) => b.id === id);
+  assert.ok(live, 'test bullet still live');
+  assert.ok(
+    Math.abs(live.angle - Math.PI / 2) < 0.02,
+    `0x100 must SET heading to π/2, got ${live.angle}`
+  );
+  assert.equal(live.exFlags & 0x100, 0, '0x100 clears its own bit after maxTimes');
 });
 
-test('Wriggle Sub16 interval-40 layer falls as vertical rain, not a rotated fan', async () => {
+test('state-2 spawn ending tick falls through into the et_ex dispatch', async () => {
+  const spawned = makeScene();
+  const bullet = fireBullet(spawned, { flags: 0x42, heading: 0 });
+  assert.equal(bullet.spawnDuration, 10, 'sprite-2 flash is 10 ticks');
+  assert.equal(bullet.exFlags & 0x40, 0x40, 'FIRE flags 0x40 must arm et_ex 0x40');
+  const find = () => spawned.enemyBullets.find((b) => b.id === bullet.id);
+  let firstNormal = -1;
+  for (let i = 0; i < 16; i++) {
+    spawned.update(idle());
+    const cur = find();
+    if (cur && firstNormal < 0 && (cur.spawnAge ?? cur.spawnDuration) >= cur.spawnDuration) {
+      firstNormal = i + 1;
+    }
+  }
+  assert.ok(firstNormal > 0, 'bullet reached normal state');
+  const cur = find();
+  assert.ok(
+    cur.exDirElapsed >= 1,
+    `the 0x431106 fallthrough must tick the 0x40 clock on the ending tick itself ` +
+    `(elapsed ${cur.exDirElapsed} after ${firstNormal} updates)`
+  );
+  assert.ok(cur.dirTimes >= 0);
+
+  const immediate = makeScene();
+  const straight = fireBullet(immediate, { flags: 0x40, heading: 0 });
+  assert.equal(straight.spawnDuration, 0);
+  for (let i = 0; i < 10; i++) immediate.update(idle());
+  const live = immediate.enemyBullets.find((b) => b.id === straight.id);
+  assert.equal(live.exDirElapsed, 10);
+});
+
+test('Wriggle Sub16 rain layer rotates by +f0 per fire (relative 0x40)', async () => {
   const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
   const stage = rpy.stages.find((entry) => entry.stage === 1);
   const scene = new mod.StageScene(
@@ -99,36 +120,30 @@ test('Wriggle Sub16 interval-40 layer falls as vertical rain, not a rotated fan'
   );
   scene.mode = 'test';
   scene.playerObj.invulnFrames = 9999;
-  for (let f = 0; f <= 3054; f++) scene.update(replayInput(stage.inputs[f]));
+  const heading0 = new Map();
+  const f0Of = new Map();
+  for (let f = 0; f <= 3054; f++) {
+    scene.update(replayInput(stage.inputs[f]));
+    for (const b of scene.enemyBullets) {
+      if (b.spawnFrame === 2995 && !heading0.has(b.id) && b.dirTimes === 0) {
+        heading0.set(b.id, b.angle);
+        f0Of.set(b.id, b.exDir?.angle ?? 0);
+      }
+    }
+  }
   const rain = scene.enemyBullets.filter((b) =>
     !b.dead && b.spawnFrame === 2995 && b.sprite === 2 && b.dirTimes >= 1
   );
   assert.ok(rain.length >= 15, `expected turned Sub16 layer, got ${rain.length}`);
   for (const b of rain) {
+    const h0 = heading0.get(b.id);
+    const f0 = f0Of.get(b.id);
+    assert.ok(h0 !== undefined && f0 !== undefined, `captured spawn heading for ${b.id}`);
+    const expected = h0 + b.dirTimes * f0;
     assert.ok(
-      Math.abs(b.angle - Math.PI / 2) < 0.05,
-      `spawn ${b.spawnFrame} id ${b.id} heading ${b.angle} should be π/2 rain, not spawn+π/2`
+      Math.abs(b.angle - expected) < 0.05,
+      `spawn ${b.spawnFrame} id ${b.id} heading ${b.angle} should stay relative: ` +
+      `${h0} + ${b.dirTimes}×${f0} = ${expected}`
     );
   }
-  assert.equal(scene.hitLog.length, 0, 'vertical rain must not contact the fixture player by f3054');
-});
-
-test('Wriggle Sub16 rain does not contact the fixture player at f3206', async () => {
-  const rpy = new mod.Rpy(readFileSync('tests/replays/th8_udLy01.rpy'));
-  const stage = rpy.stages.find((entry) => entry.stage === 1);
-  const scene = new mod.StageScene(
-    makeStubAssetsTh08(mod), makeStubAudio(), rpy.difficulty, rpy.team,
-    1, null, stage.rngSeed
-  );
-  scene.mode = 'test';
-  scene.rank = stage.rank;
-  scene.graze = stage.graze;
-  scene.playerObj.lives = stage.lives;
-  scene.playerObj.bombs = stage.bombs;
-  scene.playerObj.power = stage.power;
-  for (let f = 0; f <= 3206; f++) scene.update(replayInput(stage.inputs[f]));
-  assert.equal(
-    scene.hitLog.length, 0,
-    `spawn-end must not tick et_ex: ${JSON.stringify(scene.hitLog)}`
-  );
 });

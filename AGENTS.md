@@ -1,2256 +1,300 @@
 # AGENTS.md
 
-## 0. TH08 fork overlay (authoritative while this branch exists)
-
-**2026-08-19: this repository is now the standalone project
-`AgentMystia/th08_web`** (the vertical-slice branch IS main; the TH07
-parent lives on separately in `AgentMystia/th07_web`). CI is
-`.github/workflows/deploy.yml`: `core` (check/build/test) + `browser`
-(playwright boot probes) + `replay` (replay:verify:th08 as an advisory,
-continue-on-error — promote it to a gate when Stage 1 converges) gate the
-`pages` job, which deploys `dist/pages` to GitHub Pages. Local dev has no
-browsers (all browser-pixel gates run on CI); wine 10.0 + Xvfb IS
-available and drives the native demo/trace pipeline (see the 2026-08-20
-entry for what works and what is blocked).
-
-This branch is the Touhou 08 / Imperishable Night vertical-slice port. Treat
-the legacy TH07 text below as parent-engine history, not as format authority:
-
-- Original authority is `reference/Th08.exe` v1.00d and the unpacked files in
-  `reference/th08-original/`; use `reference/th08-decomp/` and
-  `reference/re-specs/th08-*` as cross-validation.
-- TH08 facts override TH07 facts: ECL has a leading `0x800` magic and v2
-  timelines; ANM entries are version 3; MSG text payloads are XOR `0x77`;
-  SHT uses 56-byte headers and records; replays are T8RP with a `0x68`
-  header and stage blocks containing a `0x24`-byte metadata header followed
-  by `N x u16` input records (v6 has NO per-frame aux word; the playback
-  feed FUN_00452550 strides 2, the recorder FUN_00452310 writes one u16 per
-  frame; the stride-6 feed FUN_004526c0 is for pre-v6 images only).
-- The first deliverable is Stage 1 + Stage 2 + Reimu/Yukari Border Team +
-  the original menus/UI, aligned to `replay/th8_udLy01.rpy`. Do not spend
-  time on TH07 Extra/Phantasm/Cherry behavior except where shared engine
-  code still needs to be excised safely.
-- Runtime directories will move to `assets/th08-img`, `assets/audio/th08`,
-  and `assets/sfx/th08`; nothing under `reference/` or `replay/` may ship.
-
-### 2026-08-20 delivery pass (goal pivot: fidelity delivery over frame-exact convergence; commits 996acfb..f35bd0a)
-
-The goal contract changed: frame-exact replay convergence is DEPRIORITIZED
-to a recorded residual; delivery-grade fidelity is the gate. This pass
-closed the presentation/mechanics audit checklist — every item checked
-against the v1.00d binary or native shots, then test-locked:
-
-1. **Stage Intro verified complete**: the native stage-load GUI arms stgNtxt
-   scripts 0-3 verbatim (all.c:26963-26964 → FUN_00462360(gui+0x2a44,0,4));
-   the "Demonstration" sprite is the demo-only branch (all.c:26966-26972).
-   Script roles from the stg1txt.anm dump: 0="Stage N" label, 1=title,
-   2=flavor strip, 3=the stage-theme BGM credit (the baked "BGM: 幻視の夜
-   ～ Ghostly Eyes" strip — no separate arm needed, userdemo-t20).
-   th08-intro-plate locks the [0,1,2,3] set, per-stage file binding, and
-   script 3's credit rect.
-2. **Tally rebuilt to the native row set** (FUN_0043826b,
-   all.c:26466-26606): the clear base is the per-stage table DAT_004c7158
-   (1M/1.5M/2M/2.5M/2.5M/3M/4M/6M/6.66M — stage 2 was underpaid 500k); the
-   extreme-gauge score trickle (+10 live score/frame past ±8000, player-tick
-   tail all.c:37597-37614) plus the "over-80%"/"over 80%" ratio rows; the
-   Player Penalty row; the trailing night-clock text rows ("PM11:00 >>
-   PM11:30", strings from .rdata 0x4b4d54/58/60, minutes = slot*30+660 per
-   all.c:24838) with the 60-frame-beat then +1min/frame (+4 with Z/Ctrl)
-   count-up (all.c:25485-25503); native gap structure 32/16/40 from (120,96)
-   (floats 0x4b42c4/cc/d4, 0x4b432c); the invented row-by-row reveal removed
-   (the exe draws every row each frame). Native quirk reproduced: the
-   Phantasm rank line prints "*2.0" but has no multiplier arm.
-3. **HUD row geometry from DrawGameScene (FUN_0043625d)**: HiScore y=40
-   ABOVE Score y=56 (the layout table had them swapped); the power bar is a
-   single 16px fill quad (488,136)-(488+power,152), 0xe0e0e0ff→0x80e0e0ff,
-   no background track; Point/Time split positions follow the digit count
-   (slash half-scale, +6px); the Time row tints 0xfffff0c0 once the quota is
-   met; the difficulty tag moved to its native slot — ascii.anm script 25,
-   sprite 283+difficulty corner-anchored at (552,200), fading in over stage
-   frames 60-80 (all.c:26916-26923). The bottom-right pause.png tag was an
-   invention.
-4. **Dialogue native pace** (native-verified by /proc/pid/mem polling of
-   RunMsg state, tmp/native-msg-trace.mjs): RunMsg init defaults
-   skippable=1 and the confirm threshold 6 (all.c:24649-24650) — the port's
-   skippable=false default ran every op4(500) wait full-length, so the
-   pre-boss chat overran the stage's frame budget entirely. The Ctrl warp
-   happens once per update at the loop head (one @block per frame,
-   gui-run-msg.c:33-35) with the wait bodies bypassed; the Z-edge confirm
-   releases at counter>=threshold measured from the text op (6 init, 8 after
-   a confirm, 30 after a timeout). Native demo reference: the stage-1 chat
-   completes in 132 frames (f5552-5684) inside the recorded Ctrl window;
-   the port reproduces the structure (th08-dialogue tests).
-5. **Spell background sheets armed natively** (FUN_004152a0,
-   all.c:9093-9095): two eff0N.anm VMs (archive scripts 0/1) at every spell
-   start, faded in over 60 frames then tile-wrapped with their authored
-   op26/27 UV scroll (eff01b v+0.008333/frame, eff01 v-0.002083/frame). ANM
-   ops 26/27 now accumulate scroll offsets on the VM; oversize
-   corner-anchored sheets draw through a repeat-pattern fill (canvas has no
-   GPU UV wrap). The TH07 hand-rolled per-stage spellbg path is deleted.
-   th08-spell-bg locks the arm/fade/scroll/remove cycle for both stages.
-6. **The stage-2 boss-stall root fix**: ins_135 sub-ECL contexts now carry
-   PRIVATE call stacks. The shared stack let Sub61's trailing ins_53 steal
-   the main Sub32→Sub58 call frame — the sub-context became a second Sub32
-   re-calling Sub58 every frame (hp refilled every ~410 frames, then the
-   spell re-declared every frame; Mystia's first spell never ended). A
-   return with an empty private stack parks the context until re-armed.
-   Regression: tests/th08-subcontext.test.mjs.
-7. **New ops from the binary**: ins_136(n) = call builtin n from the rdata
-   table 0x4c6cb0 (case 0x87; slot 0 = FUN_00423390 globals sync, slot 1 =
-   FUN_004233d0's 21-frame type-1 screen shake); ins_142(n)/ins_168(n) =
-   the phase-clear scatter showers (cases 0x8d/0xa7: ±64/axis, 2 rand01
-   draws per item; 142 tiers powerBig→powerSmall, all point at full power).
-8. **Stage chaining**: clearing stage 1 hands the RunCarry into stage 2
-   (previously the run returned to the title after stage 1); practice stays
-   one-stage native.
-
-**Verifier state**: formal replay earliest divergence — stage 1 f2884,
-stage 2 f1052 (the auto-fire RNG-lottery residual, deprioritized by the
-goal pivot; both stages complete under `replay-verify-th08.mjs --stage N
---clear-check`). npm run check/build/test green (148/148).
-
-### 2026-08-20 convergence pass (goal: Stage1+2 replay convergence + fidelity)
-
-Mechanics, all proven against the v1.00d binary (asm offsets cited inline):
-
-1. **ins_2 is the TH08 ECL WAIT, not a clock SetCurrent** (corrects the
-   2026-08-17 claim). Case 1 SetCurrents the context's SECOND ZunTimer at
-   ctx+0x90 (asm 0x418662-0x418678); the per-instruction pass head
-   (0x418557-0x418598) gates the fetch on it — while positive it Subtracts
-   both the wait timer and the ctx+4 instruction clock (net-zero freeze)
-   and skips the fetch. The SetCurrent reading killed every ins_2 wait
-   loop after its first pass — Wriggle's Sub42 familiar volley cycle
-   (ins_96, ins_2([10000]), ins_96, ins_2, ins_4 jump) never refired, so
-   boss familiars produced no danmaku. The ins_135 sub-context dispatch
-   also gained the familiar form gate (all.c:10801; Sub42's 0x3f =
-   human-only / 0x5f = youkai-only rows now select correctly) and its
-   clock now freezes during waits. Regression tests in
-   tests/th08-familiar.test.mjs (wait cadence + real Sub43/Sub42 chain).
-2. **Deathbomb type was missing its +2.** FUN_0044c650 (all.c:37720-37742):
-   type = form byte; deathbomb (player+4) computes `1 - type` then
-   `type += 2`. The port ran the NORMAL inverted bomb (wrong machine,
-   durations, gauge denominator, declaration name/banner). Now
-   `3 - base`; regression test pins unfocused→3 / focused→2 / stock-1
-   costs 1 (tests/th08-familiar.test.mjs).
-3. **Death white-out moved off the deathbomb window onto the miss.**
-   FUN_0044cbf0 (state-2 window handler) draws no white quad;
-   FUN_0044d180 arms player+0xe2a70=60 on the miss commit (re-armed every
-   squish frame) and FUN_0044d2c0 draws
-   FUN_0044de60(player, 768, 896, 0xffffffff, 0) every frame while it
-   counts down. The port previously flashed 50%-alpha every other frame
-   DURING the window. tests/th08-death-white.test.mjs pins the states.
-4. **var 10096** (exe 0x2770): the chain-keeper's live familiar-child
-   count (FUN_0041f000/41fd40's +8 chain walk); children read 0. Used by
-   Wriggle's Sub35 (!=1) and Mystia's Sub44 (>=3).
-5. **ins_145(n)** = ZunTimer::Add(n) on the context instruction clock
-   (exe case 0x91, asm 0x41d5df). **ins_152** = stage-interp template
-   reset (case 0x98; data uses zeros only — consumer unmodeled, §7).
-6. **Verifier `--stage N`** (scripts/replay-verify-th08.mjs): replays any
-   recorded stage, restores the entry score into BOTH scene.score and
-   runState.score (addScore routes through runState), compares against the
-   next stage's entry snapshot. **Stage 2 (Mystia) is embedded** (ecldata2,
-   stage2.std, stg2bg/stg2enm/stg2txt/eff02, face_st02, msg2a) and runs:
-   earliest divergence **f1168** (ins_106-family volley, same class as
-   stage 1's f997).
-7. **Stage-intro night-time plate** (times.anm script 0, the (256,268)
-   intro template): sprite slot = runState.clockTime (T8RP +0x22; 0=子の刻
-   pm11:00, 1=子の二つ pm11:30 … 12=夜明け), armed on the first stage tick
-   after the entry restore. tests/th08-intro-plate.test.mjs.
-8. **Stage-tally night-clock plates** (times.anm scripts 1/2): the current
-   plate spawns at the tally start with the entry slot; the quota advance
-   releases its label-1 wait and the advanced plate (script 2) spawns with
-   the new slot. The clock advance itself (FUN_0043c35f: +1 met / +2
-   missed) now reads the DAT_004c77f0 stage×difficulty quota table (also
-   driving the HUD Time row); the run state (clock/gauge/item ladder)
-   round-trips through RunCarry. tests/th08-stage-carry.test.mjs.
-
-**Native demo/trace pipeline (this host: wine 10.0 + Xvfb, no browsers):**
-- The title demo loads `demo/demorpyN.rpy` BY BASENAME FROM th08.dat
-  (FUN_0043e660 → FUN_00474c40 archive lookup) — loose `demo/` shadowing
-  never works. Custom scenarios ship by rebuilding the archive with thtk's
-  `thdat -c 8`. The T8RP validator (FUN_00451d90) requires
-  `u32@+0x10 = 0x3f000318 + sum(decrypted[0x15..rawFileSize))`; the LZSS
-  stream needs the zero-match terminator; the demo picker plays the FIRST
-  NONZERO stage slot then the whole run.
-- Breakpoint tracing is NOT viable here: launching under winedbg OOMs at
-  the game's VirtualAlloc; `winedbg --gdb <wpid>` attaches fine (feed gdb
-  commands on stdin) but any breakpoint (software or hardware) kills the
-  game with 0xC0000005 on the first cont (suspected .text integrity
-  self-check). scripts/native-trace.mjs's header records the details.
-  CONFIRMED (2026-08-20): a .text patch (a 5-byte JMP hook at FUN_0043ecc0
-  with a proper appended RWX section, scripts/tmp pe-patch) loads fine but
-  the game then hangs BEFORE the RNG init (0x164d520 stays 0) — the
-  integrity check runs at startup. Any .text instrumentation (breakpoints,
-  code-cave hooks) is therefore dead on this host; the only native channel
-  is read-only /proc/pid/mem state polling (memtrace below).
-- The f997 (stage 1) / f1168 (stage 2) earliest divergences are both
-  auto-fire-family volley bullets with sub-3px contacts. A replay probe
-  (player shifted 8px down at f986-991, native demo) survives — the native
-  bullet is ≥3px off the recorded path while ours contacts at ~1.3px, so
-  our volley trajectory is ~2-4 flight-frames too far along, uniformly.
-  Root (volley phase / creep / template origin) is unpinable without the
-  slot trace; documented as the standing residual for a healthier host.
-
-### 2026-08-20 second convergence pass — native /proc/pid/mem slot tracing
-(commits b070851..e337630; verifier earliest divergence driven
-**f997 → f2873** on stage 1, and the roots of five independent defect
-classes pinned and fixed, each proven against the v1.00d binary AND a
-native per-frame trace)
-
-**The native slot-trace breakthrough.** Breakpoint tracing is dead on this
-host (§ above), but it turns out to be unnecessary: the game runs under
-wine on this host, and its ENTIRE live state is readable from Linux with
-zero cooperation from the target. Recipe (scripts/native-memtrace.mjs):
-- yama ptrace_scope=1 + no CAP_SYS_PTRACE: /proc/pid/mem only opens for
-  DESCENDANTS of the reader. wine forks game processes from wineserver,
-  so keep wineserver in the foreground as the tracer's child
-  (`wineserver -f`, binary at /usr/lib/x86_64-linux-gnu/wine/wineserver) —
-  Th08.exe becomes a grandchild and /proc/<pid>/mem opens read-only.
-- The exe loads at its preferred base 0x400000 under wine (validate by
-  reading MZ and the quota table at 0x4c77f0 =
-  2000/2500/2700/3000,6500,7200×3).
-- Frame sync: ReplayInf = *(u32*)0x18b8a28; the playback FRAME COUNTER is
-  u32 @ ReplayInf+0 (FUN_00452550's *param_1; job+0x50 is the input
-  cursor). Poll it; it advances once per replay frame. Zero missed frames
-  at 60fps with a full bullet-array pread per frame.
-- Player object (static) = 0x17d5ef8; collision center = +0x2b4/+0x2b8,
-  AABB at +0x38c..+0x39c (center ± 0.825), hitbox half-extents at +0x3d4.
-  Player quad/attack pool (FUN_0044de60/4df00, the bullet-kill quads) at
-  player+0xbb834, 0xC0 × 0x40: [0]=x [1]=y [2]=radius [3]=growth/frame
-  [9]=lifetime-countdown [10]=type(param6) [0xc]=kills [0xf]=active.
-  Player-shot pool at player+0xbe838, 0x80 × 0x484: pos +0x2a4/+0x2a8,
-  vel +0x43c/+0x440, alive i16 +0x462, type +0x464.
-- Bullet manager (static) = 0xf54e90; array at mgr+0x1a880, 1536 × 0x10b8
-  (asm 0x431254/0x4312b7): state u16 +0xdb8 (0 free, 1 normal, 2/3/4
-  spawn transition, 5 dying), pos +0xd44/+0xd48, hitbox size +0xd34,
-  type +0xd42, proto +0x224, cmd flags +0xdac, timer +0xda8, vel
-  +0xd50/+0xd54. Slot iteration is 0,1535..1 (backward with wrap).
-- Enemy manager (static) = 0x577f20; enemy[i] = mgr+(i+1)*0x53d0, 480
-  slots: pos +0x2d88/+0x2d8c (live = origin(+0x2d40) + logical(+0x2d34)),
-  hp +0x2dfc, flags2 +0x3324, form-rank +0x3330, parent +0x2da4, ECL ctx
-  = *(enemy+0x2ca0) (clock ctx+4, wait timer ctx+0x90), rank-lerp bounds
-  +0x2dec/+0x2df0.
-- RNG state = u16 seed at 0x164d520 (FUN_0043ecc0; boot-seeded by
-  timeGetTime at all.c:34288, stage-restored from the T8RP block's
-  +0x1a u16 by FUN_00453be0 at asm 0x452f8f — so the demo's per-frame
-  seed IS the recording's stream, deterministic and frame-exact once you
-  poll it at the frame boundary).
-- The replay playback feed has a ONE-FRAME input latency (jobs run
-  descending priority: player(9) before the feed(6)), so native demo
-  state at counter N == live frame N-1. EVERY native/sim comparison must
-  apply native(f) = sim(f-1); verified to 0.0000px over 165 frames.
-
-**Five root fixes landed from the traces:**
-1. Familiar master-death bullet-kill quads (commit 9414953): on the
-   master's death the engine registers one FUN_0044df00 quad per swept
-   child (r32, +2/frame, 8 frames, param6 7|9 by flags2 bit1) plus one at
-   the master (r32, +1/frame, 16 frames, param6 7); the enemy-bullet tick
-   probes this pool (FUN_00449ff0) and state-5s every live bullet inside
-   the radius (no item award — DAT_018b8988 = -1 outside bomb/spell
-   context). Measured: two quads swept ~85 bullets over 8 frames at
-   replay f922, erasing the f880 ring's down-going band — the f997/f1011/
-   f1338 phantom killers. The port's old stand-in (16 direct time orbs,
-   no kill semantics) is gone. The per-child local_30 orb burst with its
-   FUN_0042f270/2f230 count tiers stays unmodeled (§7).
-2. Familiar tangibility gates + pos-inherit orbit tracking (commit
-   5e78608): updateTh08TargetCaches and collidePlayerShots both skip
-   ethereal familiars (flags bit 11; all.c:21448-21450) — measured: the
-   native target cache jumps to the master during the f1680-1698 youkai
-   window, and the master took ~280 damage through the ghosts vs our ~54.
-   And all.c:21350-21355's origin-rewrite (movement ORIGIN follows the
-   parent's logical pos every tick while flags bit 9 + parent link live)
-   — our frozen spawn-point orbits rode a constant 3.33px high (measured,
-   x exact to 0.00), slipping shot-hit timing by a frame and letting the
-   last familiar live to fire its f1718 Sub9 volley (the f1759 killer).
-3. ins_63 teleport sync (commit e337630): ins_63 setPos now refreshes the
-   loop-head snapshot immediately; with the stale value the stage-1
-   midboss's ins_63(96,-48) -> ins_64(60,4,192,128) displacement collapsed
-   to (0,144) and parked her at (96,96), out of the player's shot column
-   (native: (102.29,-36.46) at eased t=2/60, melting ~1400 hp through
-   f2995-3070). Verifier f2873 -> f3221.
-4. Rank-lerp bounds split (commit e337630): the ECL-context init writes
-   ±0.15 (all.c:19955-19956, native midboss reads -0.15/+0.15 at f2995);
-   FUN_00415c80's phase-entry/spell/death-callback reset writes ±0.5
-   (all.c:9249-9254). The port used ±0.5 unconditionally (midboss f2995
-   volley: native 1.962 = 2.0 - 0.038 at bounds ±0.15/rank 12, ours 1.875
-   at ±0.5). phaseTransition and the death-callback entry now reset
-   fireRankSpeed* to ±0.5; spawn init is ±0.15. th08-ecl-vm.test.mjs's
-   fire signatures recalibrated (native ring bullets: 2.0344 at rank 9).
-5. Timeline-spawn t0 hp ordering (commit e337630): the t0 core now runs
-   at the template default (hp=0 with a life-carrying spawn, placeholder
-   1 otherwise) and the timeline life is applied AFTER the core — measured
-   that Sub13 fairies read hp=0 through their t0 cascade, so their t0
-   ins_96 is blocked (`if (0 < hp)`) and the machine-gun only re-fires
-   through the auto-fire deadline. (ins_57/op110 subs still clobber to the
-   timeline life afterward, wave masters 150/400.)
-
-**The standing residual: the RNG draw economy (stage 1 at f2873, stage 2
-at f1051 — both auto-fire-phase volleys, ins_106's u32%deadline).** The
-auto-fire phase is the ONLY RNG-driven pattern element (every other
-divergence class above was deterministic). Measured against the native
-seed stream (0x164d520 polled at frame boundaries):
-- Native consumes ~26-31 u16 draws/frame baseline with a ~20-frame
-  oscillation (wave-spawn bursts spike 40-52/frame), plus ~4200 draws of
-  stage-init bootstrap by f100. Ours: ~11.4/frame + ~170 bootstrap.
-  Per-window (native vs ours, LFSR-walk from 0x8fbe to each frame seed):
-  f100-520 opening waves 26 vs 10 (deficit ~16/f), f520-1300 quiet
-  10 vs 11 (MATCHED), f2500-2700 Sub13 wave 30 vs 14 (deficit ~16/f).
-  So the deficit scales with ACTIVITY (many live enemies + volleys), not
-  a constant per-frame rate: it lives in per-enemy / per-spawn / per-event
-  consumers, and is ~zero in quiet windows.
-- 2026-08-20 deep-dive elimination (native-null-replay control + full
-  all.c RNG-call inventory): the deficit is ambient/enemy/bullet-side —
-  a NULL-INPUT demo (no player keys) runs at the SAME 26-40/frame as the
-  full replay, so player shots/kills/drops contribute ≈ 0. Effect-51 is
-  matched at 10/particle on both sides (etama script idx 73 = 5 random
-  ops × 2 u16). Ruled out as deficit sources: bullet spawn AND tick
-  (FUN_0042f5f0/431240/42ffc0/410a70 hold no RNG call; the rice/big-bullet
-  transition scripts -129/-128/-127 carry only non-drawing ops 8/34),
-  enemy ECL/VM per-frame (no per-frame random ops in stg1enm/fairy
-  scripts; FUN_0045ea00 draws only inside ANM ins_59/60/61 handlers, all
-  at t=0 for these), deaths (~0.03-0.045/frame → ~1/frame), integrity
-  checksum (0x4012b0 is TH07-only, absent in TH08), frame pacing (verifier
-  cadence 10494 sim-frames vs 10504 records = 1:1), world petals (effect
-  26 is Sub50/51 boss-spell only). The open consumers are therefore the
-  many small per-spawn VM arms whose scripts carry t0 ins_59/60/61 (item
-  spawns FUN_004400a0 = 1-2 frand, ambient bursts, the -79/-78/-77/-76
-  effect scripts at 8-10 u16/arm, -118/-117/-116 big bullets at 4 u16/arm)
-  plus the ~4000-draw init gap — none of which our port ticks at arm time.
-- 2026-08-20 over-consumption mechanism (effect-pool probes at f607/1006/
-  1502/2000): the native effect pool (FUN_00425430, 0x200 × 0x360 @
-  0x4ece60) is ~FULL (499-510/512) from f1000 on — effect-51 only ~150-185
-  active while ours pegs at 240. The pool is held full by ~280 script-62
-  VMs (on-disk script -88, sprite 173, NO random ops, NOT items — the item
-  manager is 0x1653648 with its own pool — and NOT tracking the live
-  bullet count). Those VMs throttle effect-51 emission to ~66%, so the
-  native draws effect-51 at ~0.66/frame while ours runs unthrottled at
-  1.0/frame: ours OVER-consumes (seed walk from 0x8fbe: ours 29254 steps
-  by f2605 vs native 14058 — we are ~2x AHEAD, not behind). The modeled
-  fix: our effect pool must fill the same way (emit the script-62 VM
-  family so effect-51 is pool-pressure-throttled identically) — identity
-  of the script-62 family is the open sub-question (combat-debris/drop
-  VMs is the leading candidate).
-  Matching them is the TH07 "RNG budget" task for TH08: arm/tick every
-  spawn-time ANM VM with its t0 ops incl. the ins_59/60/61 draws, profile
-  per-consumer against the frame-aligned native seed stream. Until the
-  streams align, every u32%deadline auto-fire phase is a lottery and the
-  phantom deaths keep moving; there is no local fix — DO NOT paper over
-  it with phase clamps or special cases (forbidden by the task contract).
-- Our per-frame stream is ~90% effect-51 emission (the ambient Sub14's
-  ins_139(51,·) bursts: 6×16 at t=4-24 then 4 particles every 4 frames
-  forever; each particle = 5 ANM random ops × 2 u16 = 10 draws — cost
-  verified against etama script idx 73 (on-disk id -77), which matches
-  the native effect map DAT_004c6d30 entry 51 -> script 0x49).
-- So the deficit is NOT effect-51's cost or cadence (those match); it is
-  the long tail of unmodeled per-frame consumers (enemy/effect/item
-  spawn-init draws, fire volley spreads, drop rolls, VM-init draws) plus
-  the ~4000-draw init gap. Matching it is the TH07 "RNG budget" task for
-  TH08: profile per-consumer draw counts against the frame-aligned native
-  seed stream (scripts/native-memtrace.mjs now logs rng per frame) and
-  replicate each consumer's draw cost. Until the streams align, every
-  u32%deadline auto-fire phase is a lottery and the phantom deaths keep
-  moving; there is no local fix — DO NOT paper over it with phase
-  clamps or special cases (forbidden by the task contract).
-- The stage-2 entry seed check is the total budget oracle: recording's
-  stage-2 entry = 0x32fb; ours currently diverges at f2873 with the
-  stream ~15k draws apart.
-
-Verifier state at this checkpoint: npm run check/build/test all green
-(130/130); stage 1 earliest divergence f2873 (auto-fire volley at
-spawn+2 vs native spawn+52); stage 2 f1051. The replay-golden CI job
-stays advisory.
-
-### 2026-08-20 third convergence pass — the RNG draw economy
-(commits dafcb6f..75eaddf; verifier earliest divergence stage 1
-**f2873 → f2895 → f3250 → f2882 → f2685 → f3201/3202 → f3065 → f2873**,
-each hop a re-rolled auto-fire lottery as the stream economy improved;
-cumulative draw-count delta vs native over f696-2606 driven
-**-10640 → -160**; stage-1 total native budget ≈ 294960 draws)
-
-**The draw counter.** FUN_0043ecc0 (the u16 LFSR) increments a u32 at
-**0x164d524** (`*(int*)(param_1+2)+=1`, param_1 = the seed at 0x164d520).
-Reading it per frame boundary from /proc/pid/mem gives the native's exact
-per-frame draw count — a frame-exact economy oracle that needs no
-breakpoints. Draw-unit prices (u16 per call): FUN_0043ecc0/00410c00 = 1,
-FUN_0043ed20 (u32) = 2, FUN_0043ed50 (rand01) = 2, FUN_0043ed80
-(rand[-1,1)) = 2, FUN_00406ef0 (u32%range) = 2, FUN_0040d390
-(rand01*amp) = 2, FUN_004143c0 (randSigned*amp) = 2. **Case mapping:
-ANM (FUN_0045ea00) exe case = on-disk op + 1; ECL (FUN_004184b0) exe
-case = on-disk ins − 1** (double-anchored: ins_106 = case 0x69,
-ins_144 = case 0x8f). ANM random ops are only on-disk ins_59 (int
-u32%range) and ins_60 (float rand01*amp), 2 each at arm.
-
-**Effect spawn cost = 2×(the etama script's ins_59+ins_60 count) + the
-init callback's draws, PER PARTICLE (FUN_00425430 runs the callback per
-particle and its nonzero return vetoes THAT particle)**. The effect map
-DAT_004c6d30 (12-byte entries {scriptIdx, d2, cb}): scriptIdx is the
-ARCHIVE file-order script index, NOT the on-disk id — multi-entry files
-reuse ids, so resolve through the file-order enumeration (the earlier
-'effect 38 = 0 draws' note misread 0x47 as an on-disk id; the truth is
-archive idx 71 = on-disk -79 = 5 random ops = 10/arm, measured 10/arm
-against the counter). cb costs: FUN_00426280 = 16 (id 51), FUN_00426720
-= 16 (id 63), FUN_00426e70 = 20 (id 19), FUN_00425d70 = 4 (ids 4-11),
-FUN_00425ea0 = 4 (id 3), FUN_004270c0 = 4 (ids 21/26), FUN_00426b20 = 2
-(ids 17/18/27); every d2 per-frame updater draws 0. Effect 63 = 26/arm
-(script -76: 5 ops + cb 16), effect 47 = 8/arm (script -78), effect 38 =
-10/arm (script -79), effect 40 = 0 (script -69 has 2 random ops — entry
-2! — but map's cb 0... measured 0). Full measured table now lives in
-EFFECT_DRAW_COST (stage-scene.ts).
-
-**Consumers pinned and ported this pass (each verified against the
-counter and the pool censuses):**
-1. **effect-62 option afterimages** (already landed in the 2nd pass):
-   12 VMs every 3rd player tick from counter >699, 0 draws each, 72-frame
-   life — they hold the 512-slot main pool at ~276-288 steady, which is
-   what throttles effect-51 emission to ~66%.
-2. **effect-38 familiar white sparkles**: FUN_0042c420's per-tick branch
-   (all.c:21164-21166) — materialized (flags bit 11 clear) familiars
-   flagged by ins_83(1) (+0x3328 bit 1 = our flags2 bit 1) emit effect
-   0x26 at their live position every second +0x2e14 timer tick. The
-   FUN_0040ebc0(2) gate reads the timer PRE-tick (asm 0x42c4b1-0x42c4bc),
-   so the native fires on the familiar's 1st/3rd/5th tick (odd e.frame
-   here). 10 draws/arm; the stage-1 Sub2/Sub12 orbiters emit 4-6 per
-   second frame (40-60 draws), matching to the draw from f1590 on.
-3. **Master-death time-orb shower (FUN_0042adb0(1), all.c:20446-20544)**:
-   per swept child, local_30 orbs around the CHILD (frand01*(2*tier),
-   frandSigned*pi), tier = childCount*2+10 (< 8) for stage 1-2 — the
-   FUN_0042f270/2f230 tier byte is DAT_0164d0b1 (the TEAM index, < 4
-   here). Each orb = FUN_004400a0(7,3) = 8 draws (4 scatter + 4 state-3
-   when the item probe succeeds). Then the child's own drop
-   (effect(dropEffectId+4)×3 + pointSmall) and the master-tail 2-per-child
-   burst + the kill quads. f1249's native death: 79 orbs + 608 draws,
-   matching to the orb.
-4. **Kill-quad bullet→item conversion**: the sweep's FUN_0044df00 quads
-   carry param6 (quad[10]); FUN_00449ff0's probe hit writes it to
-   player+0xe2a90 (== the 'DAT_018b8988' read site) and the state-5 entry
-   converts the bullet: param6 9 → TWO time orbs, any other type > -1 →
-   one item of that type (all.c:23597-23651; each FUN_004400a0(.,7,1)
-   forced into the state-3 draw pair). Stage-1 masters hold +0x3324 bit1
-   clear → child quads arm 9, the master quad 7. Spawn-state (2/3/4)
-   bullets defer the kill+conversion to their transition-VM completion
-   (the +0xdbe latch, all.c:23589-23644) — the port latches per spawn
-   tick (quadKillType) and converts on the completion tick. Measured:
-   f922's sweep = 32 burst orbs + 2+60+2 conversions spread over the
-   quads' 8-frame expansion; the old 'no item award (=-1)' note was wrong
-   for these quads.
-5. **Shot-impact effect 5**: FUN_00451670's state-1 (in-flight) shot's
-   first contact re-arms the VM AND arms effect 5 in the main pool
-   (all.c:40425-40431, 4 draws via cb FUN_00425d70). Was the scripted
-   side layer (0 draws, no slot); now spawnEffectParticles(5).
-6. **Form-flip pools**: FUN_0044aec0 arms the player form tints (effect
-   0x1c/0x1d, 0 draws) into the main pool and the focus aura (effect
-   0x16) via FUN_00425870 into the dedicated slot 0x282 — the aura's arm
-   runs script -96's t0 with ONE random op (2 draws). The familiar
-   materialize flashes (effect 0x1e/0x1f = 30/31, 0 draws, 10-frame
-   life) now occupy real main-pool slots too.
-7. **effect-51 firefly lifetime distribution**: the per-frame d2
-   (FUN_004264f0) releases the VM once the particle leaves the viewing
-   cone (dot(normalize(pos − DAT_004ea3c4), DAT_004ea3e8) < 0.94,
-   all.c:18019-18026) — the anchor/axis ride the stage's 3D camera.
-   Native slot-tracked lifetimes (f300-1100, n=581): 37% reach the
-   240-frame script end, the rest ~uniform over 1-239. The port rolls
-   the same distribution from the arm's third drawn u16 (already inside
-   the 26-draw cost — no extra draws). Pool occupancy then tracks the
-   native (e51 163-172 vs 165-187). §7: the per-particle cone formula is
-   unmodeled; the distribution is measured, not derived.
-8. **Time-orb collects draw 4 u16 each** (draw counter vs item-pool
-   census, f966-972: 5/8/10/24/18/19/7 collects → 20/32/40/96/72/76/28
-   draws, exact). The collect switch (FUN_004412b0 + fall-through
-   FUN_00441020) shows no direct RNG call in the decompile — the consumer
-   is an unexposed callee (the item VM's absorb re-arm suspected). §7.
-9. **Item-pool active-flag leak fixed**: syncItemSlots only saw entities
-   still in this.items, but updateItems compacts the dead out first — so
-   every collected/despawned item's pool slot leaked active (378 live
-   marks vs 3 live entities by stage-1 f2700), making later time-orb
-   first-probes fail. The slot is now freed at the compact itself.
-
-**Item-pool spawn semantics (FUN_004400a0, all.c:30776-30873)**: the
-rotating cursor scans 2096 slots; out-of-bounds x (<-64, >448) rejects
-with 0 draws; param_4 2/3/5 draw 4 inside the found-slot block (so a
-failed probe draws 0); **type 7 (time orb) gives up after the FIRST
-occupied probe** (the `if (param_3 == 7) return dummy` at the loop tail)
-while other types wrap-scan the full pool. Type 10 → forced 7 + param_4
-5; type 7 → forced param_4 3.
-
-**Open consumers (small, parked):** isolated 4-draw bursts at stage-1
-f504/508/511/552/553/555 with no product in ANY pool (main/pool2/item)
-and no ECL/ANM random op on the alive enemies — single +4 bursts
-mid-frame per the high-frequency poll. ~24 draws by f555. And the
-f967-972-class aftermath (largely the orb-collect 4-draws, now modeled).
-The remaining macro-structure of the deficit is the kill-timing cascade:
-orb scatter values feed collect timing feed power feed damage timing;
-each master death lands 1-10 frames off until the stream is count-exact
-upstream of it. No local fix exists — drive the per-frame draw count to
-zero delta from the start.
-
-**Native probe toolbox** (tmp/, never committed): native-memtrace.mjs
-(per-frame player/enemy/bullet/shot-pool/RNG dump), native-pool-census.mjs
-(effect-pool composition), native-item-census.mjs (effects + items +
-per-slot spawn transitions incl. the second pool at mgr+0x6c01c),
-native-e51-life.mjs (per-slot lifetime histogram), native-microtrace.mjs
-(sub-frame draw phase), native-spawn-diff.mjs. Sim side:
-tmp/sim-rng-dump.mjs / sim-pool-census.mjs / sim-spawn-dump.mjs /
-sim-rng-profile.mjs. Compare with native(f) == sim(f−1) (the replay
-playback feed's one-frame input latency).
-
-### 2026-08-22 Boss visual audit delivery (commits be3c4a9..a8d3de9)
-
-The interrupted Kimi visual-audit goal is complete for every Stage 1/2
-midboss/boss nonspell and spell phase. The audit aligns screenshots to each
-side's own phase event (declaration + N frames / spell end + N frames), so
-the known RNG/kill-timing residual cannot silently shift the comparison.
-Bullet patterns are checked by family/shape/density, not pixel identity.
-
-Native evidence was captured under Wine/Xvfb by polling the live replay
-counter through `/proc/<pid>/mem`: Stage 1 midboss f2950..3700 and final
-boss nonspell f5900..6150; Stage 2's stock demo f4000..6020, including the
-Mystia midboss nonspell f5860..6000. The native demos then return to title
-(Stage 1 during the first final-boss nonspell; Stage 2 immediately before
-the midboss spell declaration). Per the audit stop rule, later phases are
-marked data-verified from their ECL/ANM assets plus phase-relative port
-captures, never claimed as native screenshot matches. The full temporary
-ledger and local capture tools live in ignored `tmp/`.
-
-Five presentation roots were fixed and regression-locked:
-
-1. Enemy spell declarations now run the authored `face_stNN` entry-0 VM;
-   the hand-positioned portrait stand-in is gone.
-2. Boss fights draw the stage romaji name strip, `ins_134` phase countdown,
-   and the native two-pixel HP strip at playfield y=19.
-3. Native declaration layering is restored: effect 39, portrait, spell
-   name/Bonus/history sit behind boss and danmaku; the invented cyan
-   full-playfield flash and thick red ribbon were removed. History excludes
-   the live attempt and commits only when the card ends.
-4. Effect 39 resolves through `DAT_004c6d30[39]` to etama archive script 76
-   (sprite221, the 16x768 repeated `etama3` strip). Its 70-frame alpha and
-   192→15/120-frame settle drive a dedicated segmented rune-ring draw.
-5. The browser image preload list had omitted the entire Stage 2 surface
-   family even though its ANMs were embedded. `stg2bg/stg2enm/stg2txt`,
-   `eff02/eff02b`, and every `face_st02*` surface now preload; a test walks
-   every embedded Stage 1/2 ANM entry and rejects any future texture that is
-   absent from the browser registry. This restored the forest, Mystia art,
-   spell sheets, declaration portrait, and nameplate in actual browser play.
-
-Post-fix port captures cover Stage 1's 8 ledger phases and Stage 2's 8
-ledger phases at declaration/mid/late representatives (the final Stage 2
-card was also observed at declaration age 800 before replay-driven defeat).
-The remaining presentation approximations are explicitly registered in §7;
-no per-phase clamps or RNG special cases were introduced.
-
-Verification at delivery: `npm run check`, `npm run build`, and all 155
-tests pass. Both replay clear probes complete (`--stage 1 --clear-check` at
-f13650; `--stage 2 --clear-check` at f30515). The verifier still exits 1 on
-its end-snapshot comparison, as expected for the already-recorded advisory
-RNG/score convergence residual; this visual pass neither promotes that job
-nor conceals the divergence.
-
-### 2026-08-22 pre-release static audit (purely static; zero local execution)
-
-A release-readiness audit of the full 44-commit push (b070851..0f53d7a +
-audit fixes), run statically per the zero-local-execution mandate — three
-read-only sweeps (src hygiene, ship-safety, CI config) plus targeted
-verification of every flagged item. **0 blockers.**
-
-Confirmed clean: no isolation hacks (no early-return/debugger/console
-debugging in src/, no commented-out subsystems, no hardcoded live test
-state); TH07 excision complete (only allowed remnants = disassembly-provenance
-comments and the documented no-op eclvm case 20); `__TH08_TEST__` installs
-only under `?test=1` and ships nothing; every §7 approximation carries its
-inline comment; git tracks nothing under reference/, replay/, tmp/, backup/,
-dist/ (sole .rpy = the committed fixture); the browser runtime fetches only
-repo-relative `assets/` paths; the 82-image preload list is 1:1 with
-`assets/th08-img/` and test-locked; Pages stages exactly index.html +
-th08.css + the bundle + assets (whitelist in scripts/prepare-pages.mjs);
-deploy.yml's graph matches the intent (core+browser gate pages, replay is
-step-level continue-on-error so the known divergence cannot block deploys).
-
-Corrections landed with the audit: the eclvm.ts file header no longer
-self-describes as the TH07 VM with a `TH07-TODO` marker convention that no
-longer exists; loop.ts cites the real tests/engine-pacing.test.mjs; README
-refreshed to the delivered Stage 1+2 scope and the current standing
-divergences (stage 1 f2884 / stage 2 f1052).
-
-Parked advisories (harmless, no action this pass): main.ts's dormant
-`practice` branch (native practice init lives=8/power=128, menu entries
-disabled — verify against exe practice defaults before enabling the menu
-items); player.ts:541's magic sprite fallback `?? get(64)` feeding shot
-collision geometry; anm.ts's vestigial never-assigned `flipY`; the browser
-CI job re-downloads Chromium every run (no ms-playwright cache — cold-runner
-hang risk is handled by the cancel+rerun procedure).
-
-TH08 Stage 1 runs end-to-end: the title/difficulty/team menu flow, the
-Border Team, dialogue, HUD, and the replay harness are all live.
-
-### 2026-08-23 second pass — four user-visible fidelity fixes + pool/phase alignment
-
-Four reported deviations from the original, each root-caused against the
-v1.00d binary/data and fixed at the engine level (no presentation clamps):
-
-1. **终符使魔不发弹 / boss-fight frame drops — the bullet pool was still
-   TH07's.** `ENEMY_BULLET_CAP`/`ENEMY_BULLET_POOL_CAP` were 0x400 (1024,
-   the TH07 parent engine) while TH08's manager (@0xf54e90) is 0x600 =
-   1536 slots (native slot trace, the 2026-08-20 entry). During Wriggle's
-   final card + Last Spell the port saturated at 1024; the census veto
-   silently dropped the familiars' whole volleys while the boss (earlier
-   slot) kept firing. Both caps raised to 0x600. Draw-side costs fixed
-   with it: `drawWrappedFrame` now caches its CanvasPattern per image,
-   `drawSpellRing` pre-renders the settled annulus once (96 rotated quads
-   per frame for the whole card was the top per-frame cost — §7 flags the
-   bake's premultiplied composite), and FUN_0042b490/FUN_0042b930's
-   phase-jump free of ALL ins_135 sub-contexts is implemented (the H/L
-   midboss previously carried Sub16's Sub17 nonspell volley into the
-   螢符 spell; re-specs th08-ecl-ops-0x5f-0x8f.md §2). FIRE count1 floors
-   at 0, not 1: FUN_00422720's `for (i < count1)` means Sub48's ins_30
-   decay of [10039] to 0 is the authored Last-Spell fan shutdown; the
-   Math.max(1,...) clamp kept firing 1-bullet volleys forever.
-2. **道中击破后魔法阵残留 — leaked familiar marker VMs.** Every TH08
-   familiar arms a ttl-Infinity marker (FUN_00425b70 → etama 48, the rune
-   circle under 使魔) in tickTh08FamiliarSync, but only the DAMAGE-death
-   settlement released it. Self-deleting familiars (stage-1 Sub10/Sub12/
-   Sub46 all end with ins_1) bypass that settlement, so every timed-out
-   familiar left an immortal rune circle at its last position — dozens by
-   the midboss kill, and 6 more per 290 frames through the final card
-   (also draw load). Native teardown (FUN_0042bcf0 → FUN_0042a820)
-   destroys every effect VM a removed enemy owns; the port now releases
-   markers at the removal chokepoint (§7: instant cull vs the native
-   <=15-frame destroy fade). Mode-1 deaths now consume the 0x800000 hide
-   flag (all.c:21650 — the retained actor walks its callback invisibly,
-   native behavior), and ins_127(-1) clears the enemy's ins_57 slot VMs
-   (FUN_0042a820 at the unregister tail).
-3. **Stage 2 BGM.** The mapping table was correct; the audio bundle only
-   shipped the title + Stage 1 pair, and audio.ts's parity fallback
-   silently replayed 幻視の夜/蠢々秋月 over Stage 2. th08_04.ogg (夜雀の
-   歌声) and th08_05.ogg (もう歌しか聞こえない) are extracted with the
-   pipeline's exact parameters (thbgm.fmt PCM table: start 49606672/76005392,
-   len 26398720/16978176 → 149.54s/96.34s), the shipped-set and the
-   splitter whitelist updated, and a ship-safety test now fails if any
-   slice track is missing from assets/audio/th08/.
-4. **对话不显示立绘.** The MSG machine was faithful but the presenter
-   dropped everything: no 'active-slot' case (op15 — the workhorse; msg1a
-   uses ~15 op15 vs 3 op17, and Wriggle never gets an op17), a
-   `!portrait.active` guard ate op1 before a runner could start, and
-   op2/15/17's args were fired as interrupt LABELS when they are
-   SetSprite ORDINALS (FUN_0045e430 — archive-flattened sprite table,
-   implemented as AnmRunner#setSpriteOrdinal). Fixed presenter: op1
-   creates the slot's expression runner and fires label 1 (the authored
-   30-frame slide-in; the engine site that releases the parked ins_23 is
-   outside the exported Gui functions — §7), SetSprite ordinals swap
-   expressions without touching script flow, and the position codes 3/4/
-   5/6 map to their matching face-script labels (active/dim/far/exit —
-   the label bodies match the codes one-to-one; §7 for the trigger-site
-   caveat). Stage-2 faces resolve via TH08_DATA.stages[N].faceAnms.
-   The op1/op2 per-slot Y-offset compensation tables (-112/-80/-208 by
-   texture height, gui-run-msg.c:61-96) are applied at the draw.
-
-Verifier expectation: the pool cap, sub-context free, and count floor are
-sim-visible past f3193/f1051-class windows only (the fixture's hard
-checkpoints f1237/f1276 sit before every affected site), so the pacing
-test stays intact while the advisory whole-stage numbers may move.
-
-### 2026-08-24 boss-fidelity pass (research/boss-fidelity-audit; port-side only)
-
-Wine/ptrace is CLOSED (user decision): all native questions are answered
-from the decompile + .rdata static reads; verification is the podman node
-runner (tmp/podman-node/run.sh — bind-mounted src/tests/scripts/assets,
-persistent th08-nm volume, node:22) plus CI for pushes.
-
-Four user-reported breaks, root-caused and fixed:
-
-1. **Mystia invincible + invisible after her mid-fight transition.** The
-   mode-1 death hide (flags bit23) is DRAW-SIDE ONLY in the native damage
-   settlement (all.c:21449+ gates on the semantic bits); the port gated
-   damage/shot/body on ecl.invisible, so the retained Mystia was permanently
-   immune to direct fire (damage only flowed via familiar shares). The
-   native re-show is the next phase's ins_54/ins_58 ANM re-arm (stage-2
-   Sub22 runs ins_58(0) right after the uncloak); ins_129's 0xff8fffff mask
-   clears bits 20-22 ONLY (bit23 survives — an earlier reading here was
-   wrong; do not "fix" it back). setCurrentAnm clears the render-hide.
-2. **Last Spell quota gate.** var 10098 (resolver case 0x2772,
-   all.c:14145-14152) = 2 when the stage time-orb quota (DAT_004c77f0) is
-   met; the boss bodies (stage-1 Sub37 / stage-2 Sub32) run their ins_50
-   against it and ins_1 immediately when unmet. The port's literal
-   fallback ran the bodies regardless of quota. A quota-unmet run has NO
-   Last Spell — native behavior, not a defect. canTakeDamage now also
-   honors flags bit4 (the ins_80(8) gate the Last Spell bodies use).
-3. **四重結界 beam visuals frozen.** FUN_004117b0 advances the wave-VM
-   angle ±pi/80 per tick (0x3d20d97c = f32(pi/80)) and renders from that
-   engine state; the etama scripts 88-95 carry only sprite/color/fade, so
-   the port's plain effect entries sat at identity rotation/scale.
-   Th08BorderBomb.beamVisualFrames() + StageScene render four additive
-   quads per group (etama sprite 225, authored wave colors), rotating for
-   the authored 140-frame life. §7: FUN_00464b00's instance fan-out is
-   the flagged approximation. .rdata-verified constants: 0x4b4300=8.0,
-   0x4b4308=4.0, 0x4b4524=pi/4, 0x4b4520=1/sqrt2, 384/192/32 radius bases,
-   88/80/50 size interp; op80/op81 are UV scroll velocities (stg6bg args
-   1/16000) — the beams stay CAST-anchored (pacing f1276 gauge pins it).
-4. **Dialogue confirm semantics re-verified native**: gui-run-msg.c case 4
-   requires a Z RISING edge with counter>=threshold (6/8/30); HELD Z never
-   confirms — long unskipped conversations are the authored timeout pace,
-   not a stall. Ctrl (0x100) skip bypasses wait bodies wholesale.
-
-Audit harness (tests/th08-boss-audit.test.mjs): full-fight phase ledger +
-card bullet censuses per stage (recorded replay and synthetic focus-fire),
-E/N/H/L sweeps, a bombing variant, a pinned-orb quota A/B, and the
-wave-anchor/beam-rotation locks in th08-border-bombs.test.mjs. 197/197
-local via the podman runner.
-
-### 2026-08-25 boss-fidelity acceptance pass (port-side; podman runner + podman playwright visual gate)
-
-Five user-reported boss-fight breaks root-caused and fixed; every fix is
-decompile-anchored, test-locked (205 tests, 0 fail), and visually accepted
-in a real browser (podman `mcr.microsoft.com/playwright:v1.60.0-noble`,
-screenshots under ignored `tmp/pw-driver/shots/`, zero PAGE ERRORS).
-
-1. **灯符「ファイヤフライフェノメノン」使魔零弹幕 — TWO stacked CALL-channel
-   defects.** (a) eclvm case 52 zeroed the callee's vars 10053-10060
-   instead of copying the run-global float bank (native all.c:15505-15512
-   copies DAT_004ece20..3c into frame+0x70) — the "TH08 has no run-global
-   bus" comment was wrong. (b) The bank's int write path had NO mapping:
-   the real data writes [10062] (familiar life) through INT ops
-   (varWriteInt8 dropped ids 10061-10068 silently; the native resolver
-   write switch does not split int/float). Stacked effect: Sub39 read
-   [10054]=0 → every Sub43 familiar spawned hp=0, died on its first
-   manager pass, and FIRE's hp>0 gate vetoed everything (measured: zero
-   owner-43 bullets at every difficulty; after both fixes 27/53/96/222 at
-   E/N/H/L). The 蠢符 final-card familiars (Sub46) fire 72/card at every
-   difficulty — the earlier "final card familiars don't fire" reports were
-   this same starvation plus the retired 1024-pool saturation.
-2. **道中魔法阵残留 — the early-death block leaked markers.** Enemies dying
-   inside tickEnemyCore (ins_1 self-deletes — every stage-1 familiar
-   family — and offscreen culls) hit the loop-head early block that nulled
-   the slot WITHOUT calling releaseTh08EnemyVisuals; the post-loop sweep
-   could not recover (slot already null). A no-shoot run leaked ~210
-   Infinity-ttl rune circles (the whole effect pool, also starving later
-   effect arms); now 0 (audit test asserts leaked ≤ live familiars,
-   excluding the player focus aura's legitimate permanent slot).
-3. **八云紫 bomb 必崩 — AnmRunner built without the entry sprite base.**
-   drawTh08BeamVisuals constructed `new AnmRunner(etama, ref.localId,
-   { entryIndex })`; etama is multi-entry (entry2 base 389) and the
-   constructor executes t0 ops, so the set-sprite threw "references
-   missing sprite 225" ~50 frames after every focused/deathbomb cast (the
-   first beam group arms at t49) — draw-phase halt + red ERROR banner.
-   New shared helper archiveScriptRunner() (th08-declaration.ts) resolves
-   archive indices WITH spriteIndexOffset. Follow-ons fixed in the same
-   rewrite: per-group authored runners (cast 0x58/0x5c + waves
-   0x59-0x5b/0x5d-0x5f) so the authored alpha fade actually plays (the old
-   cached t0 frame was alpha 0 = invisible forever), and the visuals now
-   OUTLIVE the active machine to their authored 140-frame life
-   (tickRetiredBombVisuals drives the retired sim from the per-frame
-   effect tail — the bomb choreography itself only runs while bombTimer
-   is live). Acceptance note: the Yukari side needs the form byte (focus
-   held >6 frames), not a one-frame key tap — native 0x40be30 EDX reads
-   the FORM, so a tap-focus bomb correctly casts Reimu's orb bomb.
-4. **夜盲「夜雀の歌」黑夜效果 — entirely missing, now implemented.** ECL
-   mechanism (decompile-proven): the card subs arm ins_135 drivers
-   (鷹符 sub50, 夜盲 sub56@t210, Last Spell sub60@t120, defeat sub57)
-   that write int var 10000 (intensity) + interp float var 10016 (radius
-   320→192@120f→128@1800f) and re-export via ins_136 builtin 0
-   (FUN_00423390 → DAT_004e3d28/24). Draw (FUN_00405420, all.c:1583-
-   1609): four black quads close the playfield to a square around the
-   player, then etama archive script 105 (etama5 radial-gradient sprite
-   229) draws scaled radius/63 with alpha=intensity — smooth rim, HUD
-   untouched. Port: GameHost.setNightBlindness + the draw pass after all
-   world layers; ins_123 clears the intensity (all.c:9422).
-   **Persistence semantics (decompile-derived, test-locked):** Mystia's
-   card subs contain NO ins_123 (timeout rewires via ins_134 → sub62,
-   kills walk the death callback), so the darkness RETAINS through the
-   bridge into the Last Spell and the defeat animation — the finale plays
-   dark natively; clears happen only at a formal ins_123 or stage
-   transition.
-5. **Sub-context interpolation isolation.** tickTh08SubContexts swapped
-   ctx/vars/stack but NOT interpSlots: sub-context op36 tweens armed onto
-   the main context's slots (stomped by the boss body's own interps) and
-   never ticked. subContexts now carry private interp slots and advance
-   with the same hp gate as the main tick — without this the 夜盲 circle
-   froze at its first waypoint (radius stuck 288 at N). This also
-   un-breaks any authored sub-context tween (boss walk-ins etc.).
-
-**Verifier movement (fidelity change, honestly recorded):** stage 1
-replay now converges with **EARLIEST DIVERGENCE: none observed**
-(previously f3192) and clears at f13057; stage 2 clears at f27784 with
-the standing native-contact oracle at f676 (the documented fixture
-deathbomb-chain residual). The CALL-channel fixes resolved the auto-fire
-RNG lottery upstream: familiar spawns/volleys now draw from the authored
-parameter paths. `npm run check/build/test` green (205 tests; the 6
-skips are the browser-only suite). New regression surfaces:
-per-owner-sub card censuses at every difficulty (owner 43 on 灯符, 46 on
-蠢符), the marker-pool invariant, the CALL frame-copy unit test
-(th08-subcontext), and tests/th08-boss-presentation.test.mjs (beam
-runner resolution no-throw + authored fade + retired outlive through a
-real scene, night-blindness geometry: four cover rects + rim sprite
-centered/scaled on the player, ins_123 clear).
-
-**Visual acceptance methodology (wine stays closed):** `?test=1&paused=1`
-+ the __TH08_TEST__ hooks driven from podman playwright; the tally chains
-stage 1→2 only under `arcade=1` (test mode intentionally never advances
-the results screen). Twelve acceptance frames verified frame-by-frame:
-mid-bomb beams (4 rotating colored strips + declaration banner),
-post-machine beams dimming, midboss card, post-midboss field (zero
-residual circles), both familiar cards (familiars on rune arrays firing,
-HP strip visible), stage-1 tally rows + night clock, bright nonspell
-reference, 夜盲 full circle, shrunk circle, still-dark bridge gap, and
-the Last Spell singing in the dark.
-
-### 2026-08-24 boss-presentation visual pass (headless-Chromium host; draw-only)
-
-Host note: this VM has NO wine and NO podman, but DOES have local headless
-Chromium (`/opt/pw-browsers`), so dev-shot/visual acceptance runs locally.
-Baseline re-run of committed main on this host: stage 1 EARLIEST DIVERGENCE
-f3192, stage 2 f3367 — the 2026-08-25 entry's "none observed" claim does
-NOT reproduce here; treat f3192/f3367 as the standing advisory numbers.
-
-Boss-fight fixes, each verified by frame-stepped browser captures of the
-full Wriggle and Mystia fights (probe: alternate held/released Z per
-30-frame batch — the dialogue machine confirms on held-bit RISING edges,
-so a continuously held Z never advances the pre-boss chat):
-
-1. **Effect-39 spell ring settle/tracking (the user-visible boss-fight
- presentation break).** drawSpellRing parked the ring at a 240px
- playfield-wide annulus at the DECLARATION-time boss position, at full
- alpha, forever. The authored script's scale interp is 192→15 over the
- 120-frame settle and its fade-in tops at alpha 192/255; at the measured
- declaration-time ~600px screen radius (3.125 px/scale), the settled
- radius is 46.875px — the ring shrinks ONTO the boss and spins there,
- and the VM rides its owner (FUN_004152a0 arms it on the boss,
- all.c:9110-9126) so the draw now follows the live boss position. The
- bake path uses the same settled radius. Verified on 灯符 (familiars
- arranged around the settled ring, native look), 蠢符, and Mystia's
- 猛毒/鷹符/夜盲 cards.
-2. **?stage=2 test boot** (main.ts, test-only): direct probe boot of the
- Stage-2 slice so the Mystia fight is reachable without chaining a
- Stage-1 clear. snapshot.ts bulletDump cap raised 64→512 (probe
- visibility into dense boss patterns).
-
-Non-defects confirmed this pass (do not re-chase): Wriggle N1's rice
-"wing" hugging the boss is the authored EX chain (0x40 decel 60-90f →
-turn -1.83rad → 0x10 accel [10023]≈0.045/f — frame-tracked working); the
-purple rounded-rect plate behind bosses is the authored enemy.anm boss
-aura; the vertical strips + kanji-card sprites above the player are the
-Border-Team homing-amulet family; the kanji item boxes (刻/点) are the
-authored etama2 item row. Mystia's card chain (声符 midboss → 猛毒 →
-鷹符 → 夜盲, finale quota-gated) and 夜盲's player-centred vision circle
-render native-faithful in the browser.
-
-### 2026-08-24 draw-economy audit pass (port-side only; podman runner)
-
-A full static/exe audit of the standing stage-2 f677..1237 +8 u16 draw
-residual (the root of the st1 f3192 / st2 f3367 advisory auto-fire
-lotteries), plus one real fidelity fix that fell out of it.
-
-**The audit (every family reconciled against the v1.00d binary).** The
-port's window decomposes EXACTLY (17 610 u16 over f677..1237): fx51 14 560
-(560 arms × 26, unthrottled like native — stage-2 pool occupancy is low),
-fx4 1 792 + fx8 12 (kill/drop bursts; gauge-pinned), fx5 468 (117 shot
-settles), fx3 144 (36 tally arms), collects 192 (48 paying), itemSpawn 88
-(22 arms = exactly the 22 time-item spawns; state-0/1 spawns pay 0 natively
-— FUN_004400a0 draws only for param_4 ∈ {2,3,5}), ins_106 96 (48 deadline
-draws), root 258 (240 shake + 8 deathbomb-window integrity + 8 bomb-cast
-tail + 2 aura). Each family was then verified against the decompile and
-SURVIVED: the FUN_00451670 settle's type∈{4,5,6} skip is dead for Border
-Team (ply00a/as use only shotTypes 0/1 — dumped via the real Sht parser);
-the funcs[3] collision callbacks (FUN_00450ee0 = every-8th-tally effect-5,
-resolved through the four .data tables at 0x4c7ee0/0x4c7f04/0x4c7f1c/
-0x4c7f24 loaded by FUN_0044dd70) are never set by Border Team records
-(funcs [0,1,0,0]/[1,0,0,0]); the attack-slot tally's slot+0x3d suppression
-byte is set only by the type-1/unfocused-bomb family (FUN_0040c010's and
-FUN_0040c910's 16-amulet casts + FUN_0040e3b0's %4 slots), never by the
-type-3 machine FUN_00410fe0 our fixture actually deathbombs with (whose
-cast/t10/t20/t30 each publish one r100/growth-1/damage-70/cadence-5 slot +
-kill quad, none suppressed); the hit frame's draws are exe-exact
-(FUN_0044e160's 5×u32InRange(100000)+3×range(100000) before
-FUN_0044ab40's FUN_00406e50 + effect-6 ×16); the collect-payment gates and
-the item-pool probe/cursor semantics line-match FUN_004400a0 (bounds
-[-64,448], cursor+1-per-probe, time-orb single-probe give-up — and the
-stage-2 entry pool provably starts near slot 0 natively, f472's slot-1
-pin). The f676 contact oracle pins the stream draw-exact through the hit,
-so the +8 opens on 2-4 events among the contact-derived arms (fx5/fx3/
-time-spawn/collect) — i.e. it is the already-recorded kill-timing cascade
-class: Sub2's ins_106 arms only at ECL t35, so a fairy killed one frame
-early flips a 2-u16 arm, and each such flip moves a collect by a frame.
-There is no count-level defect left to fix in this window; closing it
-needs a native per-frame draw profile (wine — closed). Do NOT paper over
-it. The CI profiling note's earlier suspicion (ins_105/106 spawn arms vs
-the authored timeline) is REFUTED: spawn times are pure timeline data and
-the arms match.
-
-**Stage budget oracles (mod 65536, from the fixture's own seeds).** The
-fixture th8_udLy01.rpy is a FULL Lunatic run (stages 1,2,3,5,6,8 — earlier
-docs implied a 2-stage slice). LFSR-walk oracles: stage-1 total native
-draws ≡ 32 816 (0x8fbe→0x32fb; the measured full budget 294 960 ≡ this
-mod 65 536), stage-2 ≡ 63 672 (0x32fb→0xf84a, the stage-3 entry seed).
-When a run is count-exact to the end of a stage, its total draw count must
-hit these residues — a cheap whole-stage economy check that needs no
-per-frame native data.
-
-**The fix: death drops are pool state-2 spawns.** FUN_0043dca0's miss
-block (all.c:37886-37909) drops 5×powerFull (power<1) or powerBig+5×
-powerSmall (+bomb for teams 2/8/9), every one a FUN_004400a0(pos,type,2)
-call: param_4==2 pays its two draws in the found-slot block and arms the
-60-frame scattered tween, target = rand01*304+48 / rand01*192-64 (the
-0x43900000 literal — 304, NOT the TH07 288). The port pre-drew
-rng.f()*288+48 at the call site (count-accidentally-right, wrong constant)
-and then DISCARDED the tween — every miss item fell straight down from the
-death point. Fixed: spawnDeathDrop routes through spawnItem({state:2});
-the pool's state-2 amplitude corrected to 304; the dead vx/vy/tweenTarget
-spawn options removed (the pool owns velocity). Count-neutral for the
-pinned replays (no misses in their windows); test-locked in
-th08-item-spawn/th08-death-white. The stale §7 comment claiming spawn-state
-quad conversions fade immediately was also corrected — the deferred
-quadKillType latch is the real path.
-
-Verifier at this checkpoint: st1 f3192 / st2 f3367 (unchanged, as
-designed — both fixes are outside the pinned windows); npm run
-check/build/test green (198 tests).
-
-### 2026-08-23 scheduler-boundary + item/damage economy pass
-
-The interrupted follow-up to the 999b644 movement rework, rebuilt from
-native /proc slot traces instead of replay metrics, and extended across
-the item/damage/bomb economies. CI's replay job now runs `--stage 1` and
-`--stage 2` as two separate advisory oracles; the verifier no longer skips
-simulation ticks from the T8RP slowdown table (telemetry, not commands —
-skipping four of the first 30 stage-2 records rerolled every auto-fire
-deadline), and carries a seed-scoped native player-contact oracle for the
-committed fixture (stage 2, rngSeed 0x32fb: the f677 contact + deathbomb
-chain with per-frame state/RNG checkpoints). Every item below is exe-proven
-and test-locked; the tests embed the native trace values (exact f32 item
-coordinates, RNG seeds at specific frames).
-
-1. **Player-state machine**: FUN_0044ab40 RECOMPUTES preDeadCount on every
-   hit (bombs*6, +7 with the Time quota met, cap 15, doubled cap 30 under a
-   registered boss, Border Team ×9/5 — native stage-2 stock 3 → 27). The
-   deathbomb trigger retains native state 2 for one tick
-   (pendingDeathbombRescue completes inside FUN_0044c650's callback start);
-   FUN_0044cbf0 debits 15 time orbs per window tick with a two-u32
-   checksum regen only when the debit does not underflow; FUN_0044e140(0)
-   zeroes only the LIVE gauge short at the hit; FUN_00441530 detaches
-   state-0/1 items to (0,-0.9) and the next item pass converts tossed
-   items to the -0.7 dead-player fall; bombs latch a focus override
-   (player+3) until FUN_00416130's same-pass teardown.
-2. **Gauge clocks** (0x44be3e-0x44c00d): player+0xe2ad0 is the shot-idle
-   timer (rises to 30 disarmed, drains armed), player+0xe2ae8 the firing
-   ramp read PRE-tick — trunc(t/15) capped at 21, NOT the old
-   `min(20, t/15)` focus-counter conflation. Human-form grazes award
-   nothing to the gauge (0x44aa6d reads the form byte).
-3. **Item economy**: SHT+0x34 is the per-form ItemManager movement rate
-   (Border 0.9 in both forms) multiplied by the global rate — ordinary
-   gravity 0.03*rate and terminal-speed snapping compare VY against 3.0,
-   never the y position (the old y>=3 predicate snapped every visible drop
-   to terminal speed). FUN_004400a0 literals corrected: fall vy = -2.2f
-   (0xc00ccccd), toss vy = -2.0 - rng01*0.2 (0x3e4ccccd). State-3/5 tosses
-   skip pickup until they crest into state 1. Point value above PoC is
-   full; below it degrades linearly with the rounded distance, and the
-   rank award is +10 full / +3 partial, +1 per powerSmall, +5 per bomb
-   item. Collect checksum draws (FUN_00406e50 = 2 u32 = 4 u16) are
-   per-PATH: point/time always; powerSmall/powerBig only below full
-   power; bomb items only below stock 8; extends only when maxed lives
-   convert to a bomb; pointStar/pointSmall/powerFull never. Crossing to full power runs
-   FUN_00415c60's mode-1 point-star field clear plus FUN_00441450's
-   power→pointSmall conversion (2 u32 per converted item).
-4. **Damage pipeline** (FUN_00451670/0041ed50): shots during the player's
-   own bomb scale PER SHOT by /5 minimum 1 (not a sum/3); the youkai
-   extreme scales the frame's whole raw contact damage by 106/100 before
-   the 70 cap; the persistent enemy+0x2e10 accumulator adds min(raw,50)
-   per call and emits a state-3 time item (human extreme + SHT i16@+0x1e
-   < 0) on threshold crossings inside the slot loop; FUN_0042b370 shares
-   trunc(settled/2) to the parent, gated by the PARENT's shield timer
-   (0 → none; boss flag bit → /9) and floored at the largest armed life
-   threshold.
-5. **Enemy semantics**: the template starts with raw flags 0x4c (shot/
-   body/damage all enabled — Stage-2 Sub1's ins_80(2) clears only body);
-   ins_79/80/81 keep the three semantic gates in raw-bit lockstep; the
-   retained-death latch (flags2 bit 3) clears once a callback restores
-   positive HP; mode-3 death clears the raw mode field so the next phase
-   settles as mode 0; timeline spawns run their synchronous t0 core at the
-   timeline life (Sub1's clock-30 ring AND clock-34 5x3 volley both fire);
-   timeline op13 consumes EVERY matching latch and op14 fills EVERY free
-   slot; ins_160(n) is the per-enemy retreat/damage shield at +0x5354
-   (positive → 0 damage, boss /9; ticks down in the manager tail), NOT a
-   manager clock; ins_145 sets flags bit 25 (laser re-trigger) and ins_146
-   is the actual clock-add; RNG float vars are UNSIGNED u32s (>>> 0 — the
-   sign-extension bug halved Stage-2 Sub4's displacement); three-operand
-   arithmetic reads the DESTINATION id raw; auto-fire runs on its own
-   +0x3064 ZunTimer that advances through ins_2 WAITs and resets after
-   each volley, resolving VARs through the CAPTURING context's bank;
-   16px non-rice bullet hitboxes read 6.0, not 12.
-6. **Bombs**: the attack-slot pool is TH08's 0xc0 records with circle and
-   oriented-box shapes and a cadence gate (+0x24 % +0x38); publication
-   follows native scheduler boundaries (trigger-frame records appear at
-   the manager tail; FUN_004117b0's timer-50 groups publish four long
-   oriented boxes whose widths 1085.247/1266.194/1447.141/1628.088 come
-   from the timer-49 interpolation × sqrt(1/2), each with a 16-frame
-   8→0 shake and the authored purple flash); orb auras deal 5/contact and
-   detonate at the 200 threshold; bursts grow 12.8/12 frames (deathbomb
-   8.5333/15) with a 4.2667/30 clear; every bomb clear quad carries
-   param6=6 → pointStar conversion.
-7. **Bullets**: spawn-state transitions run their authored duration then
-   frac+full fall-through (the old fixture-pinned +2 is gone); the quad
-   latch probes ALL quad families at the creep-only position with
-   first-hit-wins (a later overlapping quad may not overwrite the latch),
-   and the deferred conversion pays BEFORE the normal-state cull.
-8. **Effects/HUD**: effect-51 fireflies are world-space particles built
-   from the eight u32 draws inside the measured 26-draw cost (camera +
-   signed offsets, drifting out of the viewing cone); ScreenInf jobs run
-   at the update head (priority 3 < replay feed 6); the difficulty tag
-   reads sprites 283+ from pause.png (ascii.anm's third entry), and the
-   human/youkai gauge is ascii.anm scripts 5-8 verbatim (plate, limit
-   icons, center-anchored cursor, 8x12 gauge glyphs).
-
-**Standing residual of this pass — the stage-2 f680..1237 8-draw gap.**
-The pacing test's f1237 seed checkpoint (native 18767) reads
-ours = native + 8 u16 draws (LFSR-walk-verified; 0.05% of the window's
-17.6k draws). The gauge trajectory still matches exactly through f1276,
-so gameplay events are unchanged; the error is purely in the draw
-economy. CI per-source profiling of the window decomposes our 17602
-draws as: 16976 spawnEffectParticles (ambient fireflies at exactly
-1/frame = 560 arms x 26, kill/drop/impact particles), 240 ScreenFx
-shake ticks (4 groups x 15 x 4 — matches the modeled boundary-beam
-groups), 192 collect checksums (48 paying collects), 96 auto-fire phase
-arms (48 ins_106 executions = fairy spawns), 88 state-3 scatter pairs
-(22 item spawns), 8 bomb-trigger integrity, 2 aura arm. Every one of
-these consumer costs is individually exe-verified; the residual is a
-COUNT difference (4 u32 calls) in one of the small families — most
-likely ins_105/106 spawn arms vs the authored timeline, or in-window
-shot impacts — and oscillates downstream (+4/-4/+16... with one kill
-shifted a few frames; gauge re-syncs to exact at f2218). Pinning it
-needs a native per-frame draw profile (wine — unavailable on this
-host). The test keeps f1237/f1276 as hard checkpoints and records the
-downstream deltas as logged residuals; the replay job's advisory
-divergence (stage 1 f3192 / stage 2 f3367 first unexpected hits under
-the new stricter oracle) is the same class of cascade. Do NOT close
-this by clamping draw counts or special-casing frames.
-
-**2026-08-19 full TH08-ification (commits 4855d94..605d359): the TH07 path
-is REMOVED.** The engine is single-path: `runState` (Th08RunState) is
-unconditional in StageScene, Border Team is the only character, formats are
-TH08-native only (T8RP rpy / ECL v8 / ANM v3 / SHT 56-byte / MSG XOR-0x77),
-and eclvm's TH07-numbered cases exist only as TH08_OP_REMAP targets (the
-keep-set is the remap's value set — computed mechanically, do not "clean
-up" cases without re-deriving it). Deleted: cherry.ts, TH07 dialogue
-runner, T7RP replay playback, th07-data.ts (1.17MB), the TH07 bomb
-machines (player-bombs.ts keeps only the shared attack-slot BombEngine),
-all 46 th07-* tests + the golden digest + th7_udFe25.rpy, 142 TH07 asset
-files, the TH07 scripts/CI/verify/pages tooling, and `__TH07_TEST__` (now
-`__TH08_TEST__`). The convergence fixture th8_udLy01.rpy is committed at
-tests/replays/ so CI can gate on `replay:verify:th08`. The regression net
-is now the th08-* + engine-* tests plus the TH08 verifier; the old
-parent-engine body below §0 remains as historical archive (its TH07
-workflow mandates are superseded by this overlay).
-
-2026-08-17 decompile-fidelity pass (commits 9a5e7d3/86dc560/3737b2e):
-the TH08 timeline v2 dispatch now mirrors FUN_0042a8a0 case-for-case
-(spawn ops 0-5/11/12/15 with per-op layouts, mirror set {1,4,5,12},
-dialogue/boss holds, the 13/14 timeline latch, per-difficulty rank byte);
-enemy art resolves through the two-file rule (flags2 bit2 selects the
-common enemy.anm vs the stage stgNenm.anm — asm 0x419850/0x419acc);
-ins_127 registers the boss slot; ins_2/ins_160 are clock SetCurrents, not
-blocking waits; player shots use sht.sprite+10 with the exe's init/tick
-callback split (aim-at-spawn vs the 40-frame-gated seek) and TH08's
-20-frame fire cycle; the bullet command queue runs 0x20000/0x4000/
-0x80000/0x40000 with up to 16 ins_111 slots; all ANM v3 opcodes in the
-embedded data are implemented.
-
-2026-08-17 second convergence pass (commits 634704d/f106ff8/7dc4333) —
-five more exe-proven root fixes, each against all.c:
-
-1. **T8RP record format**: stage blocks are `{0x24 metadata, N×u16 inputs}`
-   (stage 1 = 10504 frames, cross-validated by the 352-byte slowdown
-   trailer = 1 + ceil(10504/30)). The earlier `0x40 + 4-byte {input,aux}`
-   parse halved the stage and misaligned every input — every pre-fix
-   "player path verified" claim was circular.
-2. **Auto-fire capture replay** read the FIRE flags dword one slot past
-   the 11-dword image (`gi(8)` → undefined → 0): every auto-fired volley
-   lost its spawn-state slowdown/backup + sfx + fire gates. Fixed to
-   `gi(7)`.
-3. **Arith ops 10-19** are two-operand compound assigns (`dst op= src`;
-   exe cases 9-0x12), not TH07's three-operand forms; the remap zeroed
-   Sub0's chase-curve targets (`0.6*(player-enemy)+enemy`), so fairies
-   never entered the shot column.
-4. **Timeline holds NET-FREEZE the clock** (2026-08-19 correction of the
-   2026-08-17 claim that they advance it): op 7/10/13 each call
-   FUN_00418110 (ZunTimer::Subtract 1) *before* `goto LAB_0042ad52`
-   (ZunTimer::Tick +1) — net zero while parked (asm 42abdc/42ac3d/42ac81).
-   The dispatcher fires an op only when the clock equals its time exactly,
-   so a parked-but-running clock would skip every op between two holds.
-   Stage-1 proof: post-midboss waves sit at t=2935..3735 with the midboss
-   hold parked at 2935 (they stream ~800 real frames after the midboss
-   dies), and the pre-boss dialogue at t=4175 lands midboss-death + ~1240
-   frames. The old "+1236 frames is wrong" reading had the polarity
-   backwards.
-5. **TH08 death mode** lives in flags bits 20-22 (ins_129; the switch at
-   all.c:21639), not the TH07 deathMode field — reading the wrong field
-   skipped every death callback, so the midboss never ran her phase-exit
-   sub (end spell → unregister → boss-intro chain).
-
-Plus: the TH08 rank table (DAT_004c7880: E/N 10/8/16, H/L 8/8/12,
-Ex 16/15/16 — not TH07's 16-start/[10,32]); MSG op13 skippable + Ctrl
-fast-forward + op6 resume ticket releasing the op-7 dialogue hold
-mid-conversation (gui-run-msg.c:33/116/228); item launch vy −2.1875 and
-the y≥3.0 → vy=3.0 fall snap (all.c:31109-31121) replacing TH07's
-gradual cap; and the run-global float bank vars 10061-10068
-(DAT_004ece20..3c) backing the boss's shared pattern parameters.
-
-Verifier state (replay:verify:th08): the full 10504-frame stage plays;
-midboss engages/dies, boss spawns, intro+pre-battle chat chain runs, and
-a dialogue-tapping playthrough CLEARS the stage. Residual divergence:
-7 phantom deaths (f684/1011/1338/1779/2197/2664/3117 after the gauge/bomb
-alignment), measured as AABB Y-axis contacts with 0.48-1.86px of slack —
-the needed correction is uniformly "bullet ~0.5-1.9px higher in Y" with no
-age/flight-length correlation. Every link (player path, volley phase,
-fan/ring shape, speeds with the rank bump, spawn-state lifecycle incl. the
-TH08 state machine 0x431240 case-2/3/4 half-move -> same-tick case-1
-fallthrough, kill box 0x44a230 AABB with player sht.hitbox/2 and bullet
-size +0xd34, graze order, scheduler order, slowdown cadence) is
-decompile-verified; the residual is sub-frame and needs a native
-per-frame trace to pin — wine still cannot boot Th08.exe in this
-environment, so the trace procedure in scripts/native-trace.mjs stays for
-a working host.
-
-2026-08-18 presentation pass — five more systems from the v1.00d decompile
-(src/game/th08-declaration.ts is new; face_cdbg.anm is now embedded):
-- **Player spell-card declaration** (the bomb cut-in): FUN_0040be30 calls
-  FUN_00415d60 on the declaration manager singleton (0x4ea670) for EVERY
-  bomb. Names are rdata strings — 霊符「夢想妙珠」(0x4b43a0, type 0),
-  境符「四重結界」(0x4b44f4, type 1), 神霊「夢想封印　瞬」(0x4b43bc,
-  type 2), 境界「永夜四重結界」(0x4b4508, type 3); the selector (be30's
-  EDX) picks the side's face file (rm00/yk00), and be30 param_6=1 (both
-  deathbombs, like every enemy declaration) binds the RED banner sprite
-  variant (face_cdbg sprite 1). FUN_004069f0 indexes the ARCHIVE's script
-  table (file order) — player banners are face_cdbg scripts 0 (vertical
-  strip) and 2 (the -pi/2 full-width band), the name is text.anm script 4
-  (waits at ins_21(1); FUN_00416130's bomb-end interrupt releases it).
-  Names are canvas-typeset (text.anm's '@' texture is exe-runtime).
-- **TH08 sfx ids are a different table** (.data 0x4c81b0, 36 files, loader
-  loop 0x45d45f; FUN_0045d550/FUN_0045d660 play by this index — the second
-  arg is a pan/x position). Every id from 1 on is offset from TH07's;
-  playSfx dispatches TH08_SFX_SLOTS when runState is TH08. Bomb start =
-  id 13 (se_lazer00) + the declaration's id 14 (se_lazer01); shot fire =
-  id 0 (se_plst00, identical file in both games); graze 24, player death
-  2, item 18, impact damage 17, powerup chime 25, extend 22, pause 26.
-- **Shot impact visuals**: the settle (all.c:40420-40438) re-arms the shot
-  VM to script sprite+0xb (the odd-numbered 30-frame fade-out family in
-  player00.anm entry 0) and spawns effect 5 — DAT_004c6d30 maps effect ids
-  to etama ARCHIVE script indices (5→37, 6→38, 12→44) — so TH08 effects
-  run on an etama-bound layer; the old host fed those indices to a
-  player00-bound layer and every bomb/effect visual silently culled.
-- **Bomb clocks split**: be30's param_4 (player+0xfe4) is the ACTIVE
-  length 200/150/200/250 — the machine's end compare (0x44c667), the
-  staggered-burst gate (param_4-0x28-i), the type-0 force-burst gate
-  (param_4-0x1e, which must gate BOTH the seek and spiral phases), and the
-  gauge denominator (±trunc(26000/param_4), 0x44c81b). param_5 arms the
-  separate LONGER invuln clock at +0xe2af4 (260/200/260/300). The orb
-  burst fires the orb VM's interrupt 1 (player00 script 19: 6x balloon,
-  20-frame fade, delete); the orb seek's turn denominator is speed/8
-  (_DAT_004b4300).
-- **ANM interp channels run on a monotonic tick**, not the script clock
-  (exe AnmVm::interpCurrentTimers advance per tick and ignore
-  currentTimeInScript resets): op5 loop jumps and interrupt entries no
-  longer freeze armed tweens (this made the banner fade-ins vanish).
-
-2026-08-18 mechanics pass (commit cb42c0f) — four systems aligned from the
-v1.00d decompilation, replacing inherited-TH07 or speculative behavior:
-- Familiar lunge (0x44e3a0 sub-3 via 0x44e770's tail): the enemy manager's
-  pointer cache (0x18b89b4, written at 0x42d4a6 through the ABSOLUTE
-  address — greppable only as a raw address, not [reg+disp]) arms after 10
-  firing-cycle frames; Ran's anchor becomes (enemy.x, max(32, enemy.y+32)).
-  The primary cache (0x18b899c, max-y enemy) feeds the amulet seeker
-  (0x450320) and the human bomb. ply00as needles (funcs[0]=1) spawn from
-  the lunging option aimed at the pointer-cache enemy at speed x1.5
-  (0x450240 + 0x4b4438).
-- Youkai gauge (0x44bdf0 block + call sites): fire drift ±20/frame
-  (focusTimer/15 past 300 frames since the last focus toggle) while the
-  cycle is armed and focus stable >=30f; idle drift 2/3/5 by depth (tint
-  ±2000, effects ±8000, limits ±10000 — 0x44d9ee config); kills ∓200,
-  grazes +100, dialogue start −gauge/12, bombs ±26000/duration (bypass).
-- Bombs: the real dispatch is ONE per-frame callback per bomb from the
-  table at player+0x1000 = rdata 0x4c7ad0 team block {0x40c010 unfocused,
-  0x410c40 focused, 0x40c910/0x410fe0 deathbombs, 0x40d100 last spell} —
-  NOT the 0x40c820 youkai block (that table at +0x1014 is never
-  dispatched). 0x40be30's param_4 (player+0xfe4) is the ACTIVE length
-  200/150/200/250 (the end compare, the burst gates, and the ±26000 gauge
-  denominator); param_5 (the +0xe2af4 clock) is the LONGER invulnerability
-  260/200/260/300. Deathbomb inverts the side and costs 2 bombs when
-  stocked. The old Th08BorderBombSim (null damage, invented geometry) is
-  deleted.
-- 決死結界: SHT 18-frame window; FUN_0044d2c0's white 768x896 flash draws
-  while it runs.
-player00.anm entry 1 (spriteBase 44, on-disk scripts 19-22) holds the bomb
-art; PlayerEffects now resolves entry-scoped sprite tables for it.
-
-2026-08-19 pacing/convergence pass (commits 7e142c6/c161589/7232e34) —
-three more exe-proven roots, each reversing or extending a prior claim:
-- **Timeline holds NET-FREEZE the clock** (corrects the 2026-08-17 bullet 4
-  above): op 7/10/13 each call FUN_00418110 (ZunTimer::Subtract 1) BEFORE
-  `goto LAB_0042ad52` (Tick +1) — net zero while parked (asm 42abdc/42ac3d/
-  42ac81). The dispatcher fires ops only on exact clock match, so the old
-  "advance" reading compacted every op between two holds: the post-midboss
-  waves (t=2935..3735, timed FROM midboss death) all fired at once and the
-  boss appeared immediately at midboss-death instead of ~1240 frames later.
-- **Gui::StartMsg's field clears** (FUN_0043396d tail, all.c:24655-24657):
-  FUN_00415c60 (bullets→time orbs + laser cancel), FUN_0042efb0(0,0)
-  (ordinary-enemy sweep via the hp=0 death path, value cap 0, return
-  discarded — the spare bits are flags1 bit1 / flags2 bit6), FUN_004413e0
-  (live player shots flagged harmless drifting at (0,−0.5), re-asserted
-  every MSG frame; reset only on death/last-spell, never after dialogue).
-  NO force-collect: items keep falling; the player keeps moving; the STD
-  background keeps scrolling. The port previously force-collected and
-  skipped the sweep — that was the "shot mid-conversation" bug.
-- **Bullet spawn-transition**: creep is vel·(½, 0.4, ⅓) for states 2/3/4 —
-  the 2026-08-19 (½, ¼, ⅛) claim below was a bit-pattern misparse,
-  corrected 2026-08-19 (release pass) by disassembling the state jump table
-  @ 0x432156 (state 2→0x43176e, 3→0x431880, 4→0x431991, death 5→0x431aa2):
-  each block calls FUN_0040c7d0 = pos += vel·(1.0f/k) with k = 2.0f
-  (0x40000000) / 2.5f (0x40200000) / 3.0f (0x40400000) — 4.0f would be
-  0x40800000 and 8.0f 0x41000000. The replay A/B agrees: with (½, ¼, ⅛) the
-  first unexpected hit regressed f3301 → f998. The transition spans
-  duration+2 manager ticks
-  (FUN_0045e430 constructs the VM with no synchronous t0 pass; the
-  finished-report lands a tick after the terminal op itself). The +2 parity
-  is empirically pinned by the fixture (see below); the exact VM-internal
-  reason is inferred, not single-stepped.
-- The auto-fire re-execution (FUN_00423150 → FUN_00422720) builds its
-  template origin from the loop-head position snapshot (+0x2d88 sync at
-  0x418520) + muzzle offset, not the live post-move position.
-- Corollary facts re-verified first-hand this pass: FIRE angle-mode 3 is
-  `row·spread + base + col·2π/count1` (all.c:22727-22733, no π/count1
-  phase, no aim); bullet hit sizes ARE prototype-derived with sprite-2
-  rice = 4.0 (AddedCallback all.c:24344-24420 — the 0x40800000 case); the
-  machine-gun capture/auto-fire deadline chain (ins_107/96/108 + ins_105
-  reading timeline-spawned var 10000 = 30 → deadline 33 at rank 8) works
-  and fires every 33 ticks; rank stays 8 through f545 (no adjustRank
-  events), so rankSpeed −0.25 is correct for the early waves.
-- Verifier state after this pass: the f685 phantom death (the f530 ring's
-  crossing band) is GONE; the first divergence is now the f830 machine-gun
-  family (row-3 speed-1.5667 bullet, player rides its line, dy 0.48 —
-  ±1 tick of fire phase or transition parity both still contact; needs
-  ~2 ticks of lead, and the machine-gun phase knob −2 only moves the
-  contact to f829). The remaining deaths are cascade-dominated; the
-  midboss dies at wall +1444 in our run, shifting all post-midboss
-  content vs the recording. Item economy is thin (47 point spawns vs 61
-  native collects with the player invulnerable). Next threads: item drop
-  tables/counts per kill, and a per-frame native trace when a wine-capable
-  host exists.
-
-2026-08-19 familiar (使魔) system pass — the human/youkai tangibility
-system decoded end-to-end from v1.00d (polarity NOTE: human form
-MATERIALIZES familiars; youkai form etherealizes them — confirmed by the
-collision gates AND by the sound names: the player→human transition plays
-se_opshow, player→youkai plays se_ophide):
-- Player form byte (player+5, FUN_0040bc40): teams follow the focus key
-  through a stability gate — the native counter (player+8, reset each
-  toggle) must exceed 6, i.e. the flip lands on the 8th frame counting the
-  toggle (FUN_0044aec0 @ player-other.c:135-190; solos pin by char-index
-  parity). Port: `player.th08Form` (1-based th08FocusFrames > 7). The
-  toggle branch also plays the transition tints (effect 0x1c blue
-  0x808080ff → human / 0x1d red 0x80ff8080 → youkai, only after the
-  previous form held >= 5 frames) and arms the focus aura VM (effect 0x16
-  = etama archive 54, interrupt 1 on release). Bomb side selection reads
-  the FORM byte, not the raw key.
-- Familiars = child spawns ops 90-93 (exe cases 0x59-0x5c, all.c:
-  12020-12117): the child gets flags bit 8 (the side-sync marker), bit 11
-  = the player's CURRENT form, manager list id (0 = player-youkai / 2 =
-  player-human — `(-(form!=0)&0xfe)+2`), body contact cleared (bit 2),
-  the marker VM (FUN_00425b70(0x20) → etama archive 48, interrupt label
-  form?2:1), parent link +0x2da4, and sfx id 36 (se_option). Stage 1:
-  Sub19/20 (Wriggle's familiars, ~f3600) and the boss's 6-familiar waves
-  (~f4025+); the children's own FIRE(16) re-arms bit 6/bit 2.
-- Per-tick side sync (FUN_0042c420 @ all.c:21146-21185, flags-bit-8
-  enemies): on a form flip the familiar plays effect 0x1e (red
-  0x80803030 → human) or 0x1f (blue 0x80303080 → youkai), marker
-  interrupt 1/2, sfx 39 (se_opshow) / 40 (se_ophide), relinks the list,
-  and re-syncs bit 11; +0x3330 = 0x40 youkai / 0x20 human.
-- Tangibility gates: the manager's damage AND contact AND pointer-cache
-  block all require bit11 == 0 (all.c:21448-21595) — an ethereal familiar
-  (player youkai) is unshootable, contact-free, and graze-free. Lab_
-  0042db0b (all.c:21731-21763): bit11==1 holds the enemy VM's color1 at
-  R=G=0x20, B base, ALPHA HALVED (the ghost tint; color1 sits at
-  enemy+0x200 — VM base +0x60, fields +0x1a0/+0x1a4); bit11==0 gives the
-  1-frame damage flash (R=0xff, G=0x60) + hit sfx 20/37 by spell tier.
-- Reimu's special skill (FUN_0042c290 @ all.c:21097-21111): Border Team
-  and solo Reimu (DAT_0164d0b1 0/4) take NO body contact from familiars
-  (FUN_0041fd20 = is-familiar, +0x2da4 != 0); other teams do while
-  materialized. FUN_0041fd20 also decrements the parent's child count on
-  the child's own death.
-- ECL form-rank gate (all.c:10801): a FAMILIAR's instruction masks must
-  additionally contain the form bit (0x20 human / 0x40 youkai) —
-  enemy+0x3330 ORs into the difficulty bits. Stage-1 census: masks are
-  0xff/0xf1-family plus ONE 0x5f row (Sub42's FIRE, youkai+Extra) — inert
-  for non-familiars in the main game.
-- Op 184's receiver is the GLOBAL side mirror (singleton 0x4ea670 dword
-  bit 11, `mov ecx,0x4ea670` @ 0x41e7da) — NOT the running enemy. Every
-  boss/midboss phase sub opens with ins_184(1). Known reader:
-  FUN_00416b10 gates the spell-bonus accumulator on the bit being clear.
-- Familiar death: killed-by-damage fires marker interrupt 3 (all.c:
-  21643-6); a master's death sweeps its children (FUN_0042adb0(1) @
-  20440-20544): pos-inherit children snapshot the master pos, flags bit
-  10 set, parent links cleared, death mode 8 (silent pop, enep00), then
-  the time-orb shower at the master pos — 2 per familiar scattered by
-  (frand*128, frand*pi) draws, plus FUN_0044df00's 16-orb burst pool
-  registration (pos, 32.0, 1.0, 0x10, 7).
-- SFX table REBUILT (the old id==name-index table was wrong from id 2 on):
-  the exe plays through a 46-channel id table (.data 0x4c8040, stride 8:
-  {u32 srcBank, i16 volA@+4, i16 volB@+6}) over the 36-file name table at
-  0x4c81b0; FUN_0045d3f0 preloads one channel per id cloning bank
-  record.src with SetVolume(volA) (gain = 10^(volA/2000)). Key ids: 0/1
-  plst00 (two volumes), 2/3 enep00 (-1200/-1500 — the kill alternation,
-  resolving the old "+2 bank-site" flag), 4 pldead00 (miss), 13 gun00
-  (bomb cast), 14 cat00 (declaration), 20 damage00, 21 item00, 28 extend,
-  30/32 graze (two volumes), 31 powerup, 34 pause, 36 option (familiar
-  spawn), 37 damage01, 39 opshow, 40 ophide, 44 item01, 45 ok00-loud.
-
-Verification oracle for text-mode reviewers, measured on the TH08 build
-(dev-shot, 640x480 regions, tolerances ±12 on color / ±10 on texture).
-NOTE: the headless advance() batches skip per-frame draws, so the sidebar
-label cascade (front.anm entry-0 scripts -27..-12) only completes under a
-live rAF loop — headless `side` bands read dimmer/flatter than the live
-game. Use an unpaused 3s capture for the settled-HUD truth.
-
-| frame | play (32,16,384,448) | side (424,16,200,448) | lower (32,448,384,16) |
-|---|---|---|---|
-| 300 | bright ≈4, texture ≈4% | bright ≈18, texture ≈3% (headless cascade) | bright ≈21, texture ≈97% |
-| 800 | bright ≈8, texture ≈5% (fairies live) | bright ≈19, texture ≈8% | bright ≈11, texture ≈7% |
-| 2500 | bright ≈32, texture ≈26% (dense waves) | bright ≈24, texture ≈15% | bright ≈34, texture ≈99% |
-| ~4600 (boss, setLives) | bright ≈19, texture ≈50% (spell danmaku) | bright ≈30, texture ≈39% | bright ≈25, texture ≈65% |
-
-Native-playfield references live in `reference/native-shots/` (Wine +
-Xvfb userdemo captures, play/side/lower bands in pixel-report.txt).
-
-
-Operating manual for AI agents and contributors. It encodes the working
-rules, the verification loop, the file-format facts, and the orchestration
-protocol that produced the current codebase. Follow it exactly; nearly
-every rule in it was earned by a real defect.
-
-## 1. Mission
-
-Reimplement **Touhou Youyoumu ~ Perfect Cherry Blossom (TH07)** in
-TypeScript for the browser, driven by the original game data. Stages 1-8
-are data-driven and playable; the current fidelity target is original-grade
-Stage 1-6 behavior and presentation. Extra/Phantasm remain lower-confidence.
-
-**Default rule: reproduce the original game exactly.** Do not simplify,
-rebalance, redesign, modernize, or approximate original behavior unless it
-is explicitly approved here or requested by the user. The engine is
-*data-driven*: original `.ecl/.std/.anm/.msg/.sht` binaries are embedded
-(`src/data/th07-data.ts`) and executed by our parsers and VMs. Hand-written
-behavior is a last resort and must carry a comment flagging it.
-
-## 2. Authority order
-
-When sources conflict, higher wins:
-
+Operating manual for AI agents and contributors. Every rule here was earned
+by a real defect. Follow it exactly.
+
+## 0. Project identity and hard rules
+
+This repository is the standalone project **AgentMystia/th08_web**: a
+TypeScript/browser reimplementation of **Touhou 08 ~ Imperishable Night**
+driven by the original game data. Delivered scope: **Stage 1 + Stage 2 +
+Reimu/Yukari Border Team** with the original menus/UI, aligned to the
+committed replay fixture `tests/replays/th8_udLy01.rpy` (a FULL Lunatic
+run: stages 1,2,3,5,6,8).
+
+Authority order when sources conflict:
 1. Current user instruction.
-2. Approved modernizations (§3).
-3. Original data and executable in `reference/`: readable disassemblies in
-   `reference/ECL7|DSTD7|MSG7|ANM7`, raw unpacked files in
-   `reference/th07-original/`, `reference/Th07.exe` (v1.00b) for Ghidra.
-4. Existing project implementation.
-5. External docs (thtk source, PyTouhou, priw8's sht-webedit docs, wikis) —
-   cross-validation only, never sole authority. TH06 semantics are NOT
-   TH07 semantics; several opcode tables differ (§6).
+2. This file.
+3. `reference/Th08.exe` (v1.00d) and the decompile
+   `reference/re-specs/th08-re-tools-export/all.c` (cite addresses inline;
+   `reference/th08-decomp/src/*.cpp` is an early stub recomp — NOT content).
+4. Existing implementation. 5. External docs (cross-check only).
+TH06/TH07 semantics are NOT TH08 semantics; several opcode tables differ.
 
-`reference/` is git-ignored, local-only, read-only. Never commit, ship, or
-serve it. Browser runtime code must never read from it.
+Hard rules:
+- **Wine/ptrace native tracing is CLOSED** (user decision 2026-08-24). All
+  native questions are answered from the decompile + .rdata reads +
+  objdump (`objdump -D -b binary -m i386`; .text RVA 0x2000 → file 0x1e00,
+  so in .text VA = file offset + 0x200). Do not attempt to boot Th08.exe.
+- **Host stays clean** (zero-local-execution policy): run node/tests via
+  the podman runner `tmp/podman-node/run.sh <npm args...>` (image
+  `localhost/th08node`, node:22, bind-mounted src/tests/scripts/assets,
+  persistent `th08-nm` volume for node_modules). One-off scripts run the
+  same image with `-e VAR=x` env passing. Clean up containers after use.
+  Visual checks use the podman playwright image
+  (`mcr.microsoft.com/playwright:v1.60.0-noble`, recipe in ignored
+  `tmp/pw-driver/`).
+- Nothing under `reference/` or `replay/` may ship or be committed; browser
+  runtime fetches only repo-relative `assets/` paths.
+- No isolation hacks: no debug early-returns, no commented-out subsystems,
+  no hardcoded test state, no per-phase clamps or RNG special cases to
+  "fix" replay divergence (forbidden by the task contract).
+- `index.html` stays a static page (esbuild IIFE bundle).
+- Default rule: reproduce the original exactly. Hand-written behavior is a
+  last resort and must carry a comment flagging it. Approved
+  modernizations are limited to: focus-hitbox dot rendering, dev/debug
+  tooling (`?test=1`), Web Audio BGM loop points from `thbgm.fmt`,
+  plain-text menu hints, the 60-frame stage-start fly-in (visual only),
+  and the desynchronized-canvas low-latency presentation (kill switches
+  `?desync=0` / `?backbuffer=1`).
 
-**Current implementation is not proof of correctness.** If the data says
-otherwise, the implementation is wrong.
+CI (`.github/workflows/deploy.yml`): `core` (check/build/test) +
+`browser` (playwright boot probes) gate `pages`; the `replay` job
+(`replay:verify:th08 --stage 1` / `--stage 2`, two separate advisory
+oracles, continue-on-error) does not block deploys. Local dev has no
+browsers; all browser-pixel gates run on CI or the podman playwright image.
 
-## 3. Approved modernizations
+## 1. Verification loop
 
-- Focus hitbox dot rendering while focused (collision identical).
-- Dev/debug tooling (`?test=1` hook, `dev-shot`/`dev-menu` scripts) — must
-  not change shipped gameplay behavior.
-- Web Audio BGM looping via `loopStart/loopEnd` sample frames from
-  `thbgm.fmt` instead of whole-file loops.
-- Plain-text control hints on menu screens.
-- Stage-start player fly-in: the original places the player in-residence at
-  the spawn point with a 240-frame invuln window and no entrance animation
-  (its init preloads the materialize timer past its threshold). On stage
-  start we instead fly the player up from below the playfield over 60
-  frames (input/firing locked, invulnerable), then hand off to that
-  240-frame invuln. Respawn after death is unchanged. Player-only visual;
-  no gameplay, timing, or collision semantics change once landed.
-- Low-latency canvas presentation, ON by default: the display context is
-  requested with `desynchronized: true` (+ `alpha: false`). Browsers that
-  grant it (Chromium) skip 1–2 compositor vsyncs; the renderer then draws
-  every frame to an offscreen backbuffer and `present()` copies it in one
-  op — a granted context is never drawn incrementally (that incremental
-  front-buffer drawing was the 8552afe Stage-5 spell-card flicker, before
-  the backbuffer existed). Non-granting browsers feature-detect (context
-  attribute readback, no UA sniffing) to the direct path, byte-identical
-  to the old behavior. Output pixels are identical either way; sim/replay
-  untouched. Kill switches: `?desync=0` (player-facing), `?backbuffer=1`
-  (test-only, forces the present() path on engines that never grant).
-  Note: headless Chromium GRANTS desynchronized, so every headless harness
-  exercises the backbuffer path; readback/screenshots cannot prove scanout
-  flicker absent — a manual Stage-5 spell-card eyeball on real desktop
-  Chrome stays part of acceptance for presentation-layer changes.
-
-Nothing else. In particular: **no invented visual content**. If the data
-has no moon, there is no moon. Absence of data gets a flagged fallback and
-a report, not fabrication.
-
-## 4. Non-negotiable invariants
-
-Every commit must satisfy ALL of:
-
-1. `npm run check` — zero TypeScript errors.
+Every commit must satisfy:
+1. `npm run check` — zero TS errors.
 2. `npm run build` — clean esbuild bundle.
-3. `npm test` — all unit tests pass.
-4. Clean headless boot: `node scripts/dev-shot.mjs /tmp/s.png 300` prints a
-   snapshot with enemies spawning and **no `PAGE ERRORS` line**.
-5. No isolation hacks in the tree: no debugging early-`return`, no
-   commented-out subsystems, no hardcoded test state. A crashed agent once
-   left `return;` at the top of `drawBackground()` — it made all code after
-   it unreachable, which disables TypeScript control-flow narrowing and
-   produced seven phantom "possibly null" errors. Treat unreachable code as
-   a build breaker.
-6. Nothing from `reference/` committed — no bytes, no long decompiled
-   listings. Recovered *constants* with a provenance comment
-   (`// Th07.exe (v1.00b) @ 0x43cb30`) are fine and encouraged.
-7. `index.html` keeps working as a static page (esbuild IIFE bundle, no
-   ESM imports at runtime, no dev-server-only paths).
-
-## 5. The verification loop (how quality actually happens)
-
-Code that typechecks is not done. **Done means observed working.** The
-protocol below is designed for **text-only models**: every check yields
-machine-readable text (state snapshots and pixel statistics), and no step
-requires viewing an image. If your model does have vision, viewing the
-screenshots is a bonus check on top — never a substitute for the numbers.
-
-For any gameplay or visual change:
-
-1. `npm run check && npm run build && npm test`.
-   `npm test` includes the **replay-golden digest lock**
-   (tests/th07-replay-golden.test.mjs): the committed real-play replay
-   (tests/replays/th7_udFe25.rpy) is re-simulated headlessly and sparse
-   per-frame state digests are compared — any simulation-behavior change
-   fails it at the exact frame the change first manifests. If YOUR change
-   intentionally alters gameplay (an alignment fix), regenerate with
-   `UPDATE_REPLAY_GOLDEN=1 npm test` and commit the digest diff with the fix.
-2. For bullet/timing/aim fidelity questions, run
-   **`npm run replay:verify`** — it replays the fixture stage-by-stage in
-   pure Node and compares our end-of-stage state against the NEXT stage's
-   recorded snapshot (ground truth written by the original engine), reporting
-   per-field diffs plus every unexpected player death with the killing
-   bullet's provenance (owner enemy, ECL sub, spawn frame, angle/speed).
-   PASS additionally requires all **seven** AUX event streams (§6) to match
-   frame for frame, and each stage prints one `EARLIEST DIVERGENCE` line —
-   the minimum over the seven streams, which is the number to drive a
-   convergence loop with. Flags: `--all` runs every local `replay/*.rpy`
-   plus the fixture and prints a difficulty × stage matrix; `--replay a,b`
-   takes an explicit list; `--trace A,B` dumps per-frame JSONL;
-   `--trace-damage A,B` dumps every player-shot→enemy contact and the
-   per-enemy damage settlement (use this when a boss/enemy dies N frames
-   early or late); `--dump-frame F` dumps a full snapshot.
-   Format + workflow spec: reference/re-specs/exe-replay.md.
-3. Drive the affected states headlessly and read the **snapshot JSON**
-   (entity counts, positions, boss/spell state, cherry, player) printed by
-   the tools. Assert the fields your change should have moved — and that
-   the ones it shouldn't have moved didn't.
-4. For anything rendered, run **`node scripts/pixel-report.mjs <shot.png>`**
-   and compare against the baseline table below. The report samples named
-   regions (in 640×480 game coordinates) and prints average color,
-   brightness, texture % (pixels far from the region mean — detail
-   present), distinct-color count, and the center pixel. Custom regions:
-   append `x,y,w,h:label` args.
-5. Iterate until snapshot + probes match the criteria. A change verified
-   only by "it compiles" is assumed broken — this project's worst
-   regressions all shipped in changes that compiled fine.
-
-Baseline probe values (measured on a healthy build, frame 800, Lunatic;
-tolerances ±12 on color channels, ±10 on texture % unless noted):
-
-| region | healthy reading | failure signature |
-|---|---|---|
-| `sky` | lavender-grey avg (≈`#acaacd`), texture ≤3% | high texture = geometry leaking above fog |
-| `ground-left/center/right` | texture ≥6% all three (7–60%; ground-right runs 7–8% under the upright-billboard tree renderer — `pixel-gate.mjs` enforces ≥6) | any side flat at fog color (≈`#8080c0`, texture ≤3%) = missing geometry / instance-culling void |
-| `frame-left/right` | avg ≈`#400e20`, texture 0% | near-black = frame tiles not drawn; shifted avg = wrong tile rect |
-| `hud-labels` | texture ≈30–45%, ≥100 colors | texture ≤5% = labels missing/misanchored |
-| `hud-digits` | texture ≥20% | 0% = digit font not rendering |
-| `logo` | texture ≥80%, ≥200 colors, green channel present | flat maroon = logo missing |
-| `cherry-banner` | texture ≥15% | flat = banner/value missing |
-| `player-zone` | bright ≥140, texture ≥50% (at spawn, alive) | flat ground reading = player not drawn (or moved/dead — cross-check snapshot `player`) |
-
-If a reading is out of band, the *pair* of snapshot JSON + probe row
-usually identifies the subsystem before any code reading (e.g. snapshot
-says `enemies:19` but playfield probes are all flat → rendering, not
-simulation).
-
-Tools (they serve the repo over a local static server and drive headless
-Chromium at `/opt/pw-browsers/chromium-*/chrome-linux/chrome`; run
-`npm run build` first — they load `dist/th07.js`):
-
-- `node scripts/dev-shot.mjs <out.png> [frames] [query] [heldKeys]`
-  Boots `index.html?test=1&<query>`, advances N frames (keys held per
-  30-frame batch), screenshots 1280×960, prints a JSON snapshot (enemies,
-  bullets, playerBullets + dump, boss, spellName, cherry, player) plus any
-  page errors. Useful query params: `difficulty=0..3`, `shot=reimuA|…`,
-  `power=0..128`, `menu=1`.
-- `node scripts/dev-menu.mjs <outdir> "<step>;<step>;…"`
-  Edge-triggered menu navigation (holding a key ≠ pressing it; menus need
-  press edges). Step = `key@shotName` or `N*key@shotName`; keys:
-  `up down left right confirm back`, plus `wait`. Screenshots and snapshot
-  JSON per named step.
-- `node scripts/pixel-report.mjs <shot.png> [x,y,w,h:label ...]`
-  Region statistics for text-mode visual verification (see step 3 above).
-- `node scripts/audit-th07-player.mjs`
-  Dumps all 12 `.sht` files through the real parser (header + every
-  shooter record per power bracket) for regression diffing.
-- `node scripts/desync-stage5-probe.mjs --require-desync`
-  Presentation gate for the default-on desynchronized canvas (also run by
-  `verify:full`). Reaches a real Stage-5 spell card, resumes the live rAF
-  loop, and samples the PRESENTED canvas (`displayPixelAt`) for 3s plus
-  first/last screenshots. Pass = exit 0 with `granted:true`,
-  `blackPresents:0`, spell held all samples. Exit 3 = grant lost in this
-  environment (investigate before trusting other headless results).
-- `node scripts/browser-matrix-smoke.mjs --browser firefox|webkit|chromium`
-  Cross-engine boot smoke (local-only; `npx playwright install firefox
-  webkit` once). Pass 1 asserts shipped defaults (Firefox/WebKit must
-  read back `granted:false, backBuffered:false` — the unchanged direct
-  path); pass 2 forces `&backbuffer=1` to prove `present()` parity on
-  non-Chromium rasterizers.
-- `npm run latency:trace` — Chrome event-to-present latency proxy
-  (headed). A/B the low-latency canvas with the default arm vs
-  `-- --no-desync` (`?desync=0` control); read the grant from the
-  report's `canvas.actual.desynchronized` / `desynchronizedGranted`
-  fields, never from the CLI flags. `--chrome-major` pins the expected
-  browser (148); `--allow-invalid-refresh` for non-144Hz rigs/Xvfb.
-  `npm run perf:smoke -- desync=0` is the matching throughput control arm.
-
-Standard stage checkpoints (dev-shot frame → machine-checkable criteria):
-
-| frame | snapshot must show | probes must show |
-|---|---|---|
-| 120 | enemies ≥1, no errors | `hud-labels` texture ≥30% (cascade done) |
-| 800 | enemies >0, bullets >0 (Lunatic) | all three `ground-*` textured; `sky` flat |
-| 2500 | score >0 when `shoot` held | `cherry-banner` texture ≥15% |
-| 3400 | — | `sky`/`ground-*` avgs visibly darker than at 800 (dark-purple fog section) |
-| 5600–6200 | `boss:true`, `spell` non-empty at spell phases | `ground-*` all textured (boss-loop background — no fog-colored void). While a spellcard is ACTIVE the playfield reads the scrolling eff01 sheet instead (dark purple, texture ≥10%) |
-
-Menus (`dev-menu.mjs`): each step's snapshot must report the expected
-`scene`/`cursor`/`difficultyName`/`character`/`shotType`; after the final
-confirm, `scene:"stage"` with the chosen difficulty and character. Probe
-any menu screenshot with custom regions when art placement is in doubt
-(e.g. the title logo occupies roughly `64,64,320,176` and should read
-texture ≥60%).
-
-## 6. Format facts (do not re-derive; do not assume TH06)
-
-Established by disassembly of this game's own data and, where noted, the
-executable. If an implementation fights these facts, the implementation is
-wrong.
-
-**Geometry.** Screen 640×480; playfield rect (32,16,384×448). Sprite ids in
-multi-entry ANM files are entry-scoped on disk and offset by an entry base
-at parse time.
-
-**ANM v2** (`src/formats/anm.ts`): 64-byte entry headers; instruction
-encoding `{u16 op, u16 totalLen, i16 time, u16 paramMask}`. Key ops: 3 set
-sprite, 6 set position, **22 corner-relative anchor (top-left)**, 8/15
-alpha/fade, 9 color, 16 blend, 17/18/19 interp moves, 20 wait-forever,
-21 interrupt label (−1 = fallback), 23 hide+wait, 26/27 UV scroll,
-30/31 render flags (safe no-ops), 32–36 formula interps (formula 0/7/255
-linear, 1=x², 2=x³, 3=x⁴, 4=2x−x², 5=2x−x³, 6=2x−x⁴). `interrupt(id)`
-jumps past the matching `ins_21(id)` and forces visible. **Multi-entry
-files reuse on-disk script ids across entries** (title01.anm has five
-different scripts named id 0) — always resolve scripts and sprites through
-an entry-scoped lookup, never a flat id map.
-
-**Anchors.** `Renderer#drawSprite`/`drawAnmFrame` center on (x,y) — entity
-semantics. HUD/menu layout coordinates from ANM scripts are top-left
-(`ins_22`). Convert at the call site (see `StageScene#blit`). Two separate
-HUD reworks shipped half-a-sprite off before this was written down.
-
-**STD** (`src/formats/std.ts`): world axes x lateral, y forward depth,
-z height with **negative z = up**. **Quad anchoring is per-script
-(AnmManager::Draw3 anchor bits):** op22/anchorTL scripts extend from
-their position CORNER by width/height (stage ground tiles, the stage-5
-staircase treads/risers); unanchored scripts are CENTERED on position
-(stage-5 balustrades, the billboards). autoRotate=2 (ANM op25 arg 2)
-scripts are camera-facing billboards (Stage.cpp:1032-1103 →
-DrawFacingCamera), not flat slabs. Script ops:
-5 camera-position keyframe (args are float bit-patterns even when the
-disassembly prints ints), 6 interpolate camera to next keyframe
-(duration, easing mode — same formula table as ANM), 7 facing as a
-camera-relative direction vector, 8 facing interp, 1 fog (packed ARGB int,
-near, far), 2 fog interp duration, 4 jump (loops the script clock;
-stage 1 loops frames 5510→6022, a one-tile-exact seamless dolly),
-11 FOV (30°). The sky IS the current fog color; cells ≥98% fogged are
-skipped (the slack-expanded texture edges otherwise peek past the fog
-overlay as streaks). Roadside trees (stage 1/2) and stage-5/7/8 scenery
-are autoRotate=2 billboards (see the anchor note above) — drawn
-camera-facing with manual euclidean-distance fog, matching the exe.
-**Draw order is NOT center-depth sorting**: the exe z-buffers every
-background pixel (both zLevel chains share one depth buffer), which
-`orderBgJobsByVisibility` emulates by ray-casting through each
-screen-overlapping pair's overlap center and drawing the farther plane
-first (fallbacks: center depth, then zLevel-chain order for ties).
-Center-depth-only sorting tore stage 5 apart — its -45° slope wall
-spans the whole staircase run, so its CENTER often sorts nearer than
-individual treads while lying behind them.
-
-**ECL** (`src/game/eclvm.ts`, `src/formats/ecl.ts`): header
-`{u16 subCount, u16 timelineCount, u32 offsets[16+subs]}`; sub instruction
-`{u32 time, u16 id, u16 size, u16 rankMask, u16 paramMask}`. Variables:
-there is **NO register window** (an earlier model was disproven against
-FUN_0040d750/df90/dda0/e560 + the op41/42 dispatcher cases). Each enemy
-carries one 26-dword block (+0x6fc): locals 10000–10015 (ints
-10000–10003/10012–10015, floats 10004–10011), two extra floats
-10072/10073, rand-int params 10029–10032, rand-float params 10033–10036.
-Eight RUN-GLOBALS 10037–10044 (DAT_0133da80..9c) are shared by every
-enemy and act as **argument registers**: op41 CALL pushes the whole
-0x218-byte frame (cursor + vars + wait timer + op27 interps) and copies
-the globals into the callee's param slots; op42 RETURN restores the frame
-(callee writes roll back). Interrupt entry pushes the same frame without
-the copy; the op144 periodic sub runs on its own persistent stash
-(+0x2ee8, exported back at its return via +0x8f4). Var 10056 reads a
-random derived from the params (int: base+rng%range from 10029/10030;
-float: base+rng01()*range from 10033/10034); 10055 is a raw rng draw;
-10060 is a random angle in [−π, π). op92/93 children inherit a copy of
-the parent's whole block (FUN_0041db60). Rank masks gate spawns by
-difficulty — verify changes on Lunatic (`difficulty=3`), which exercises
-paths lower ranks never touch. FIRE copies the enemy's five op79 entries into
-each bullet; `FUN_004229f0` promotes at most one movement behavior per normal
-bullet-manager tick (construction promotes the first, spawn states pause the
-queue, their transition tick resumes it). Unselected and opcode-0x2000 grace
-entries may be skipped in the same pass without consuming that one-slot
-budget. Spell names (op 90) are XOR-0xAA-obscured Shift-JIS, terminated by a
-0xAA byte.
-
-**MSG** (`src/game/dialogue.ts`): ops 0 end, 1 portrait enter, 2 face,
-3 text line, 4 wait, 5 portrait state, 6 ECL resume ticket, 7 BGM, 8 boss
-intro, 11 hide portraits, 12 BGM fade, 13 skippability.
-
-**SHT** (`src/formats/sht.ts`) — layout verified against priw8's
-sht-webedit struct_07 and all 12 real files: 52-byte header
-`{i16 ?, i16 levelCount, f32 bombsPerLife, i32 deathbombWindow(15/8/6 for
-Reimu/Marisa/Sakuya), f32×8 hitbox/graze/autocollect/itemRadius/cherryLoss/
-pocLine/speed/focusedSpeed/diag×2}` then `{u32 offset, u32 powerThreshold}`
-pairs (brackets 8/16/32/48/64/80/96/128/999). Shooter record 52 bytes:
-`{u16 interval, u16 delay, f32 x,y,hitboxW,hitboxH,angle,speed, i16 damage,
-u8 orb, u8 shotType, i16 sprite, i16 sfxId, i32×4 funcs}`. **PCB's shot
-timer runs a 30-frame cycle** (Th07.exe FUN_0043a820, counter capped at
-0x1e and re-armed while held; external docs claiming 60 were overruled by
-disassembly); a delay-0 shooter fires on the press frame itself. Player
-sprite ids are SHT sprite + 1024 base.
-Bullet hitboxW/H are full widths; enemy-vs-player-bullet AABB is
-`(enemyW + bulletW)/2`.
-
-**Exe-recovered constants** (Ghidra, Th07.exe v1.00b — keep provenance
-comments): unfocused orb offsets (∓24, 0), focused (∓8, −32); SakuyaB-only
-option orbit fully decoded (rate vx·π/200, clamp ±36°, focused cluster
-±π/14 at r=24); focus-toggle glide is 8 frames (x lerp, y eased); cherry
-border trigger 50000 (0xC350) on **cherryPlus** (not the displayed gauge
-cap!), border duration 540 frames (0x21C) with 30-frame fades; initial
-**cherryMax** is per difficulty — 200000 E/N, 250000 H, 300000 L
-(FUN_0042cf2f @ 0x42cf2f); the bottom-left gauge displays
-`cherry/cherryMax` plus a small purple cherryPlus; border-survive score
-bonus is `cherry` (×1, not ×10 — the
-exe's `bonus*10` immediately `/10` is a lossless compiler no-op); point
-item score (case 1 of the item-collect switch) is `v = 50000 − 100·round(y
-− pocLine)` (or flat 50000 at/above the line), `+= floor((cherry−50000)/5)`
-once cherry exceeds 50000 (or capped down to `cherry` itself if `v`
-would've been the flat 50000), floored to tens, **then `score += v/10`**
-— the live in-game score field is added-to (and displayed) at ×1 with no
-further scaling anywhere in the HUD digit path (confirmed via the raw
-"%.8d"/"%.9d" format strings backing the score readout, no appended
-digit); see reference/re-specs/exe-cherry-border.md §3c/§4.
-
-**HUD layout**: front.png sprite rects and resting coordinates are decoded
-in `src/game/stage-scene.ts` (`FRONT`, `drawSidebar`, `drawFrame`) — labels
-column x=432, digit font = ascii.png 8×12 glyphs at texture y=208 (digit d
-at x=8d, pitch 8, no comma glyph), 東方妖々夢 logo at (480,208), caption at
-(448,336), frame tiled from the 32×32 maroon tile + 128×16 strip (exact
-integer fit), boss nameplates are ename.png rows (row 0 Cirno, row 1 Letty)
-composited at (32,26), cherry banner at (32,448) showing `cherry/cherryMax`
-(cherry right-aligned into the blank slot ending at in-sprite x≈84,
-cherryMax after the slash) with the small purple cherryPlus above the
-blank (exe draw @ all.c:1760-1870).
-
-**RPY (T7RP replays)**: full spec in reference/re-specs/exe-replay.md;
-parser `src/formats/rpy.ts`. Load pipeline (FUN_004402d0): decrypt from
-+0x10 with key byte +0x0D (`b -= key; key += 7`), additive checksum
-`0x3F000318 + sum(bytes[0x0D..])` == u32@+0x08, then TH06-era bitstream LZSS
-from +0x54 (0x2000 window, cursor starts 1, 13-bit absolute pos/4-bit
-len−3). Decompressed image: 7+7 stage offset tables @+0x1C/+0x38 (inputs /
-slowdown trailers), shot byte (char*2+type) + difficulty + date + name +
-final score at body start, then per stage a 0x2C snapshot (score-at-END,
-pointItems, cherry, cherryMax, cherryPlus≤50000, graze, extendLevel,
-threshold, **u16 RNG seed @+0x20**, power/lives/bombs/rank bytes) followed
-by fixed 4-byte frame records (u16 input word + u16 aux, no RLE). Input
-bits: 0x1 Z, 0x2 X, 0x4 Shift, 0x8 Esc, 0x10-0x80 directions (numpad
-diagonals OR pairs), 0x100 Ctrl-skip, 0x1000 Enter. **Direction chords
-resolve by priority — up beats down, right beats left (FUN_0043be00), NOT
-vector cancellation**; real replays contain such chords.
-
-**AUX word (second u16 of each frame record, ctx+0x9e)** — the original
-engine's own per-frame EVENT STREAM, and therefore the project's densest
-frame-exact oracle. All seven bits are verified by `replay:verify`:
-`0x1` bomb accepted (all.c:28486, FUN_0043d9a0's trigger branch),
-`0x2` player contact registered before the state gate (27780/27914),
-`0x4` player MISS — the frame the deathbomb meter reaches 0 and the death
-commits, 30 squish frames before the life counter drops (28596),
-`0x8` border start (28928), `0x10` border BREAK ONLY — the tail of
-FUN_0043eb00; the natural expiry / cherry-full path FUN_0043e620 writes no
-bit (28994), `0x20` enemy kill / slot vacate (13887/14351/14360),
-`0x40` item collected (22016). `0x100` (29442) is still unidentified.
-The pre-2026-07-25 mapping had `bomb` on 0x4 and called 0x1
-"border-adjacent, PROBABLE"; both were wrong and both are now confirmed
-against the decompile *and* against our own simulation on converged replays.
-Rank
-(DAT_00625884): recorded per stage; 16 at run start (= the neutral point of
-every rank formula), 32 from stage 2 on; no per-frame increment exists in
-the exe (machine-code scan) — constant within a stage.
-
-### Native replay convergence checkpoint (2026-07-13)
-
-Stage 1-6 now converge for two independent SakuyaA Lunatic replays. This is
-an original-behavior checkpoint, not a golden-only assertion: both were run
-without ghosting through the production replay harness, and PASS requires an
-authored stage completion, exact next-stage/end fields, exact per-frame AUX
-kill/collect/player-contact streams, and the original RNG draw residue. A PRE
-row is still defined at the beginning of a replay frame; a mismatch at PRE N
-was caused while processing N-1.
-
-Committed fixture `tests/replays/th7_udFe25.rpy`:
-
-| stage | frames run/available | kills | collects | player contacts | RNG |
-|---|---:|---:|---:|---:|---|
-| 1 | 10476/10477 | 684 exact | 382 exact | 0 exact | 163385, residue exact |
-| 2 | 13705/13706 | 396 exact | 494 exact | 0 exact | 203224, residue exact |
-| 3 | 15678/15679 | 410 exact | 635 exact | 0 exact | 258253, residue exact |
-| 4 | 24445/24446 | 1050 exact | 1056 exact | 0 exact | 279512, residue exact |
-| 5 | 19377/19378 | 412 exact | 545 exact | 1 exact | 379003, residue exact |
-| 6 | 26434/26436 | 279 exact | 1095 exact | 0 exact | final-stage seed unavailable |
-
-Stage 5's one contact is present in the original AUX stream and is not a
-false death. Stage 6 has one recorder-metadata anomaly: the RPY stores score
-116283035, while Th07.exe v1.00b's live field and the web engine both retain
-116283036 (native PRE25779..26433, `DAT_0061c258+4`). `replay:verify`
-reports this as an explicit advisory rather than treating the stale metadata
-word as behavior truth.
-
-Independent local LNNN replay `th7_ud8141.rpy` also passes all six stages:
-kills are 695/390/351/919/397/279, collects are
-408/490/493/491/372/1144, all six player-contact streams are zero, and every
-available RNG residue is exact. The file is local evidence and must not be
-committed.
-
-The convergence came from shared engine roots, not replay-specific draw
-tuning: fixed-capacity slot allocation and manager order; immediate
-enemy-outer shot collision/death processing; native ECL variable typing and
-call/return/periodic clocks; progressive bullet-EX promotion; raw FIRE
-endpoints and float32 constructor staging; float32 enemy writes, mode-2/
-mode-3 interpolation, op87 anchors, laser transitions and player-shot AABBs;
-Border/invulnerability/slowmo split clocks; item/cancel/Cherry/clear-bonus
-ordering; MSG op9/op11 settlement; and exact effect-pool pressure. The last
-independent Stage-4 split was a mode-2 float64 residue at x=191.9997406 that
-broke an original strict SakuyaA target tie; native f32 staging leaves both
-targets at x=192 and retains the first fixed slot. Effects 7 and 8 also
-perform the executable's template-5 ANM reset after a laser deflection.
-
-These corrections are engine-wide, but two Lunatic replays do **not** prove
-Easy/Normal/Hard convergence. Lower ranks select different ECL instructions,
-formulas, bullet counts, and pool-pressure paths. Each difficulty still needs
-its own native replay PRE trace plus full event/end-state verification.
-
-### All-difficulty baseline (2026-07-25)
-
-Five further native replays cover every remaining difficulty. They are
-third-party recordings and stay **local evidence** under the git-ignored
-`replay/` directory — never commit them; `tests/replays/th7_udFe25.rpy`
-remains the only fixture and the only CI gate. Run the whole set with
-`node scripts/replay-verify.mjs --all`, which prints a difficulty × stage
-matrix of PASS / earliest-diverging-frame:
-
-| replay | char | difficulty | st1 | st2 | st3 | st4 | st5 | st6 | st7 |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| th7_udFe25 | sakuyaA | Lunatic | PASS | PASS | PASS | PASS | PASS | PASS | — |
-| th7_udHm54 | marisaB | **Extra** | — | — | — | — | — | — | **PASS** |
-| th7_udSg10 | reimuA | Phantasm | — | — | — | — | — | — | 51989 |
-| th7_udMt01 | sakuyaB | Easy | PASS | PASS | PASS | 4536 | 7290 | 1628 |— |
-| th7_udYo01 | sakuyaA | Normal | PASS | 8747 | 11863 | 18596 | 2280 | 2727 | — |
-| th7_udFi03 | reimuB | Hard | 5440 | 2165 | 537 | 2360 | 617 | 1330 | — |
-
-Extra is fully converged (467 kills, 2064 collects, 4 contacts, 2 bombs,
-20 border starts, 2 border breaks — all frame-exact — plus an exact final
-score). Phantasm is exact for 51989 of 57876 frames; its boss spell (sub 127)
-dies two frames early, i.e. we are ~2 HP ahead over a long spellcard.
-
-Two structural facts to carry into any continuation:
-
-- **`wine`/`winedbg` is not installed in the current environment**, so the
-  native PRE-trace procedure below cannot be run here. The AUX streams are
-  the substitute oracle. They are dense and frame-exact, but they are not
-  complete: an RNG or position divergence that happens to produce no AUX
-  event stays invisible until it changes one. Do not read "exact through
-  frame N" as "identical through frame N".
-- **ReimuB is the only shot type with no passing stage in any replay**, and
-  it is the only one that saturates the 96-slot player-shot pool: measured
-  at Hard stage 3, the pool is full on 28 of 140 sampled frames with 12-33
-  slots held by spent (post-impact) sprites. Every ReimuB divergence
-  measured so far is a kill landing a few frames LATE, never early, i.e. we
-  deal slightly less damage. Under saturation the impact-sprite lifetime and
-  the offscreen cull directly set live-shot count and therefore DPS, so an
-  error there that is invisible for Sakuya/Marisa/ReimuA becomes a DPS error
-  for ReimuB. Investigate that before anything else on Hard.
-
-### Next-session fidelity workflow
-
-1. Preserve unrelated worktree state and all local evidence. Never commit
-   `reference/`, native traces, screenshots, local replays, `tmp/`, `issues/`,
-   or `output/`.
-2. Re-establish this checkpoint with `npm run replay:verify`, then run the
-   replay under investigation without ghosting. Ghost is diagnostic only.
-3. At the earliest PRE mismatch, trace native and web fixed enemy,
-   player-shot, attack, effect, laser, and enemy-bullet slots plus the exact
-   caller/event order. Fix the deterministic upstream root; never compensate
-   with an invented RNG draw, count, position epsilon, or replay special case.
-4. Add an exe/data-proven focused regression, immediately rerun every already
-   converged replay, and regenerate a replay golden only after the original
-   behavior change is demonstrated independently.
-5. Before a checkpoint commit, run §4/§5 in full: check, build, tests,
-   `replay:verify`, clean boot, browser replay, standard Stage-1 snapshots,
-   and pixel reports. See `HANDOFF.md` for the concise command list.
-
-**Browser Replay preview status:** implemented and browser-verified. The title
-Replay entry opens a browser-local `.rpy` picker (no upload), then uses the
-authored `replay00.png` layer for replay metadata, present-stage selection,
-and the original three-mode confirmation (normal, recorded-slowdown, and
-boss-only). Playback uses the production `Rpy`/`ReplayInputSource`, restores
-the native stage snapshot after seed/bootstrap initialization, continues only
-through physically adjacent stage slots, and maps the shared seventh slot to
-Extra or Phantasm as the difficulty requires. Live ESC owns the two-row replay
-pause menu and never consumes a recorded frame. Slowdown trailers preserve
-the native leading-byte offset and discrete cadence buckets; skippable-dialogue
-and boss-only fast-forward repeat the manager chain to their native modulo
-boundaries. Files and decompressed bodies are capped at 16 MiB. Verify the
-real browser path with `npm run replay:browser -- <file.rpy> [stage] [frames] [shot.png] [mode]`;
-Stage 1 frame 300 and Stage 5 frame 4881 (Youmu portrait plus
-`あなた、人間ね`) were observed through this path without page errors, and
-all three modes plus pause cursor ownership were exercised. CI runs
-`npm run replay:verify` before the Pages build, so Stage 1-6 convergence is a
-deployment gate rather than a manual-only checkpoint.
-
-
-## 7. Approximations registry (known, flagged, improvable)
-
-Boss-visual-audit additions (2026-08-22, inline comments at the sites):
-- Effect 39's authored etama script/texture, alpha, repeat count, settle
-  duration, and final radius are data/native-backed. Its
-  `FUN_004272e0` custom 3D strip-bending callback has no Canvas equivalent;
-  `drawSpellRing` reconstructs it as 96 textured annulus segments plus the
-  measured declaration-time radial rays. Early-ray projection is therefore
-  close by screenshot, not pixel-exact.
-- Enemy spell names, Bonus/history and phase countdown use Canvas text
-  because the executable's runtime AsciiManager/text surface is unavailable.
-  Native screenshots pin their layer, position, color, ordering and ungrouped
-  number format; exact glyph metrics remain approximate.
-- Boss romaji rows are cropped from the authored `face_stNN_name` sheets at
-  the native top-left position. The stage-2 native demo appends a dynamic
-  `+5(10)`-style field whose producer/meaning is unrecovered, so only the
-  authored `Mystia Lorelei` row is drawn. The bottom boss marker remains the
-  existing measured `Enemy` text fallback until its front.anm VM is pinned.
-
-TH08-slice additions (2026-08-20 convergence pass, inline comments at the sites):
-- ins_152's stage-interp template: the exe's field write (enemy+0x337c =
-  (i16)enemy+0x2cee) + SetCurrent(0) on the +0x2e14 timer is recorded but
-  has no modeled consumer; every shipped use passes all-zero args.
-- The bomb declaration's fourth native VM (capture.anm '@' runtime screen
-  capture, unrecoverable from data) is approximated as a flat rgba(0,0,16,
-  0.55) dim quad over the playfield behind the declaration VMs.
-- The f997 (stage 1) / f1168 (stage 2) earliest replay divergences are a
-  standing residual: our auto-fire-family volley trajectories run ~2-4
-  flight-frames too far along vs native. Two replay probes: player shifted
-  8px down at f986-991 survives; player shifted EXACTLY 2px down at f996
-  (our sim then kills at f999 instead of f998, proving the probe's
-  sensitivity) also survives in the native — so the native bullet is
-  genuinely ≥2px behind ours (a trajectory/origin offset, not a hitbox
-  issue). Eliminated against the binary: kill-box formula (0x44a230),
-  hit sizes (rice 4.0, player 1.65/2), creep factors (½/0.4/⅓), the
-  transition+2 parity, the origin backup ×4 (0x42fc4c), the template
-  origin (loop-head +0x2d88), ins_105/106 deadline/phase incl. u32%draw,
-  the clock-30 volley timing (no timeline holds before t=900), and rank
-  (min 8 on Lunatic). Remaining candidates are sub-pixel template-origin
-  differences (e.g. the firing enemy's Y at the volley) that only a native
-  per-frame slot trace can pin; breakpoint tracing is not viable on this
-  host (see §0's 2026-08-20 entry). Interactive native captures of the
-  tally card were likewise abandoned: synthetic xdotool input
-  destabilizes the wine game within ~60s (repeated mid-run crashes), so
-  the tally's night-clock plates are built from the decompiled VM
-  structure (times.anm scripts 1/2) rather than a captured layout.
-
-TH08-slice additions (2026-08-18 second presentation pass, inline comments at the sites):
-- FUN_0045d660's second argument tunes playback FREQUENCY (the consumer's
-  vtable+0x40 call receives the channel's queued-value average); the port's
-  audio bus has no per-request pitch control and ignores it.
-
-TH08-slice additions (2026-08-19 familiar-system pass, inline comments at
-the sites):
-- The ghost tint's exact channel mapping reads B-base/R=G=0x20/alpha-half
-  from the color1 byte writes (enemy+0x200..+0x203 as B,G,R,A); drawn as
-  the rgb multiplier 0x2020ff at alpha 0.5. If a native capture later
-  shows a red-dimmed ghost instead, swap the channel order at the draw
-  site (stage-scene.ts's ghostOpts).
-- The master-death time-orb burst: the 2-per-familiar scattered ring is
-  draw-order exact ((frand*128, frand*pi) per orb); FUN_0044df00's pool
-  registration (pos, 32.0, 1.0, 0x10, 7) is spawned directly as 16 time
-  orbs at the master position — the native burst is pool-deferred and its
-  release draws are not traced.
-- CreateFamiliarPopup (AsciiManager.cpp:522, the time-orb-style kill
-  popup for destroyed familiars) is not implemented.
-- The familiar-kill gauge settle reuses the shared death-path ±200
-  (form-relative); the wiki's "destroying familiars pulls the gauge
-  toward 0" was NOT found as a separate exe site.
-- op 184's global side mirror (0x4ea670 bit 11) is recorded on
-  Th08RunState.th08SideMirror; its consumers (FUN_00416b10's spell-bonus
-  accumulator gate) are not wired.
-- FUN_0042c420's extra branch (flags2 bit 1 + FUN_0040ebc0(2) → effect
-  0x26 white at the familiar) is skipped — the condition is unrecovered.
-
-TH08-slice additions (2026-08-18 presentation pass, inline comments at the sites):
-- Declaration banner hold is bounded: face_cdbg's authored hold loops (op5
-  JmpDec on var 10008) reset the counter INSIDE the loop body, so they
-  never fall through; the native manager force-releases the VMs (site not
-  recovered). The port releases at 100f with the authored 50f alpha-out.
-- The declaration's fourth native VM (capture.anm flash) reads the
-  runtime-generated 'capture:@' surface — not recoverable from data, so
-  the cut-in is carried by portrait + banners + typeset name.
-
-TH08-slice additions (2026-08-17, all with inline comments at the site):
-- Border Team option-sourced shots spawn at the player center: the exe
-  reads the live option-trail struct (player+0x6b0+(src-1)*0x2f4) — the
-  trail model is unimplemented.
-- TH08 graze award is 2000, doubling to 4000 under a gauge-extreme
-  condition (FUN_00406da0's compare reads an unrecovered threshold pair;
-  mapped to the ±8000 extremes as PROBABLE).
-- The graze COUNTER steps +1..+3 per event in the native (FUN_00406d10/40
-  reads on manager threshold u16s at +0x3ddfc..0x3de02); ours steps +1.
-  Field 536 vs 270 in the verifier is the counting convention, not a
-  geometry gap (event counts match).
-- Night-clock stage-tally quota: stage-1 shows /3000 (DAT_004c77f0 row
-  confirmed); the exact +1/+2 branch threshold read is unrecovered.
-- TH08 bullet-command queue: 0x400000/0x800000/0x1000000 (timer-arm /
-  homing-ish / child-spawn) are unused by stage 1 and warn-only.
-- Effect-51 visuals use the generic spark fallback; only its lifetime
-  (241f) and draw cost (10 u16) are modeled. UV-scroll: ops 26/27 now
-  accumulate and the eff0N spell sheets tile-wrap (2026-08-20 delivery
-  pass); the TH08 v3 continuous-scroll ops 80/81 still record but do not
-  scroll (canvas renderer).
-
-Delivery-pass additions (2026-08-20, inline comments at the sites):
-- ins_136 builtin table (0x4c6cb0): slot 0 (FUN_00423390) exports two ECL
-  context floats to DAT_004e3d28/24 — no mapped consumer in the slice, so
-  the port treats it as inert bookkeeping; slot 1's screen shake keeps the
-  authored 21-frame duration with a zero magnitude ramp (the native
-  ScreenEffect struct's magnitude/duration fields are unrecovered in the
-  partial export).
-- The HUD's trailing "%1d" digit after each score row (0x4b4ce4; reads
-  gm+0x29 / gm+6) has unrecovered semantics and draws 0 in normal play —
-  not ported.
-- The native fps counter (bottom-right "60.00fps") is absent: the
-  fixed-timestep loop has no measured-fps plumbing, and hardcoding "60"
-  would be fabrication.
-- The practice-mode tag keeps its long-standing bottom-right (344,428)
-  pause.png slot; the native practice marker's position is unrecovered
-  (the difficulty tag itself moved to the proven sidebar slot).
-- The tally rows are canvas text approximating the AsciiManager bitmap
-  font (glyph metrics unrecovered); row text/order/colors/positions are
-  exe-exact, the face is not. CI browser pixel gates are the backstop.
-
-## 7. Approximations registry (known, flagged, improvable)
-
-Each also has an inline comment at its code site. Do not silently "fix"
-gameplay to taste — improve these only with better evidence (Ghidra, frame
-comparisons against real play).
-
-Second-pass additions (2026-08-23, inline comments at the sites):
-- Dialogue portrait ENTER/EMPHASIS triggers: the face expression scripts
-  park hidden at ins_23 and their labels 1/3/4/5/6 implement the slide-in/
-  active/dim/far/exit animations, but no exported Gui function ever writes
-  the portrait VMs' pending-interrupt field (RunMsg calls only
-  SetScript/SetSprite/tick; grep of every FUN_00407120 caller). The port
-  fires label 1 at op1 and maps position codes 3/4/5/6 to their labels;
-  the exact native trigger site (likely an unexported Gui updater) is the
-  open question.
-- The settled spell ring (effect 39 past its 120-frame settle) is
-  pre-rendered once into an offscreen canvas and blitted rotated. The bake
-  composites the 96 segments with 'lighter' INSIDE the offscreen, so
-  overlaps accumulate in premultiplied sRGB rather than against the live
-  playfield — visually equivalent for this annulus, not byte-identical to
-  the live segmented draw.
-- Familiar marker release at the removal chokepoint is an instant cull;
-  the native FUN_0042a820 destroy-flag path fades the VM out over <=15
-  manager ticks first. Same for ins_127(-1)'s ins_57 slot sweep.
-
-- Frame tiling positions (exact-fit math, engine placement not literal).
-- HUD star icon x positions; spell-timer and fps exact placement.
-- Cherry+ banner interrupt→state mapping (dim=charging, bright=border).
-- Bomb mechanics: the twelve focus-latched forms now run decoded per-form
-  state machines (`src/game/player-bombs.ts`) writing the exe's moving
-  attack-slot pool (player+0x9dc, consumed by FUN_0043a980). Damage/cancel
-  use the slot AABBs (no full-screen sweep). SakuyaB's time-stop freeze
-  pulses (FUN_00425f10) are implemented. The shared 60-frame screen tint
-  (FUN_00407520) and reserved-slot activation VM (FUN_00407620) are
-  represented by the character bomb ANM scripts + the runner, not byte-
-  exact VM spawns. Per-form spawn cadence/orb motion are from specs
-  spec-bombs-{shared,reimu,marisa,sakuya}.md.
-- Player shots run per-shot ANM VMs (SHT `sprite` = global script id; impact
-  re-arms `sprite+0x20`; bullet dies when its script ends). MarisaB's two
-  persistent-laser forms (3-slot tracker, beam-history ring, helper boxes)
-  and MarisaA's repeat-hit missile explosion are implemented. See
-  spec-marisab-beams.md / exe-player-funcs1.md.
-- Floating score/Cherry popups implemented (spec-popups.md): two ring pools,
-  distance-from-player alpha pulse, full color/value rules incl. the
-  phase-end escalating sweeps and the red cherry-gain popups.
-- Spell-bonus decay rounding: exe writes `floor10(ftol(<register-arg float
-  expr>))` per frame (0x41f8a8 region); the port computes
-  `floor10(base − decayPerSec·elapsed/60)`. Sub-10-point drift only.
-  (The damage cap 70 and op 142 are no longer approximations: cap
-  confirmed at all.c:14226; op 142 = N-frame damage shield, boss /9 /
-  non-boss 0, countdown at all.c:14440.)
-- `ins_30/31` render flags unknown (no-op everywhere, matches PyTouhou).
-- Spell declaration presentation: the simple scrolling/static stage sheets
-  remain open-coded where their op-4 loops defeat AnmRunner's frame-keyed
-  fades. Stage 5 is data-driven through both real `eff05.anm` entry VMs:
-  bullet-time effect 10 interrupts both with label 2 (base alpha 64/red;
-  `eff05b` purple additive scale/rotation), and effect 11 restores label 1.
-  This is the meaning of the writes to ANM VM `+0x1c6` at
-  `0x0133e1ce/0x0133e41a`; the old `spec-slowmo.md` “dead write” conclusion
-  is overruled by the VM layout and the original visual trace. The
-  capture.anm flash draws as a flat teal tint (its runtime `'@'` texture is
-  not extractable); the face_01_00 cutin sweep path/timing and the red
-  name-banner gradient (text.anm textures not extractable) are hand-tuned;
-  spell history is session-scoped (original persists in score.dat).
-- Boss X-position marker: exact sprite not recovered from front.anm
-  (spec-ui-stageclear.md §3); drawn as a small ~60% alpha "Enemy" label at
-  the playfield bottom edge tracking boss.x.
-- Bullet-effect ids 1/2/4/6/9/12-15/19/21-23 ported. Caution:
-  `spec-effects-misc.md`'s old “sparkles” description for ids 12/21 is
-  overruled by FUN_00423480/FUN_00421e90: these handlers replace qualifying
-  big bullets with real enemy-bullet volleys before deleting the parents.
-  Id12 emits 10/18/22/25 children by difficulty inside its ±64/±48 Y band;
-  id21 emits 15 inside ±128(H)/±180(other) and is rank-gated by ECL. Each
-  child performs x/y frand, kind u16, angle frand and EX-rate frand in that
-  order (nine raw draws), starts at speed 0.1, and carries opcode-0x20 for
-  100 ticks. Parent qualification uses sprite height >48, not width. Id2
-  converts each nearby offset-2 parent into two real
-  sprite0/offset6 accelerating bullets (six raw draws total per parent);
-  id6 converts its selected offset family into 3 native rings (Lunatic
-  param0 = 2+2+1 bullets, zero RNG). Both delete the parent only after child
-  construction. Id4 alone remains a visual-particle replacement. Id1
-  "declaws" matched bullets (filter =
-  spriteOffset, the FIRE 2nd i16 / exe bullet+0xbf8 — same field ids 2/6
-  filter on) to nominal 0.3 and installs a fresh opcode-0x20 slow-turn with
-  its own elapsed counter (E/N/H 60 ticks @ +1/60, Lunatic/Extra 240 @
-  +0.005263158, turn ±π/(rng01*60+180)/tick; FUN_00416da0 @ 0x416da0); ids
-  9/15 are screen shake/flash, id 19 is the 3-second BGM fade. Ids 22/23
-  (cosmetic auras) are intentional no-ops. ECL op149 (spell-presentation
-  origin, 1 use) and op150 (enemy ANM Z-rotation) are handled.
-- Slowmo clock (op121 ids 10/11): the executable scales STD, ANM, ECL,
-  player, enemies, lasers, items, bombs, and timers while collision remains
-  wall-clock. The port now drives all of these from one global `slowRate`
-  (effect 10 = 1/param + retroactive bullet-vector rescale + shape
-  0x260..0x26f -> 0x26f + spell-background interrupt 2; effect 11 = inverse
-  + shape restore + background interrupt 1 + rate reset; split-counter
-  timers accumulate fractionally). See `spec-slowmo.md`, with its old claim
-  that the two background writes are dead explicitly overruled above.
-- ~~Extra/Phantasm starting bombs/power PROBABLE~~ — **resolved 2026-07-25,
-  against the community convention.** Extra and Phantasm start at **power 0**
-  (not full power) with the character's ordinary SHT bomb stock and lives
-  forced to 2. Evidence: the stage-7 entry snapshots two native replays'
-  recorders wrote — th7_udHm54 (marisaB, Extra) `power=0 lives=2 bombs=2`
-  and th7_udSg10 (reimuA, Phantasm) `power=0 lives=2 bombs=3`, the bomb
-  values being exactly ply01b/ply00b's `bomb_per_life`. `FUN_0042cf2f`
-  (all.c:19715-19717) only forces lives; it never writes power, which is why
-  spec-extra-phantasm.md §2 could not find a write site. The route keeps its
-  top-of-screen auto-collect regardless, since the PoC predicate is
-  difficulty-gated (`power >= 128 || difficulty > 3`, ItemManager.cpp:195).
-  Pinned by tests/th07-extra-phantasm-init.test.mjs.
-- ESC pause menu: presentation is the authored ascii.anm entry-2
-  (pause.png) scripts verbatim, but the exe's trigger/menu logic was not
-  statically recoverable — BGM-keeps-playing and the confirm default
-  (いいえ) are PROBABLE; the cursor highlight tints unselected rows (no
-  authored variant exists). Pause-menu Retry restarts the run (story:
-  stage 1; practice: the practiced stage) — label semantics, PROBABLE.
-- Practice Start: flow/init are exe-cited (8 lives, full reset, stage
-  select after shot select, clear→title with the cursor re-parked), but
-  all six stages are selectable — the original gates by score.dat "CLRD"
-  cleared-stage data this port doesn't persist (approved modernization:
-  the stage list exists for testing). The stage list renders as plain
-  text (original uses its ascii font + per-stage practice scores).
-- Supernatural Border visuals are now native-faithful: the stage background
-  is multiply-darkened through the exe's 128→48→128 grey envelope with
-  SmoothBlendColor averaging (Player.cpp:1975-1995 + Stage.cpp:512-573),
-  the ring is the real etama.anm script-219 magic circle (scale 1→0.25,
-  spin negated on activation; break spawns the 0.0625→1.3 expanding copy
-  fading out over 30f plus the 32 fixed-angle petal burst), the player
-  sprite flashes red every 4 frames, and the HUD shows the pulsing gauge
-  badge + recolored cherryPlus digits (AsciiManager.cpp:1256-1308).
-- Decorative ambient particles (ECL op117/118 → `spawnEffectParticles`) keep
-  approximate raster presentation, but their allocation, fixed 400-slot
-  pressure, release clocks, and RNG consumption are executable-derived for
-  every Stage-1..6 family exercised by the converged replays. Representative
-  veto costs from `DAT_00494fb0`: effect 17→2 raw draws, 20→22, and 22→2 or
-  4 (the four-draw branch is only the ≤−990 sentinel). World families 26/27
-  use `frand*100-50` Z spread and share FUN_0041a050 release semantics.
-- Enemy death/drop effects are no longer an aggregate approximation. The
-  enemy manager performs fire → player-shot/attack collision → immediate
-  damage → death in fixed slot order. FUN_0041ed50's itemDrop branch, global
-  1-in-3 random-drop counter, preburst, item construction, boss sweep, common
-  effects, and id5 impact cadence run in their executable order. Preserve this
-  shape; changing a draw total in isolation will desynchronize item→power→DPS
-  and later fixed slots even if an aggregate residue happens to match.
-- Ghost runs remain diagnostic-only. Dialogue, death consequences and manager
-  lifetime can change how long ambient generators run, so only a no-ghost
-  original replay establishes acceptance. `replay:verify` enforces this.
-
-## 8. Pitfall catalog (check these FIRST when something looks wrong)
-
-- **Half the geometry missing / one-sided rendering** → anchor or extent
-  convention (corner vs center). §6 Anchors/STD.
-- **HUD/menu elements uniformly shifted** → top-left vs centered blit.
-- **Streaks or blocks near the horizon** → fog metric or fully-fogged
-  cells being drawn; sky must equal fog color.
-- **Everything animates from wrong positions after a script change** →
-  entry-scoped script/sprite id collision (multi-entry ANM).
-- **Phantom TypeScript null errors in one function** → unreachable code
-  above (leftover debug `return`), which kills narrowing.
-- **Shots fire late / wrong cadence** → 30-frame cycle, delay-0 fires on
-  press frame, focused/unfocused table switch.
-- **Boss fight background/state weirdness** → the STD clock *loops* via
-  op 4; anything keyed to raw stage frame instead of the STD clock drifts.
-- **Menu navigation skipping steps** → held-vs-pressed key edges; menus
-  are edge-triggered with 20-frame delay/6-frame repeat.
-- **Draw cost ring suddenly ~10ms fatter (p50 1→6.6ms) with no code
-  change** → the backbuffered (desync-granted) canvas. present()'s
-  drawImage uses the backbuffer as a source, which forces the scene's
-  batched raster to FLUSH synchronously inside the timed draw callback —
-  work that on the direct path runs after the callback, invisible to the
-  ring. Real frame delivery is unchanged (rAF cadence flat 16.7ms,
-  measured). Do NOT "optimize" the number away: profile game-code cost on
-  the `desync=0` arm (perf-probe does this; perf-smoke gates cadence on
-  the default arm and cost on the control arm).
-- **A magic constant "fixes" positioning** → your decode is wrong. Delete
-  the constant, re-read the disassembly. Every compensating hack we ever
-  added (scroll speed, camera lift, ground mirroring, procedural moon) was
-  masking a misread and got replaced by the real semantics.
-- **RNG-budget "matches" but bullets still desync** → the total can be right
-  by cancellation. Profile per-effectId draws (`opts.profileRng` in
-  replay-harness) and match each event's count, not just the sum. A single
-  mis-resolved ECL operand (op117/118 count read raw instead of gi()) once
-  hid a 100k-draw error that summed near budget.
-- **Ambient effect / invisible controller vanishes mid-stage** → field sweeps
-  (op94/op91/boss non-spell death) must only set HP=0, not delete;
-  non-interactable enemies (op116(0)) are spared by the exe (removal is the
-  interactable-gated death switch). Deleting them kills ambient emitters.
-- **An exe-verified effect cost moves a proven PRE boundary earlier** → do not
-  keep it in isolation merely because its aggregate draw count is plausible.
-  Kill timing changes item/power/DPS and later event order, so false-death and
-  full-stage budgets are hypersensitive, non-monotonic proxies. Identify the
-  exact native caller, fixed slot, and stream position at the current earliest
-  mismatch, then land all causally coupled cadence/order changes together.
-- **A ghost full-stage RNG budget disagrees with a no-ghost PRE trace** → trust
-  the no-ghost PRE trace. Ghosting changes death consequences and post-boss
-  dialogue timing, which changes how long ambient generators run. Acceptance
-  is the original replay without ghosting; use ghost only to inspect otherwise
-  unreachable later state.
-- **Probe reads flat where content belongs** → check the snapshot first:
-  if the simulation state is right (entities exist), the defect is in
-  rendering (anchor, entry-scoped ids, clip, alpha); if the state is wrong
-  too, it's simulation (ECL/rank/timing) — don't debug the renderer.
-
-## 9. Orchestration protocol (multi-agent work)
-
-The pattern that works: a **strong orchestrator** (planning, review,
-integration) drives **executor agents** (Sonnet-class) with precise briefs.
-Executors are excellent when the brief removes ambiguity and mandates the
-verification loop; they fail when asked to "make it good" without
-acceptance criteria, or when two of them share a file.
-
-### Brief template (give every executor ALL of this)
-
-1. **Context**: repo path, branch (never switch), build/test commands, and
-   the §6 facts relevant to the task — paste them, don't cite them.
-2. **File ownership**: exact list of files the agent may modify. Everything
-   else is read-only. Two agents must never own the same file
-   concurrently; sequence them instead. (`stage-scene.ts` is the usual
-   contention point — background, HUD, and gameplay all live there.)
-3. **Steps**: concrete, ordered, with tool paths (thanm/thstd/thecl if
-   needed) and disassembly locations.
-4. **Acceptance criteria**: the exact dev-shot/dev-menu invocations, the
-   checkpoint frames, and the snapshot fields + pixel-report readings each
-   must produce (paste the §5 baseline rows that apply). Require the agent
-   to run the probes and iterate until the numbers are in band — the
-   numbers are the deliverable, and they work for text-only agents.
-5. **Constraints**: no new dependencies, no commits (orchestrator commits),
-   match code style, comment only approximations/provenance, keep the tree
-   compiling at every stop point.
-6. **Report format**: what changed (file:line), what was verified and how,
-   approximations made, anything unresolved. Findings the orchestrator
-   must act on go at the top.
-
-### Orchestrator duties
-
-- Gather the decisive facts *before* delegating (read the disassembly
-  yourself; a mis-briefed executor produces confident garbage — the
-  "camera never moves" hack chain came from briefing TH06 op semantics
-  for TH07 data).
-- Review the executor's evidence yourself: re-run its dev-shot/pixel-report
-  invocations (or demand the raw outputs) and check the numbers against
-  §5. Never accept an unquantified "it looks right". Viewing screenshots
-  is an optional extra for vision-capable reviewers, not part of the
-  contract.
-- Commit in reviewed checkpoints, one concern per commit, so a crashed or
-  runaway agent can be rolled back cleanly.
-- Assume agents can die mid-edit (session limits). After any crash:
-  `git status` + `npm run check` before anything else; hunt for leftover
-  isolation hacks (§4.5); decide keep/revert per file.
-- Have executors write large findings to files (specs, dumps) rather than
-  only their final message — a crashed agent's message is lost, its files
-  survive.
-- RE analysis agents (Ghidra, format decoding) should be read-only on
-  `src/` where possible: deliver a spec file; a separate implementation
-  pass applies it. The hud-spec.md → HUD rebuild flow worked exactly this
-  way.
-
-### Ghidra RE workflow (repeatable)
-
-1. `reference/Th07.exe` (PE32, v1.00b). Install headless Ghidra (JDK 17+,
-   `analyzeHeadless <proj> th07 -import Th07.exe`), or radare2 as
-   fallback.
-2. Anchor by immediates (e.g. 0xC350=50000, 0x21C=540) or IEEE-754 float
-   bit patterns in `.data`/`.rdata` for coordinate tables; xref into
-   functions; decompile; record address + one-line pseudo-C + constant +
-   confidence (confirmed/probable/weak) in a scratch notes file.
-3. Only **confirmed** values land in code, each with an address comment.
-   Probable/weak go to §7 as flagged approximations.
-
-## 10. Repo hygiene
-
-- Runtime surface: `index.html`, `dist/` (generated — never hand-edit),
-  `src/`, `assets/th07-img|audio/th07|sfx/th07`. Browser code must not
-  read `reference/`, `tests/`, `scripts/`, `docs/`, `node_modules/`.
-- Never commit: `reference/`, secrets, screenshots, logs, scratch scripts,
-  `test-results/`, `dist/`.
-- Keep diffs focused; no drive-by refactors. New scripts/tests only as
-  intentional project files.
-- The legacy TH06 app never lived in this repository; it is preserved in
-  full on the `legacy-vanilla` branch of
-  [th6_web](https://github.com/AgentMystia/th6_web). Do not resurrect
-  TH06 files here, and do not consult the TH06 implementation as
-  behavioral authority for TH07 (§2, §6: several formats and constants
-  genuinely differ).
-- Commit messages: what + why, present tense; mention the evidence
-  (disassembly, exe address, screenshot checkpoint) that justified the
-  change.
-
-## 11. Handoff format
-
-Every task ends with: what changed (files), evidence basis (data/exe/doc),
-exact-or-approximate status per §7, verification actually run (commands +
-checkpoints + whether screenshots were reviewed), and remaining gaps. If
-validation was skipped anywhere, say so explicitly — an unverified change
-is reported as unverified, never as done.
+3. `npm test` — all unit tests green (browser-only suites skip locally).
+4. For simulation changes, run the replay verifier (below) and record the
+   movement honestly in §7.
+
+Verifier: `npx tsx scripts/replay-verify-th08.mjs [--stage N] [--clear-check]`
+- **Formal mode** (default): replays the fixture stage with the real death
+  path, stops at the first unexpected player hit, prints
+  `EARLIEST DIVERGENCE`. Stage-2 additionally carries a seed-scoped
+  native-contact oracle (the f676 contact + deathbomb chain, checkpoints
+  f696/697, traced natively via /proc before wine closed) that the run must
+  match exactly — it is replay-mode-only by construction.
+- **--clear-check**: forces player invulnerability so the run plays to the
+  stage clear and compares the end state against the NEXT stage's recorded
+  entry snapshot (score/power/graze/items/gauge/rng-residue). Contacts
+  cannot be observed in this mode; read the end-of-stage diff, not the
+  EARLIEST line. End-state diffs downstream of the first phantom death are
+  cascade noise, not independent defects.
+- RNG budget oracles (LFSR-walk, mod 65536, from the fixture's own seeds):
+  stage-1 total draws ≡ 32816, stage-2 ≡ 63672. A count-exact run must hit
+  these residues.
+- The fixture's first ~30 stage-2 records include sub-30-FPS slowdown
+  telemetry; the verifier simulates every record (native counter f ==
+  port state after input f-1 even there — skipping them rerolls
+  auto-fire deadlines).
+
+Every task ends with: what changed (files), evidence basis (data/exe),
+exact-or-approximate status, verification actually run, and remaining
+gaps. An unverified change is reported as unverified, never as done.
+
+## 2. TH08 format facts (do not re-derive)
+
+- **T8RP replay**: 0x68 header; stage blocks are `{0x24 metadata, N×u16
+  inputs}` — v6 has NO per-frame aux word. Playback feed strides 2
+  (FUN_00452550); the recorder writes one u16/frame. The u32@+0x10
+  validator = 0x3f000318 + sum(decrypted[0x15..]). RNG seed per stage at
+  +0x1a (u16), rank at +0x25, restored by FUN_00453be0.
+- **ECL v8**: leading 0x800 magic; sub instruction
+  `{u32 time, u16 id, u16 size, u16 rank<<8|hi, u16 paramMask}`;
+  time==0xffffffff sentinels. Exe dispatcher FUN_004184b0: **exe case =
+  on-disk ins − 1** (hex case labels in all.c). Variables: locals
+  10000–10015 (int 10000-03/10012-15, float 10004-11), extra floats
+  10072/73, rand-int params 10029–10032, rand-float 10033–10036;
+  run-global float bank 10061–10068 (DAT_004ece20..3c) — a real shared
+  bus copied through CALL frames; var 10056 = derived random, 10060 =
+  random angle. Spell names (op 90) XOR-0xAA Shift-JIS.
+- **ANM v3**: 64-byte entries; instruction `{u16 op, u16 len, i16 time,
+  u16 paramMask}`; exe case = on-disk op + 1 (FUN_0045ea00). Random ops
+  are only on-disk 59/60 (2 u16 each at arm). Multi-entry files reuse
+  on-disk ids across entries — always resolve through entry-scoped lookup.
+- **SHT**: 56-byte header + records; per-form item movement rate (SHT+0x34);
+  Border Team 18-frame deathbomb window.
+- **MSG**: text XOR 0x77; op15 = active-slot workhorse (SetSprite ORDINALS,
+  not labels); dialogue confirm needs Z RISING edges (held Z never
+  confirms); Ctrl skip bypasses wait bodies.
+- Geometry: playfield (32,16,384×448); ANM HUD coords are top-left (op22)
+  vs entity-center — convert at the call site.
+
+## 3. Engine facts index (exe-pinned; full provenance comments live in code)
+
+**Bullet manager** (static 0xf54e90; 0x600 slots × 0x10b8; slot iteration
+0,1535..1 backward):
+- Slot fields: state u16 +0xdb8 (0 free, 1 normal, 2/3/4
+  spawn-transition, 5 dying), pos +0xd44/48, hit size +0xd34, timer
+  +0xda8, cmd flags +0xdac, vel +0xd50/54, heading +0xd74, speed base
+  +0xd68, prototype +0x224, grazed latch +0xdbd.
+- OnUpdate FUN_00431240 dispatches states via jump table @ 0x432156.
+  **Spawn states 2/3/4 (0x43176e/0x431880/0x431991) perform only the
+  fractional move (vel·½, ½/2.5, ⅓ via FUN_0040c7d0); when the spawn ANM
+  reports done they write state=1 at 0x431106 and FALL THROUGH into the
+  complete case-1 body on the SAME tick** — queue pass (FUN_0042ffc0 at
+  0x431122), et_ex dispatch, full-velocity move, collision, ANM tick.
+- **Construction (FUN_0042f5f0) zeroes the live cmd flags** (0xdac = 0,
+  all.c:22843) after using template+0x1fc (the raw FIRE flags) for the
+  spawn-state selection; behaviors arm ONLY through the ins_111 queue
+  records copied to +0xdd0. FIRE flags' 0xe bits select the spawn state,
+  0x200 the firing sfx — they do NOT arm behaviors.
+- **et_ex dir-change mapping is machine-code-pinned** (2026-08-26):
+  bit 0x40 → FUN_00432460 = RELATIVE `angle += f0` (flds/fadds/fstps at
+  0x4322ef-0x4322fe); bit 0x100 → FUN_004325a0 = ABSOLUTE `angle = f0`;
+  bit 0x80 → aimed (angle-to-player + f0, +π/2 for the zero vector). The
+  fire action sets speed := f1 and each family clears its own bit at the
+  maxTimes fire; while armed the waiting branch sawtooths
+  `speed = 0xd68·(1 − t/interval)` EVERY tick (0xd68 init = spawn speed
+  at construction, f1 after each fire).
+- Speed ramp (bit 0x1, FUN_00432210): velocity = polar(angle,
+  spawnSpeed + 5·(1 − t/16)) for 17 ticks (0x4b4304=5.0, 0x4b42d4=16.0);
+  param-free, but arms only via a queue record.
+- Graze (FUN_0044a470): per-bullet once (latch 0xdbd), age>15 gate, box =
+  bullet AABB expanded size/2 + 20 (0x4b42ec=2.0, 0x4b6e98=20.0) vs the
+  player graze rect +0x3a4..b4. Counter tiers +1/+2/+3 by human gauge
+  depth (FUN_0044a930); gauge awards are form-gated.
+- FIRE (ins 96-104 → FUN_00422720): count1=0 fires NOTHING (authored
+  shutdown); rank-lerp speed bounds are ±0.15 at enemy spawn, reset to
+  ±0.5 at every phase transition/spell arm/death-callback entry
+  (FUN_00415c80). The native stage-1 midboss f2995 rain measured
+  rankSpeed −0.0375 at rank 12 (±0.15 bounds) — the port matches exactly.
+
+**ECL semantics**:
+- ins_2 is the TH08 WAIT (gates the instruction clock via ctx+0x90).
+- Timeline holds (ops 7/10/13) NET-FREEZE the clock (ZunTimer::Subtract
+  before Tick); the dispatcher fires ops only on exact clock match.
+- Death mode lives in flags bits 20-22 (ins_129; 0xff8fffff clears ONLY
+  those — bit23 hide survives); mode-1 hide is DRAW-SIDE ONLY, damage
+  still flows; the re-show is the next phase's ins_54/58 ANM re-arm.
+- ins_131/133/134 = phase HP pool / thresholds / timer; a phase jump
+  frees ALL ins_135 sub-contexts and resets the FIRE template.
+- ins_135 sub-contexts carry PRIVATE call stacks, vars, and interp slots.
+- The CALL channel copies the run-global float bank into the callee's
+  frame (all.c:15505-15512) — dropping vars 10061-10068 starves authored
+  parameters (the 2026-08-25 zero-danmaku root cause).
+- Auto-fire (ins 105/106) deadline: value·rank-lerp; ins_106 draws a
+  u32%deadline phase (2 u16); the chain runs on its own +0x3064 ZunTimer
+  that advances through ins_2 waits, resolving vars through the
+  CAPTURING context's bank.
+- Familiars: human form MATERIALIZES (bit11=0 solid), youkai etherealizes;
+  per-tick side sync FUN_0042c420; Reimu-side teams take no familiar body
+  contact; master death sweeps children with time-orb showers + kill
+  quads whose param6 converts swept bullets to items (9 → two orbs).
+- var 10000/10016 = the stage-2 night-blindness intensity/radius bus,
+  armed by ins_135 drivers, cleared ONLY by ins_123 or stage transition —
+  Mystia's finale retains the dark natively.
+
+**RNG**: u16 LFSR at 0x164d520 (seed restored per stage from T8RP);
+u32 counter at 0x164d524. Draw prices: u16 calls 1; u32/rand01/signed/
+u32%range 2. ANM random ops 2 each at arm. Effect spawn cost =
+2×(script ins_59+60 count) + init callback draws (table in
+EFFECT_DRAW_COST, stage-scene.ts). Effect-62 option afterimages (12 VMs
+every 3rd player tick from counter>699, 0 draws) hold the 512-slot pool
+at ~280 and throttle effect-51 firefly emission to ~66% — pool pressure
+is load-bearing for the draw economy. Item spawn draws only for
+param_4 ∈ {2,3,5}; time-orb type gives up after the FIRST occupied probe.
+
+**Player/economy**: preDeadCount recomputed per hit (bombs·6, +7 with the
+Time quota met, caps 15/30, team multipliers ×9/5); deathbomb = type
+3−form; gauge clocks player+0xe2ad0 (shot-idle) and +0xe2ae8 (firing
+ramp, trunc(t/15) cap 21, PRE-tick read); miss white-out = opaque
+768×896 playfield fill while +0xe2a70 counts; death drops are pool
+state-2 spawns with the 304-px scatter tween; time-orb collects pay 4 u16
+each; point value above PoC is full, below degrades linearly; the
+persistent enemy +0x2e10 accumulator emits state-3 time items on
+threshold crossings.
+
+**Native address map (essentials)**: player 0x17d5ef8 (collision center
++0x2b4/8, AABB +0x38c..9c, hitbox +0x3d4, graze rect +0x3a4..b4);
+bullet mgr 0xf54e90; enemy mgr 0x577f20 (stride 0x53d0, live pos +0x2d88/8c
+= origin +0x2d40 + logical +0x2d34, hp +0x2dfc, flags2 +0x3324, form-rank
++0x3330, parent +0x2da4, ECL ctx ptr +0x2ca0); RNG 0x164d520/4; sfx id
+table 0x4c8040 (46 channels, stride 8) over the 36-file name table
+0x4c81b0; effect map DAT_004c6d30 (ARCHIVE script indices, NOT on-disk
+ids — resolve through the file-order enumeration); stage×difficulty time
+quota DAT_004c77f0; per-stage clear base DAT_004c7158.
+
+## 4. Workflow notes
+
+- Fix roots, not symptoms: the worst regressions all shipped in changes
+  that compiled fine. A change is done when the verifier/snapshot numbers
+  moved (or provably could not) and the honest result is recorded.
+- Rank masks gate spawns by difficulty — verify changes on Lunatic.
+- The 2026-08-25 claim "stage-1 EARLIEST none observed" was a clear-check
+  artifact (invulnerable mode logs no contacts); formal-mode numbers are
+  the only authoritative ones. Do not re-chase ghosts from diagnostic runs.
+- When a replay number "improves" after a semantics change, re-verify the
+  semantics against the binary first — wrong semantics re-roll the contact
+  lottery and can fake progress (the 2026-08-26 Cursor-PR revert case:
+  both "improvements" in PR #1's behavioral half were exe-wrong).
+- Presentation changes need a real-browser eyeball (podman playwright);
+  headless screenshots cannot prove scanout behavior.
+
+## 5. Assets
+
+Runtime assets live under `assets/th08-img`, `assets/audio/th08`,
+`assets/sfx/th08`. The extraction pipeline (scripts/extract-th08-assets.mjs,
+split-th08-bgm.mjs) uses exact thbgm.fmt PCM parameters. A ship-safety test
+fails if any slice track is missing from assets/audio/th08; another test
+walks every embedded Stage 1/2 ANM entry and rejects textures absent from
+the browser preload registry.
+
+## 6. Test suite map
+
+`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (212+ tests). Key
+regression surfaces: et_ex dir-change semantics (th08-ex-dirchange),
+sub-context CALL channel (th08-subcontext), boss audits + presentation
+(th08-boss-audit / th08-boss-presentation), item/damage economy
+(th08-item-spawn / th08-death-white), familiar wait cadence
+(th08-familiar), pacing hard checkpoints (tests/engine-pacing embeds
+native seed values at st2 f1237/f1276 — gameplay changes must keep them
+or consciously regenerate). The 6 skipped tests are browser-only.
+
+## 7. Standing residuals (honest, 2026-08-26)
+
+- **Formal verifier**: stage-1 earliest unexpected hit **f3192**
+  (Sub16 midboss rain spoke, contact slack 1.44px), stage-2 **f3367**
+  (Sub2 aimed fairy bullet, slack 2.95px, age 34). Every kinematic
+  ingredient of both bullets is machine-code- or native-trace-pinned
+  (dir-change family, spawn-state fallthrough, construction flags, graze
+  box, ramp constants, rank-speed bounds — the f2995 volley speed matches
+  the native 1.962 measurement). The residual class is sub-pixel
+  kill-timing cascade (one fire-tick ≈ 2.1px along-track flips the
+  contact); pinning it further needs a native per-frame profile — wine,
+  closed. Do NOT paper over it.
+- Stage-2 draw economy: +8 u16 by f1237 (family-audited exhaustive; opens
+  on 2–4 contact-derived events — the same cascade class).
+- Both stages CLEAR under --clear-check (st1 f13057, st2 f27784);
+  end-state diffs (score/graze/items) are downstream of the first phantom
+  death, not independent defects.
+- Code-level approximations are flagged inline (grep `§7`); none are
+  gameplay-clamped.
+
+## 8. Historical pass log (details in git history; code carries provenance)
+
+- 2026-08-17/19: TH08-ification complete (TH07 path removed); T8RP format
+  fixed (0x24 header + N×u16); timeline hold semantics; arith ops are
+  compound assigns; death modes in flags 20-22.
+- 2026-08-20 (three passes): native /proc slot-trace breakthrough;
+  familiar kill-quads, tangibility gates, orbit tracking; ins_63 teleport
+  sync; rank-lerp bounds split; RNG draw counter + effect economy (option
+  afterimages, familiar sparkles, master-death showers, collect payments);
+  item-pool leak fix.
+- 2026-08-22: boss visual audit (declaration layering, effect-39 ring, HP
+  strip, preload registry); pre-release static audit clean.
+- 2026-08-23: scheduler-boundary + item/damage/bomb economy pass;
+  player-state machine, gauge clocks, collect checksum draws, 1536-slot
+  bullet pool, stage-2 BGM, dialogue portraits, graze tiers.
+- 2026-08-24: boss-fidelity (Mystia visibility, Last Spell quota, beam
+  visuals, night blindness); draw-economy audit (+8 residual family
+  audited); miss-drop state-2 tween; budget oracles recorded.
+- 2026-08-25: boss-fidelity acceptance (CALL channel var-bank copy +
+  int-write mapping — the zero-danmaku fix; marker-pool leak; AnmRunner
+  entry-sprite-base crash; night-blindness persistence; sub-context interp
+  isolation). The "stage-1 none observed" claim was later identified as a
+  clear-check artifact.
+- 2026-08-24 (Cursor cloud, PR #1): spell-ring settle/tracking, HUD label
+  VMs ticked in update, phase HP strip, graze tier counter, opcode census
+  — kept; its 0x40=SET and spawn-end et_ex skip were exe-wrong and
+  reverted 2026-08-26 (machine-code proof in code comments).
+- 2026-08-26 (this pass): audit + revert of the two wrong behavioral
+  changes; dir-change family + construction + graze-box constants
+  machine-code-pinned; verifier oracle gated to formal mode + clear-check
+  honesty banner + label fix; AGENTS.md rewritten (141KB → this file).

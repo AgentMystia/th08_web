@@ -173,7 +173,12 @@ const frames = inputs.length;
 // error both stopped on a correct run and, worse, could not detect a missing
 // native contact. Keep this small oracle seed-scoped so alternate replays do
 // not inherit fixture-specific outcomes.
-const nativePlayerOracle = stageNumber === 2 && stage.rngSeed === 0x32fb
+// The oracle is replay-mode-only: --clear-check forces player invulnerability
+// (below), which suppresses every hitLog entry by construction, so checking
+// the native-contact/deathbomb oracle there can only emit a guaranteed-false
+// divergence (observed as the bogus "f676 native-player-contact" in the
+// 2026-08-25 clear-check run).
+const nativePlayerOracle = stageNumber === 2 && !clearCheck && stage.rngSeed === 0x32fb
   ? {
       hits: new Map([[676, {
         kind: 'bullet', ownerSub: 1, spawnFrame: 655, sprite: 1,
@@ -380,7 +385,7 @@ console.log(`replay frames visited: ${currentFrame + 1}/${frames}`);
 console.log(`spawns: ${spawnFrames.length} (first at f${spawnFrames[0] ?? '-'}, last at f${spawnFrames.at(-1) ?? '-'})`);
 console.log(`kills: ${killFrames.length} (first at f${killFrames[0] ?? '-'})`);
 const next = rpy.stages[stageIndex + 1] ?? null;
-console.log(`final rng seed: ${scene.rng.seed} (stage draws ${rngStageDraws}; native counter ${rngDraws}, bootstrap ${rngBootstrapDraws}${next ? `; stage-${next.stage} entry seed 0x${next.rngSeed.toString(16)} = target` : ''})`);
+console.log(`final rng seed: ${scene.rng.seed} (stage draws ${rngStageDraws}; sim counter ${rngDraws}, bootstrap ${rngBootstrapDraws}${next ? `; stage-${next.stage} entry seed 0x${next.rngSeed.toString(16)} = target` : ''})`);
 console.log(`end: score=${scene.score} graze=${scene.graze} enemies=${scene.enemies.length} bullets=${scene.enemyBullets.length} player=(${scene.playerObj.x},${scene.playerObj.y}) lives=${scene.playerObj.lives} bombs=${scene.playerObj.bombs}`);
 if (scene.runState) {
   console.log(`th08 runState: gauge=${scene.runState.youkaiGauge} clock=${scene.runState.clockTime} orbs=${scene.runState.currentTimeOrbs}/${scene.runState.totalTimeOrbs} pointValue=${scene.runState.pointItemValue} extends=${scene.runState.pointItemExtends}`);
@@ -464,6 +469,12 @@ if (nativeTracePath) {
       break;
     }
   }
+}
+if (clearCheck) {
+  // Contact detection is impossible in this mode (forced invulnerability
+  // suppresses every hitLog entry); "none observed" here is NOT convergence.
+  // The end-of-stage snapshot diff above is this mode's only signal.
+  console.log('clear-check note: player invulnerable — contact oracle disabled; read the end-of-stage diff, not this line.');
 }
 console.log(`EARLIEST DIVERGENCE: ${earliestDivergence ? JSON.stringify(earliestDivergence) : 'none observed'}`);
 if (frameDump) console.log(`FRAME DUMP: ${JSON.stringify(frameDump)}`);
