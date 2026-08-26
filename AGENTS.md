@@ -8,9 +8,12 @@ by a real defect. Follow it exactly.
 This repository is the standalone project **AgentMystia/th08_web**: a
 TypeScript/browser reimplementation of **Touhou 08 ~ Imperishable Night**
 driven by the original game data. Delivered scope: **Stage 1 + Stage 2 +
-Reimu/Yukari Border Team** with the original menus/UI, aligned to the
-committed replay fixture `tests/replays/th8_udLy01.rpy` (a FULL Lunatic
-run: stages 1,2,3,5,6,8).
+Reimu/Yukari Border Team** with the original menus/UI **and the browser
+replay load & playback system** (title → Replay → .rpy picker; playback
+runs the same engine path and T8RP entry restore as the Node verifier),
+aligned to the committed replay fixture `tests/replays/th8_udLy01.rpy`
+(a FULL Lunatic run: stages 1,2,3,5,6,8 — natively no-death through
+stages 1-2, the single f676 contact deathbombed).
 
 Authority order when sources conflict:
 1. Current user instruction.
@@ -251,49 +254,54 @@ sub-context CALL channel (th08-subcontext), boss audits + presentation
 native seed values at st2 f1237/f1276 — gameplay changes must keep them
 or consciously regenerate). The 6 skipped tests are browser-only.
 
-## 7. Standing residuals (honest, 2026-08-27)
+## 7. Standing residuals (honest, 2026-08-27 pass 2)
 
 - **Formal verifier**: stage-1 earliest unexpected hit **f3192**
-  (Sub16 midboss rain spoke, contact slack 1.44px), stage-2 **f3367**
-  (Sub2 aimed fairy bullet, slack 2.95px, age 34) — re-verified unchanged
-  after the 2026-08-27 pass. Every kinematic ingredient of both bullets is
-  machine-code- or native-trace-pinned (dir-change family, spawn-state
-  fallthrough, construction flags, graze box, ramp constants, rank-speed
-  bounds — the f2995 volley speed matches the native 1.962 measurement).
-  The residual class is sub-pixel kill-timing cascade (one fire-tick ≈
-  2.1px along-track flips the contact). Do NOT paper over it.
-- **Stage background under fog** (the dominant visual-vs-native residual,
-  quantified 2026-08-27 by the wine A/B): with the exe's debug fog
-  suppressed (cfg flags dword gui+0x150 bit 10, base 0x17ce758, poked via
-  /proc in-container), stage 1's f600 canopy renders full-bright; fog-on it
-  dims to measured t≈0.4-0.9 per row while the port renders ~1.0 (black).
-  The port's fog window (near 194/far 700 vs its own viewDepth) saturates
-  where the exe shows partial dim — the exact exe fog law (and the early
-  stage-1/2 per-cell CULL difference: the port emits 2-4 fog cells at f600
-  where the exe draws the whole canopy) is unresolved. Captures and
-  measurements: tmp/fa-native (fog-on), tmp/fa-fogoff (fog-off), the
-  per-row fit in tmp/fa-diff/fog-fit.json, port cell depths in
-  tmp/fa-diff/port-fog-cells.json (probes: `?test=1` hook fogCells()).
-  Two memory scans for the runtime fog struct ((near,700) float pairs and
-  the D3DCOLOR ramp) came up empty — the struct lives outside the scanned
-  ranges or in transformed units.
-- **Boss lifebar micro-details**: geometry fixed to the measured law
-  (abs y19-21, x48..368, white fill left-anchored, slot rgb(1,1,40)).
-  Remaining exe-side detail: the color-cycling dither trail on
-  recently-lost HP, the dithered empty section, and the fill-ratio law
-  (native white-fill at f3300 ≈ 0.22 of the strip vs the port's
-  phase-ratio 0.72 — the ceiling semantics need the ins_131/133
-  per-phase pool audit).
-- Stage-2 draw economy: +8 u16 by f1237 (family-audited exhaustive; opens
-  on 2–4 contact-derived events — the same cascade class).
-- Both stages CLEAR under --clear-check (st1 f13057, st2 f27784);
-  end-state diffs (score/graze/items) are downstream of the first phantom
-  death, not independent defects.
-- Dialogue pacing: the confirm fix (level-triggered + arm thresholds) makes
-  the fixture's dialogue windows match native at 300-frame granularity, but
-  the exe paces confirms behind its per-character text-reveal VM — the port
-  floors the arm at 1.5 frames/char (§7-flagged approximation in
-  th08-dialogue.ts). Per-line timing is therefore approximate (±20 frames).
+  (midboss phase-1 rain spoke — sub16 fire body, contact slack 1.44px),
+  stage-2 **f3367** (Sub2 aimed fairy bullet, slack 2.95px ≈ one speed
+  step, age 34) — unchanged by the ReplayInputSource feed fix. Every
+  kinematic ingredient of both bullets is machine-code- or
+  native-trace-pinned. Working unification hypothesis (pass 2): a small
+  RNG draw-count drift opening in (600,900] (score-only +1,334 by f900
+  with graze/power/lives exact at every native checkpoint through f1500)
+  shifts later random angle/speed draws (var 10060 etc.) by a few draws;
+  visible symptoms are the graze field deltas (-5 by f1800, +9 in the
+  (2400,3000] rain window) and the razor-edge phantom contacts. Pinning
+  the exact draw site needs native per-frame counts (ptrace closed) or a
+  full decompile audit of every consumer in the window. Do NOT paper over
+  the contacts.
+- **Stage-1 boss-fight pacing** (NEW, quantified pass 2): the stage
+  timeline itself is aligned — midboss spawn = authored t2935 exactly,
+  蛍符 spell f3413-4280, boss spawn f5617, pre-boss dialogue Ctrl-skip
+  recorded f5607-5751 — but the boss fight runs ~2.5-3x native's
+  duration: our nonspell phases settle ~8.3 dmg/frame sustained (avg 36
+  on 23% of frames, distribution peaks 38/40/70 — the 70 cap, /7 spell
+  tiering and score trickle all verified against all.c:21500) vs ~25/
+  frame needed to fit native's card in the recording. Phase pools
+  authored-verified (sub26: 131=13000/133→1500→sub38; 蠹符 1800; rank
+  gate = mask bit 3 = Lunatic, filter verified), boss shot hitboxes
+  authored (48x32 nonspell, 28x28 spell). Prime suspects: player shot
+  layout (option spacing/spread → hit rate) or per-pellet damage vs SHT.
+  Late spells time out instead of dying, stretching the fight past
+  f12000 (clear-check clear f13057; graze 2144 vs native 536 is
+  downstream field noise, not an independent defect).
+- **clear-check tally artifact**: after the recording ends the harness
+  idles Z held; the stage-tally confirm needs a RISING shoot edge
+  (stageClearTimer>90 && pressed), so each confirm waits the >900-frame
+  timeout — ~1800 of the +2553 "extra frames" are this, not pacing.
+  Formal mode is unaffected (dies at the first phantom before the tally).
+- **Stage background under fog** (unchanged; dominant visual residual):
+  fog law unresolved; captures tmp/fa-native, tmp/fa-fogoff, fits in
+  tmp/fa-diff. The port emits 2-4 fog cells at f600 where the exe draws
+  the whole canopy.
+- **Boss lifebar micro-details**: color-cycling dither trail, dithered
+  empty section, fill-ratio law (native white-fill at f3300 ≈ 0.22 of
+  strip vs port phase-ratio 0.72 — needs the ins_131/133 per-phase pool
+  audit).
+- Stage-2 draw economy: +8 u16 by f1237 (contact-derived events, same
+  cascade class).
+- Dialogue pacing: per-line timing approximate (±20 frames, §7-flagged
+  1.5f/char floor in th08-dialogue.ts).
 - Code-level approximations are flagged inline (grep `§7`); none are
   gameplay-clamped.
 
@@ -352,3 +360,32 @@ or consciously regenerate). The 6 skipped tests are browser-only.
   Mystia-finale segment — while the opening darkness is the D3D fog, see
   §7). Formal baselines unchanged (st1 f3192 / st2 f3367); 212 unit tests
   green.
+
+- 2026-08-27 (pass 2, user-directed: No-Miss 1-2面 + browser replay
+  playback): the provided th8_udF112.rpy turned out to be a Border Team
+  Lunatic STAGE-3 PRACTICE file (single block in slot 3, thprac-style 8
+  lives/full power) — it cannot drive stages 1-2 and stage 3 is out of
+  scope; committed as picker-behavior fixture. th8_udLy01 IS a native
+  1-2面 no-death run (6→6 lives across blocks; the one f676 contact is
+  deathbombed) and stays the convergence oracle. Shipped: browser replay
+  load & playback (title Replay entry → Th08ReplayScene picker →
+  startReplayStage with the verifier's exact T8RP entry restore;
+  per-frame parity with the verifier proven through st1 f3300 including
+  the f3192 phantom contact). Verifier feed switched to ReplayInputSource
+  (edges + Z/X dual-map; the old pressed=null inputBits suppressed the
+  tally shoot-confirm edge — see the clear-check artifact in §7).
+  Findings recorded in §7: stage timeline structurally aligned (midboss
+  t2935 exact, boss f5617, dialogue skip f5607); node harness ≡ browser
+  per-frame (stub assets proved inert, draw() proved stateless); damage
+  pipeline (70 cap, /7 spell tiering, /5*10 trickle) verified against
+  all.c:21440-21560 with measured distributions; the /7 spell rule is
+  TH08-native (gated by flags2 bit3 + the spell-manager bit0, NOT a TH07
+  carry-over as the old comment claimed); NEW top residual = boss-fight
+  DPS/pacing (~2.5-3x slow, pools/hitboxes/rank all authored-verified);
+  unified phantom hypothesis = RNG draw drift opening in (600,900].
+  Tooling lesson: the analyze_image MCP vision tool is STATEFUL across
+  calls — it hallucinated HUD digits onto cropped playfield shots that
+  contain no HUD, echoing numbers from earlier queries in the same
+  conversation (a false "exact native match" that cost an investigation
+  loop). Never read numbers from images it wasn't shown; crop-and-zoom
+  the actual region or use pixel probes.
