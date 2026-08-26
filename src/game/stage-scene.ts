@@ -1229,6 +1229,7 @@ export class StageScene implements GameHost {
   } | null = null;
   private shakeX = 0;
   private shakeY = 0;
+  private lastFogCells: { x: number; y: number; depth: number; fog: number }[] | null = null;
 
   // TH08 night blindness (DAT_004e3d24/28): the lit-circle radius and cover
   // intensity exported by ins_136 builtin 0; rendered by draw()'s nightBlind
@@ -1244,6 +1245,31 @@ export class StageScene implements GameHost {
     if (intensity > 0 && Number.isFinite(radius) && radius > 0) {
       this.nightBlindRadius = radius;
     }
+  }
+
+  // Test-only probe (?test=1): the raw driver words behind drawNightBlindness,
+  // so capture harnesses can log the veil timeline without touching privates.
+  nightBlindState(): { intensity: number; radius: number } {
+    return { intensity: this.nightBlindIntensity, radius: this.nightBlindRadius };
+  }
+
+  // Test-only probe: dialogue machine state for pacing comparisons.
+  dialogueState(): { active: boolean; clock: number; done: boolean } | null {
+    const d = this.th08Dialogue;
+    if (!d) return null;
+    const s = d.machine.state;
+    return { active: !s.done, clock: s.clock, done: s.done };
+  }
+
+  // Test-only probe: per-cell fog telemetry from the last drawBackground pass
+  // (screenX, screenY, viewDepth, fogAlpha) for aligning the port's fog
+  // metric against native A/B captures. Collection stays off (and free)
+  // until enabled once.
+  fogCellTelemetry(): { x: number; y: number; depth: number; fog: number }[] {
+    return this.lastFogCells ?? [];
+  }
+  enableFogCellTelemetry(): void {
+    this.lastFogCells = [];
   }
 
   // TH08 night blindness (FUN_00405420, all.c:1583-1609): four black quads
@@ -6382,6 +6408,7 @@ export class StageScene implements GameHost {
 
     const fogSpan = Math.max(1, fog.far - fog.near);
     const lateralExpand = 10; // world units; hides seams between laterally-adjacent tiles
+    if (this.lastFogCells) this.lastFogCells = [];
     for (const job of ordered) {
       const rect = job.frame;
       const tint = (rect.color & 0x00ffffff) !== 0x00ffffff;
@@ -6495,7 +6522,12 @@ export class StageScene implements GameHost {
         // near/far apart), so each cell gets its own alpha instead of
         // banding the whole quad at one value.
         bgQuadCorner(c0, 0, (v0 + v1) / 2, job.cosRx, job.sinRx, job.cosRy, job.sinRy, job.cosRz, job.sinRz, job.cx, job.cy, job.cz);
-        const fogAlpha = clamp((std.viewDepth(c0.x, c0.y, c0.z, camFrame) - fog.near) / fogSpan, 0, 1);
+        const fogDepth = std.viewDepth(c0.x, c0.y, c0.z, camFrame);
+        const fogAlpha = clamp((fogDepth - fog.near) / fogSpan, 0, 1);
+        if (this.lastFogCells && (i & 1) === 0) {
+          const mid = std.project(c0.x, c0.y, c0.z, camFrame, playfield);
+          if (mid) this.lastFogCells.push({ x: Math.round(mid.x), y: Math.round(mid.y), depth: Math.round(fogDepth), fog: Math.round(fogAlpha * 100) / 100 });
+        }
         // TH08 stage 1's fog window (near ~194, far 700) lies entirely inside
         // the ground band's depth (860+), so a fully-fogged-cell skip would
         // erase the whole floor; the native night-field floor is visible, so

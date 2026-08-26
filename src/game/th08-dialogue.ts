@@ -142,7 +142,9 @@ export class Th08DialogueMachine {
   private skippable = true;
   // The Z-confirm release threshold on the wait counter (gui+0x21830):
   // 6 at message load (all.c:24650), re-armed to 30 after a timeout release
-  // and to 8 after a confirm release (asm 0x434c46/0x434c86).
+  // and to 8 after a confirm release (asm 0x434c46/0x434c86). The re-arms
+  // were missing until the 2026-08-27 A/B: with only the load value the
+  // waits crawl at their authored 500-frame timeouts.
   private confirmThreshold = 6;
   private _ownershipSide: Th08DialogueSide = 0;
   private _gameMode: Th08DialogueSide = 0;
@@ -262,7 +264,23 @@ export class Th08DialogueMachine {
             this.completeWait(events, duration, false, true);
             break;
           }
-          const confirmed = (rising & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
+          // Confirm is LEVEL-triggered on the held shot key once the wait has
+          // passed the armed threshold (gui+0x21830: 6 at load, 30 after a
+          // timeout, 8 after a confirm — re-armed below). The th8_udLy01
+          // fixture advances every boss dialogue with Z held continuously
+          // from before the box opens: the f5700-7300 input words are all
+          // odd (bit0 set, no 0x100 skip) and the native run clears ~8
+          // 500-frame op4 waits in ~300 frames, which a rising-edge rule
+          // cannot produce. The edge requirement stalled every wait for its
+          // full authored timeout and dragged the mid-stage timeline by
+          // ~600 frames per line (2026-08-27 A/B).
+          // §7 approximation: the exe additionally paces confirms behind the
+          // GUI text-reveal VM (FUN_004663b0 typesets per character); the
+          // port has no reveal, so the arm is floored at 1.5 frames per
+          // character of the pending line to keep the per-line pacing near
+          // the native ~40-60 frames.
+          this.confirmThreshold = Math.max(this.confirmThreshold, Math.ceil((this.lines[0]?.length ?? 0) * 1.5));
+          const confirmed = (input & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
             && this.waitCounter >= this.confirmThreshold;
           if (this.waitCounter === 0 && duration > 0) {
             events.push({ type: 'wait-start', duration });

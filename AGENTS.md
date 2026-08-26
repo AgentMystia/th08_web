@@ -111,8 +111,12 @@ gaps. An unverified change is reported as unverified, never as done.
 - **SHT**: 56-byte header + records; per-form item movement rate (SHT+0x34);
   Border Team 18-frame deathbomb window.
 - **MSG**: text XOR 0x77; op15 = active-slot workhorse (SetSprite ORDINALS,
-  not labels); dialogue confirm needs Z RISING edges (held Z never
-  confirms); Ctrl skip bypasses wait bodies.
+  not labels); op4 waits confirm on Z **held** once the wait counter passes
+  the armed threshold (gui+0x21830: 6 at load, 30 after a timeout, 8 after
+  a confirm — the th8_udLy01 fixture advances whole dialogues with Z held
+  from before the box opens; a rising-edge rule stalls every wait for its
+  authored 500-frame timeout, ~600 frames/line, and drags the mid-stage
+  timeline); Ctrl skip bypasses wait bodies.
 - Geometry: playfield (32,16,384×448); ANM HUD coords are top-left (op22)
   vs entity-center — convert at the call site.
 
@@ -247,23 +251,49 @@ sub-context CALL channel (th08-subcontext), boss audits + presentation
 native seed values at st2 f1237/f1276 — gameplay changes must keep them
 or consciously regenerate). The 6 skipped tests are browser-only.
 
-## 7. Standing residuals (honest, 2026-08-26)
+## 7. Standing residuals (honest, 2026-08-27)
 
 - **Formal verifier**: stage-1 earliest unexpected hit **f3192**
   (Sub16 midboss rain spoke, contact slack 1.44px), stage-2 **f3367**
-  (Sub2 aimed fairy bullet, slack 2.95px, age 34). Every kinematic
-  ingredient of both bullets is machine-code- or native-trace-pinned
-  (dir-change family, spawn-state fallthrough, construction flags, graze
-  box, ramp constants, rank-speed bounds — the f2995 volley speed matches
-  the native 1.962 measurement). The residual class is sub-pixel
-  kill-timing cascade (one fire-tick ≈ 2.1px along-track flips the
-  contact); pinning it further needs a native per-frame profile — wine,
-  closed. Do NOT paper over it.
+  (Sub2 aimed fairy bullet, slack 2.95px, age 34) — re-verified unchanged
+  after the 2026-08-27 pass. Every kinematic ingredient of both bullets is
+  machine-code- or native-trace-pinned (dir-change family, spawn-state
+  fallthrough, construction flags, graze box, ramp constants, rank-speed
+  bounds — the f2995 volley speed matches the native 1.962 measurement).
+  The residual class is sub-pixel kill-timing cascade (one fire-tick ≈
+  2.1px along-track flips the contact). Do NOT paper over it.
+- **Stage background under fog** (the dominant visual-vs-native residual,
+  quantified 2026-08-27 by the wine A/B): with the exe's debug fog
+  suppressed (cfg flags dword gui+0x150 bit 10, base 0x17ce758, poked via
+  /proc in-container), stage 1's f600 canopy renders full-bright; fog-on it
+  dims to measured t≈0.4-0.9 per row while the port renders ~1.0 (black).
+  The port's fog window (near 194/far 700 vs its own viewDepth) saturates
+  where the exe shows partial dim — the exact exe fog law (and the early
+  stage-1/2 per-cell CULL difference: the port emits 2-4 fog cells at f600
+  where the exe draws the whole canopy) is unresolved. Captures and
+  measurements: tmp/fa-native (fog-on), tmp/fa-fogoff (fog-off), the
+  per-row fit in tmp/fa-diff/fog-fit.json, port cell depths in
+  tmp/fa-diff/port-fog-cells.json (probes: `?test=1` hook fogCells()).
+  Two memory scans for the runtime fog struct ((near,700) float pairs and
+  the D3DCOLOR ramp) came up empty — the struct lives outside the scanned
+  ranges or in transformed units.
+- **Boss lifebar micro-details**: geometry fixed to the measured law
+  (abs y19-21, x48..368, white fill left-anchored, slot rgb(1,1,40)).
+  Remaining exe-side detail: the color-cycling dither trail on
+  recently-lost HP, the dithered empty section, and the fill-ratio law
+  (native white-fill at f3300 ≈ 0.22 of the strip vs the port's
+  phase-ratio 0.72 — the ceiling semantics need the ins_131/133
+  per-phase pool audit).
 - Stage-2 draw economy: +8 u16 by f1237 (family-audited exhaustive; opens
   on 2–4 contact-derived events — the same cascade class).
 - Both stages CLEAR under --clear-check (st1 f13057, st2 f27784);
   end-state diffs (score/graze/items) are downstream of the first phantom
   death, not independent defects.
+- Dialogue pacing: the confirm fix (level-triggered + arm thresholds) makes
+  the fixture's dialogue windows match native at 300-frame granularity, but
+  the exe paces confirms behind its per-character text-reveal VM — the port
+  floors the arm at 1.5 frames/char (§7-flagged approximation in
+  th08-dialogue.ts). Per-line timing is therefore approximate (±20 frames).
 - Code-level approximations are flagged inline (grep `§7`); none are
   gameplay-clamped.
 
@@ -298,3 +328,27 @@ or consciously regenerate). The 6 skipped tests are browser-only.
   changes; dir-change family + construction + graze-box constants
   machine-code-pinned; verifier oracle gated to formal mode + clear-check
   honesty banner + label fix; AGENTS.md rewritten (141KB → this file).
+- 2026-08-27 (this pass): user-directed frame-vs-frame A/B against the
+  original — Th08.exe v1.00d booted under Wine 10.0/Xvfb inside a podman
+  container (the 2026-08-24 wine closure is superseded by direct user
+  instruction for this pass; everything stays in-container, host clean).
+  Frame-exact capture harness: native side polls the ReplayInf per-stage
+  counter via /proc/pid/mem (0x18b8a28 → counter, 0x164d2cc stage) and
+  screenshots every 300 frames through both stages of th8_udLy01; port side
+  steps deterministically through `?test=1&paused=1` and screenshots the
+  same checkpoints. 81 aligned pairs diffed (tmp/fa-diff*). Fixed: (1)
+  dialogue op4 confirm is LEVEL-triggered with the gui+0x21830 arm
+  thresholds (30 after timeout / 8 after confirm) plus a §7-flagged
+  1.5f/char floor — the rising-edge rule had stalled every dialogue wait
+  for its full 500-frame timeout (~600 real frames per line) and dragged
+  the mid-stage timeline by thousands of frames; dialogue windows now match
+  native at checkpoint granularity and stage-1 visual diff dropped 5.4%.
+  (2) Boss lifebar geometry re-measured from the aligned captures (3px at
+  y19, x48..368, white fill, near-black slot) — the old 2px/380px grey
+  strip and its test replaced. Disproved en route: the §2 rising-edge
+  dialogue note (fixture input histogram is the counter-evidence); the
+  "night-blindness bus drives stage 1/2 opening darkness" implication (the
+  DAT_004e3d24/28 veil only fires via ECL ins_136 — the fixture's stage-2
+  Mystia-finale segment — while the opening darkness is the D3D fog, see
+  §7). Formal baselines unchanged (st1 f3192 / st2 f3367); 212 unit tests
+  green.

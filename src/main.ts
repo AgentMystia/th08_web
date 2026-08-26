@@ -21,7 +21,9 @@ interface TestHook {
   setLives(n: number): void;
   setInvuln(frames: number): void;
   snapshot(): Record<string, unknown>;
-  // Both read the PRESENTED display canvas (post-present()). pixelAt is the
+  nightBlind(): { intensity: number; radius: number } | null;
+  dialogue(): { active: boolean; clock: number; done: boolean } | null;
+  fogCells(): { x: number; y: number; depth: number; fog: number }[];  // Both read the PRESENTED display canvas (post-present()). pixelAt is the
   // historical name every probe uses; displayPixelAt exists so new probes
   // can be explicit about presented-vs-drawn semantics.
   pixelAt(x: number, y: number): number[];
@@ -326,6 +328,9 @@ async function boot(): Promise<void> {
         if (menu) return menu.snapshot();
         return stageSnapshot(stage!);
       },
+      nightBlind: () => stage?.nightBlindState() ?? null,
+      dialogue: () => stage?.dialogueState() ?? null,
+      fogCells: () => { const v = stage?.fogCellTelemetry() ?? []; stage?.enableFogCellTelemetry(); return v; },
       // Reads the PRESENTED display canvas — the pre-backbuffer historical
       // semantics every existing pixel probe was written against. advance()
       // ends in draw()+present(), so values match the backbuffer when

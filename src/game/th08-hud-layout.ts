@@ -80,18 +80,19 @@ export const TH08_HUD = {
     leftColor: 0xe0e0e0ff,
     rightColor: 0x80e0e0ff
   },
-  // Native boss HP strip: a 2px bar at y=19 spanning x=34..414 (the
-  // playfield minus a 2px inset), grey-white fill draining right-to-left
-  // over a dark-blue remainder. Geometry/colors measured on the native
-  // demo captures (n-f5900/n-f6050: fill rgb(149,149,149), empty
-  // rgb(0,0,28)); colors packed RGBA like the gauge above.
+  // Native boss HP strip, re-measured 2026-08-27 on the aligned replay
+  // captures (tmp/fa-native row-scans f3000..f13200): the strip sits at
+  // abs y19-21, spans abs x48..368 (320px), white fill growing rightward
+  // from the left anchor over a near-black (1,1,40) slot. The exe also
+  // draws a color-cycling dither trail for recently-lost HP and a dithered
+  // empty section — approximated here by the flat slot color (flagged).
   bossLifebar: {
-    x: TH08_PLAYFIELD.x + 2,
+    x: TH08_PLAYFIELD.x + 16,
     y: 19,
-    width: TH08_PLAYFIELD.width - 4,
-    height: 2,
-    fillColor: 0x959595ff,
-    emptyColor: 0x00001cff
+    width: 320,
+    height: 3,
+    fillColor: 0xffffffff,
+    emptyColor: 0x01012800 // rgb(1,1,40) in this table's r>>24/g>>16/b>>8 packing
   }
 } as const;
 

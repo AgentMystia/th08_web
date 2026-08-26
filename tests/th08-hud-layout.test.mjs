@@ -86,17 +86,20 @@ test('the power gauge is a 128-wide quad from y136 to y152', () => {
   assert.deepEqual(gaugeQuad(200)[1], { x: 616, y: 136 });
 });
 
-// Native boss HP strip: measured on the native demo captures
-// (n-f5900/n-f6050) — a 2px bar at y=19 spanning x=34..414, grey-white
-// fill over a dark-blue remainder, draining right-to-left.
-test('the boss lifebar is the native 2px strip at y=19', () => {
+// Native boss HP strip, re-measured 2026-08-27 on the aligned th8_udLy01
+// replay captures (row-scans at f3000/f3300/f6000/f9900/f13200 in
+// tmp/fa-native): a 3px strip at y=19 spanning x=48..368 — white fill
+// growing rightward from the left anchor over a near-black (1,1,40) slot.
+// The exe's color-cycling dither damage trail and dithered empty section
+// are approximated by the flat slot color (stage-scene comment).
+test('the boss lifebar is the native 3px strip at y=19 spanning x=48..368', () => {
   assert.deepEqual(TH08_HUD.bossLifebar, {
-    x: 34,
+    x: 48,
     y: 19,
-    width: 380,
-    height: 2,
-    fillColor: 0x959595ff,
-    emptyColor: 0x00001cff
+    width: 320,
+    height: 3,
+    fillColor: 0xffffffff,
+    emptyColor: 0x01012800
   });
 });
 
