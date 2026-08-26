@@ -19,7 +19,7 @@ export const TH08_TITLE_ITEMS = [
   { name: 'Extra Start', enabled: false },
   { name: 'Spell Practice', enabled: false },
   { name: 'Practice Start', enabled: false },
-  { name: 'Replay', enabled: false },
+  { name: 'Replay', enabled: true },
   { name: 'Result', enabled: false },
   { name: 'Music Room', enabled: false },
   { name: 'Option', enabled: false },
@@ -40,6 +40,7 @@ export type Th08MenuEvent =
   | { type: 'select'; screen: Th08MenuScreen; cursor: number }
   | { type: 'back'; screen: Th08MenuScreen }
   | { type: 'denied'; screen: Th08MenuScreen; cursor: number }
+  | { type: 'replay' }
   | { type: 'start'; difficulty: number; shotType: number };
 
 export interface Th08MenuStart {
@@ -104,6 +105,9 @@ export class Th08MenuModel {
           this.transitionFrames = 0;
           this.readyFrames = 0;
           events.push({ type: 'select', screen: 'title', cursor: 0 });
+        } else if (this.cursor === 4) {
+          // Replay: enabled entry — the host swaps in the replay picker.
+          events.push({ type: 'replay' });
         } else {
           events.push({ type: 'denied', screen: this.screen, cursor: this.cursor });
         }

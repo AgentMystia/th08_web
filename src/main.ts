@@ -1,11 +1,14 @@
 import { Loop } from './core/loop';
-import { Input } from './core/input';
+import { Input, type InputFrame } from './core/input';
 import { LatencyRecorder, type LatencyLogicState, type LatencySample } from './core/latency';
 import { PLAYFIELD, Renderer } from './gfx/renderer';
 import { AudioBus } from './audio/audio';
 import { loadAssets } from './game/assets';
 import { StageScene } from './game/stage-scene';
 import { Th08MenuFlow } from './game/th08-title-scene';
+import { Th08ReplayScene } from './game/th08-replay-scene';
+import { ReplayInputSource } from './core/replay-input';
+import type { Rpy } from './formats/rpy';
 import type { Th08TeamId } from './game/player';
 import { stageBgmTracks } from './game/bgm';
 import { stageSnapshot } from './game/snapshot';
@@ -121,6 +124,12 @@ async function boot(): Promise<void> {
 
   let stage: StageScene | null = null;
   let menu: Th08MenuFlow | null = null;
+  let replayMenu: Th08ReplayScene | null = null;
+  // Active replay playback: the parsed file plus the canonical T8RP word
+  // decoder shared with the Node verifier. Gameplay input comes ONLY from
+  // the recorded stream; the one live key merged in is pause (the exe reads
+  // pause from the live mask while replay words go to the injected mask).
+  let replayCtrl: { rpy: Rpy; src: ReplayInputSource } | null = null;
   // Hi-score carried across stage runs within this browser session.
   let sessionHiScore = 100000;
   const latencyState = (s: StageScene): LatencyLogicState => ({
@@ -196,8 +205,108 @@ async function boot(): Promise<void> {
   const startFromMenu = (difficulty: number, team: Th08TeamId) =>
     startStage(difficulty, team, 1);
 
+  // ---- Replay playback -------------------------------------------------
+  // Stage-entry restore mirrors scripts/replay-verify-th08.mjs field for
+  // field (the native T8RP restore FUN_00453be0), so a browser playback and
+  // a verifier run of the same stage block produce the same simulation.
+  // Delivered slice: stage 1 and 2 only; blocks beyond that are not wired.
+  function startReplayStage(rpy: Rpy, stageIndex: number): StageScene {
+    const block = rpy.stages[stageIndex];
+    const prev = stageIndex > 0 ? rpy.stages[stageIndex - 1] : null;
+    const entryScore = prev ? prev.scoreAtEnd : 0;
+    // The picker only offers Border Team blocks; keep the narrowing local.
+    const team: Th08TeamId = rpy.team === 'reimuYukari' ? rpy.team : 'reimuYukari';
+    const s = new StageScene(assets, audio, rpy.difficulty, team, block.stage, null, block.rngSeed);
+    s.mode = 'replay';
+    s.rank = block.rank;
+    s.score = entryScore;
+    s.graze = block.graze;
+    s.playerObj.lives = block.lives;
+    s.playerObj.bombs = block.bombs;
+    s.playerObj.power = block.power;
+    if (s.runState) {
+      s.runState.score = entryScore;
+      s.runState.pointItemValue = block.pointItemValue;
+      s.runState.youkaiGauge = block.youkaiGauge;
+      s.runState.clockTime = block.clockTime;
+      s.runState.pointItemExtends = block.pointItemExtends;
+      s.runState.nextPointItemExtendThreshold = block.nextPointItemExtendThreshold;
+    }
+    s.hiScore = Math.max(s.hiScore, sessionHiScore);
+    // Replay runs never write the session hi-score (score.dat is untouched
+    // by native replay playback).
+    const backToPicker = () => {
+      replayCtrl = null;
+      stage = null;
+      replayMenu = createReplayMenu(rpy);
+      audio.preloadBgm(['th08_01']);
+      audio.playBgm('th08_01');
+    };
+    s.onExitToTitle = backToPicker;
+    s.onStageComplete = () => {
+      const nextIndex = rpy.stages.findIndex(
+        (cand, i) => i > stageIndex && cand.stage <= 2
+      );
+      if (nextIndex >= 0) startReplayStage(rpy, nextIndex);
+      else backToPicker();
+    };
+    stage = s;
+    menu = null;
+    replayMenu = null;
+    replayCtrl = { rpy, src: new ReplayInputSource() };
+    const [stageTrack, bossTrack] = stageBgmTracks(block.stage);
+    audio.preloadBgm([stageTrack, bossTrack]);
+    audio.playBgm(stageTrack);
+    return s;
+  }
+
+  // Merged InputFrame for one replay tick: recorded word decoded by
+  // ReplayInputSource (edges + Z/X dual-mapping) with the live pause key
+  // layered on top. The returned object is reused by the decoder, so the
+  // merge must happen per tick.
+  const replayTickFrame = (s: StageScene, live: InputFrame): InputFrame => {
+    const ctrl = replayCtrl!;
+    const block = ctrl.rpy.stages.find((cand) => cand.stage === s.stageNumber);
+    const word = block && s.stageFrame < block.inputs.length
+      ? block.inputs[s.stageFrame]
+      : 0;
+    const frame = ctrl.src.frame(word);
+    if (live.pressed.has('pause')) frame.pressed.add('pause');
+    return frame;
+  };
+
+  // Native replay playback terminates the moment the stage block's input
+  // stream is exhausted (the recording ends on the result-screen confirm).
+  const replayStreamExhausted = (s: StageScene): boolean => {
+    const ctrl = replayCtrl;
+    if (!ctrl) return false;
+    const block = ctrl.rpy.stages.find((cand) => cand.stage === s.stageNumber);
+    return !block || s.stageFrame >= block.inputs.length;
+  };
+
+  function createReplayMenu(initialRpy: Rpy | null = null): Th08ReplayScene {
+    return new Th08ReplayScene(
+      assets,
+      audio,
+      (selection) => {
+        const idx = selection.rpy.stages.indexOf(selection.stage);
+        startReplayStage(selection.rpy, idx);
+      },
+      () => {
+        replayMenu = null;
+        menu = createMenu();
+        audio.preloadBgm(['th08_01']);
+        audio.playBgm('th08_01');
+      },
+      initialRpy
+    );
+  }
+
   function createMenu(): Th08MenuFlow {
-    return new Th08MenuFlow(assets, audio, startFromMenu);
+    return new Th08MenuFlow(assets, audio, startFromMenu, 0, () => {
+      menu = null;
+      replayMenu = createReplayMenu();
+    });
   }
 
   if (useMenu) {
@@ -256,8 +365,21 @@ async function boot(): Promise<void> {
       try {
         if (menu) {
           menu.update(liveFrame);
+        } else if (replayMenu) {
+          replayMenu.update(liveFrame);
         } else if (stage) {
-          stage.update(liveFrame);
+          if (replayCtrl && replayStreamExhausted(stage)) {
+            // End of the recorded block: native ends the replay here.
+            replayCtrl = null;
+            stage = null;
+            menu = createMenu();
+            audio.preloadBgm(['th08_01']);
+            audio.playBgm('th08_01');
+          } else if (replayCtrl) {
+            stage.update(replayTickFrame(stage, liveFrame));
+          } else {
+            stage.update(liveFrame);
+          }
         }
         if (latencyRecorder && observedStage && stage === observedStage && beforeLatency) {
           latencyRecorder.observeLogic(
@@ -277,6 +399,7 @@ async function boot(): Promise<void> {
       if (!drawHalted) {
         try {
           if (menu) menu.draw(renderer);
+          else if (replayMenu) replayMenu.draw(renderer);
           else if (stage) stage.draw(renderer, perfEnabled);
           if (latencyRecorder && stage) {
             const samples = latencyRecorder.pendingDrawSamples();
@@ -326,6 +449,7 @@ async function boot(): Promise<void> {
       advance: (n: number) => loop.advance(n),
       snapshot: () => {
         if (menu) return menu.snapshot();
+        if (replayMenu) return replayMenu.snapshot();
         return stageSnapshot(stage!);
       },
       nightBlind: () => stage?.nightBlindState() ?? null,

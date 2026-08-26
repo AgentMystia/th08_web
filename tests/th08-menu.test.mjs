@@ -58,3 +58,16 @@ test('disabled title items emit a denied event without inventing submenus', () =
   ]);
   assert.equal(menu.screen, 'title');
 });
+
+test('the Replay entry opens the replay picker and stays on the title screen state', () => {
+  const menu = new Th08MenuModel();
+  advance(menu, 8);
+  for (let i = 0; i < 4; i++) {
+    advance(menu, 1, TH08_INPUT_BITS.down);
+    advance(menu, 1);
+  }
+  assert.equal(menu.cursor, 4);
+  assert.deepEqual(menu.update(TH08_INPUT_BITS.shoot), [{ type: 'replay' }]);
+  // The model itself does not change screens — the host swaps in the picker.
+  assert.equal(menu.screen, 'title');
+});

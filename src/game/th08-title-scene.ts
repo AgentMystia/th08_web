@@ -91,7 +91,8 @@ export class Th08MenuFlow {
     private assets: GameAssets,
     private audio: AudioBus,
     private onStart: (difficulty: number, team: Th08TeamId) => void,
-    initialTitleCursor = 0
+    initialTitleCursor = 0,
+    private onOpenReplay: (() => void) | null = null
   ) {
     const anm = this.anm;
     this.logo = new AnmRunner(anm, 0, { entryIndex: 0, spriteIndexOffset: 0 });
@@ -181,9 +182,8 @@ export class Th08MenuFlow {
   }
 
   replayFileHotkeyActive(): boolean {
-    // The TH08 title's Replay entry is disabled in the vertical slice; the
-    // browser T8RP replay picker is future work.
-    return false;
+    // The Replay entry is live: the host swaps in the browser replay picker.
+    return true;
   }
 
   private inputBits(input: InputFrame): number {
@@ -220,6 +220,10 @@ export class Th08MenuFlow {
           this.audio.sfx(SFX_OK[0], SFX_OK[1], 10);
           if (this.model.screen === 'difficulty' && !this.difficultyBanners.length) this.buildDifficulty();
           if (this.model.screen === 'character' && !this.characterBuilt) this.buildCharacter();
+          break;
+        case 'replay':
+          this.audio.sfx(SFX_OK[0], SFX_OK[1], 10);
+          this.onOpenReplay?.();
           break;
         case 'start': {
           // Only the Border Team is playable in the vertical slice; the
@@ -302,7 +306,7 @@ export class Th08MenuFlow {
       }
     });
     if (this.denyFlash > 0 && this.denyFlash % 8 < 4) {
-      hint(r, 'Only Game Start is available in this build');
+      hint(r, 'Game Start and Replay are available in this build');
     } else {
       hint(r, 'Up/Down Move    Z Decide');
     }

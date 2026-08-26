@@ -149,19 +149,15 @@ const rngBootstrapDraws = rngDraws;
   };
 }
 
-const inputBits = (word) => ({
-  held: new Set([
-    word & 0x1 ? 'shoot' : null,
-    word & 0x2 ? 'bomb' : null,
-    word & 0x4 ? 'focus' : null,
-    word & 0x10 ? 'up' : null,
-    word & 0x20 ? 'down' : null,
-    word & 0x40 ? 'left' : null,
-    word & 0x80 ? 'right' : null,
-    word & 0x100 ? 'skip' : null
-  ].filter(Boolean)),
-  pressed: new Set()
-});
+// Feed decoder: ReplayInputSource is the canonical T8RP word → InputFrame
+// mapper (rising edges per button, Z/X dual-mapped to confirm/back — the
+// exe's own prev-word compare, FUN_0043fe30 consumers). The old local
+// inputBits mapped single buttons with pressed=∅, which suppressed every
+// edge-triggered consumer: most visibly the stage-tally shoot-confirm
+// (stageClearTimer>90 && pressed), forcing clear-check runs through the
+// >900-frame timeout per tally and inflating them by ~2500 frames of
+// post-recording economy.
+const replayInput = new mod.ReplayInputSource();
 
 const inputs = stage.inputs;
 const frames = inputs.length;
@@ -249,7 +245,7 @@ for (let f = 0; f < simFrameCap; f++) {
     scene.playerObj.invulnFrames = 999999;
     scene.playerObj.bombInvuln = 999999;
   }
-  scene.update(inputBits(word));
+  scene.update(replayInput.frame(word));
   const newHits = scene.hitLog.slice(observedHitCount);
   observedHitCount = scene.hitLog.length;
   const expectedHit = nativePlayerOracle.hits.get(f);
