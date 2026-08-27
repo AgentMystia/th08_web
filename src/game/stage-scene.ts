@@ -2196,6 +2196,42 @@ export class StageScene implements GameHost {
     return total;
   }
 
+  // TH08 death-settle shared tail (all.c:21659-21668): a dying enemy that
+  // carries flags2 bit1 with bit0 clear converts every still-live enemy
+  // bullet into a point item carrying an escalating chip — start 2000, +20
+  // per bullet, capped at 8000 (FUN_00430aa0) — then chips the remaining
+  // live enemies at +30 per head (FUN_0042efb0), banks the grand total
+  // through one addScore, and pops the RAW value as the BONUS floater
+  // (FUN_00437ddd displays the pre-division number; addScore credits /10).
+  // Zero RNG on this path: FUN_004400a0 is the item allocator and
+  // FUN_00403200 a plain field store, so seed oracles are untouched.
+  th08DeathWipeBonus(dead: Enemy): void {
+    const t = dead.ecl.th08;
+    if (!t || (t.flags2 & 2) === 0 || (t.flags2 & 1) !== 0) return;
+    let total = 0;
+    let chip = 2000;
+    for (const b of this.enemyBullets) {
+      if (b.dead) continue;
+      this.spawnItem('point', b.x, b.y);
+      total += chip;
+      chip = Math.min(8000, chip + 20);
+    }
+    this.clearEnemyBullets(true);
+    chip = 2000;
+    for (const other of this.enemies) {
+      const ot = other.ecl.th08;
+      if (other === dead || other.dead) continue;
+      const flags2 = ot ? ot.flags2 : (other.ecl.interactable ? 1 : 0);
+      if ((flags2 & 2) !== 0 || (flags2 & 1) === 0) continue;
+      this.spawnItem('point', other.x, other.y);
+      total += chip;
+      chip = Math.min(8000, chip + 30);
+    }
+    if (total <= 0) return;
+    this.addScore(total);
+    this.bonusPopup = { bonus: total, timer: 280 };
+  }
+
   // Laser half of every FUN_00422ea0 field clear: non-bomb-immune lasers
   // (flags bit 2 clear) get the op-89-style graceful shrink and stop
   // hit-testing immediately (shrinkCutoff=0); `unconditional` mirrors

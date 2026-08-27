@@ -3069,6 +3069,9 @@ export class StageRuntime {
         // op91 could convert it (Th07.exe v1.00b all.c:14318-14398, then
         // FUN_0040f340 @ 0x40f340).
       }
+      // TH08 shared tail (all.c:21659-21668): flags2-bit1 actors additionally
+      // fire the escalating wipe bonus (bullets + remaining live enemies).
+      game.th08DeathWipeBonus?.(e);
     }
     // Op 105 is an immediate PlaySE. A callback's own op105 plays separately
     // when that sub runs; this is the generic enemy-death request.

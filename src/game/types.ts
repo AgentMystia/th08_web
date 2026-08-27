@@ -348,6 +348,12 @@ export interface GameHost {
   // returns the summed total for the caller to bank as score/10 (op91
   // spell end, boss nonspell death).
   sweepBulletsToItems(): number;
+  // FUN_0041ed50 shared-tail wipe (all.c:21659-21668): for a dying enemy
+  // carrying flags2 bit1 with bit0 clear, convert every still-live enemy
+  // bullet into a point item with an escalating chip (2000, +20 per bullet,
+  // cap 8000), chip remaining live enemies (+30 per head), bank the grand
+  // total once, and pop the raw value as the BONUS floater.
+  th08DeathWipeBonus?(dead: object): void;
   configureAmbience?(op: number, args: number[]): void;
   // Boss timer callback with the ECL "timeout is normal" flag unset.
   onBossPhaseTimeout?(): void;
