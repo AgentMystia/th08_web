@@ -291,6 +291,22 @@ stages 1-2 without replay-specific tuning. Working ledger: `tmp/gx-findings.md`
 - Replay UX gap recorded: port returns to title when one block's stream ends;
   the exe chains into the next block in-session (fa-native manifest shows
   continuous s1→s2). Browser-side playback chaining is a fidelity TODO.
+- ROUND-2 RESULT (same night): native per-frame score curve captured (RUN+0x0,
+  anchor-verified end=7,639,149) and collided against the port → bidirectional
+  million-scale swings exactly at boss/midboss deaths. ROOT CAUSE pinned to the
+  death-settle shared tail (all.c 21654-21668): when `flags2&2 && !(flags2&1)`
+  the exe runs FUN_00430aa0(8000,1) + FUN_0042efb0(8000,v) — converts EVERY
+  live enemy bullet into a point item carrying escalating chips (start 2000,
+  +20 per bullet, cap 8000), same again for live enemies (+30 step), pays the
+  grand total once via addScore and pops the raw value as the “BONUS n” floater
+  (display = pre-division). Verified RNG-free (FUN_004400a0 is the item
+  allocator), so implementing it cannot perturb seed oracles. Native runtime
+  score fields per enemy captured: smalls 100/1000, big fairy 500,
+  midboss/boss field = 100000 (paid only through case 0/1). Full fix spec +
+  regression plan lives in tmp/gx-findings.md §深夜追加; implementation is the
+  next session's first action. The f495-class early ±30k steps are point-item
+  pickups whose credit SHAPE differs (instant vs 33-frame ramp) — resolve
+  after the wipe fix lands if they survive it.
 
 ## 7. Standing residuals (honest, 2026-08-27 pass 2)
 
