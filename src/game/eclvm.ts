@@ -607,7 +607,9 @@ export class StageRuntime {
       pendingShotDmg: 0,
       pendingBombDmg: 0,
       // DAT_018b8a24 is 40 in the v1.00d Border-Team replay runtime; the
-      // constructor copies it verbatim to enemy+0x2e10 (FUN_0042a1f4).
+      // constructor copies it verbatim to enemy+0x2e10 (FUN_0042a1f4) and
+      // FUN_00451670's self-repaying loop uses the same value as its
+      // threshold (native f476 seed 26561 checkpoint pins the first orb).
       timeOrbDamageAccumulator: 40,
       score: 100,
       frame: 0,
@@ -867,6 +869,12 @@ export class StageRuntime {
         flags: 0x4c | (mirrored ? 0x40000 : 0),
         flags2: 0,
         familiar: false,
+        // exe enemy+0x3380: incremented by each child-spawn op's attach
+        // (all.c:12044/12075/12114), decremented when a linked child dies
+        // through the normal death path (all.c:21629). The master-death
+        // sweep tail reads it for its orb count (all.c:20533) — it can
+        // legitimately diverge from the live chain length.
+        attachCount: 0,
         sideBit: 0,
         markerHandle: null,
         markerActor: null,
@@ -4359,6 +4367,9 @@ export class StageRuntime {
   ): Enemy | null {
     const child = this.spawnEclEnemy(game, { ...opts, th08Familiar: true });
     if (child?.ecl.th08 && posInherit) child.ecl.th08.flags |= 0x200;
+    // The attach opcode increments the master's +0x3380 ledger (all.c:
+    // 12044/12075/12114) — the master-death sweep tail reads it later.
+    if (child?.ecl.parent?.ecl.th08) child.ecl.parent.ecl.th08.attachCount++;
     return child;
   }
 

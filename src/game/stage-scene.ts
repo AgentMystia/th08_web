@@ -76,6 +76,12 @@ const TH08_ITEM_TYPE_SLOT: Partial<Record<ItemType, number>> = {
   powerSmall: 0, point: 1, powerBig: 2, bomb: 3, powerFull: 4, extend: 5,
   pointStar: 6, time: 7, pointSmall: 8, unknown9: 9, time2: 10
 };
+// Inverse of TH08_ITEM_TYPE_SLOT: native item type id -> ItemType, for the
+// kill-quad bullet conversions (FUN_004400a0 takes the raw id).
+const TH08_ITEM_TYPE_BY_ID: readonly ItemType[] = [
+  'powerSmall', 'point', 'powerBig', 'bomb', 'powerFull',
+  'extend', 'pointStar', 'time', 'pointSmall', 'unknown9', 'time2'
+];
 // DAT_018b8a24, native-read as 40 in both Stage 1/2 replay runs. Every
 // enemy initializes +0x2e10 to this value; FUN_00451670 subtracts it before
 // adding the current collision call's capped raw damage.
@@ -1790,7 +1796,18 @@ export class StageScene implements GameHost {
     // squish state (1), then explicitly skips FUN_0044aec0. Its later tally
     // counters still run, so this gate belongs after tickGaugeTrickle().
     // Materialize state 3 is not excluded by the native dispatcher.
-    if (p.hitState || p.dyingFrame >= 0 || this.th08Bomb || this.isDialogueActive()) return;
+    if (p.hitState || p.dyingFrame >= 0 || this.th08Bomb || this.isDialogueActive()) {
+      // The idle park shares FUN_0044aec0's +0xfdc bomb gate: a flip that
+      // lands while a bomb runs never parks the idle timer (native ly
+      // Stage-2 f704 press-flip mid-deathbomb-bomb resumes drift with no
+      // extra delay; checkpoint -1002 @ f1237).
+      p.th08PendingIdlePark = false;
+      return;
+    }
+    if (p.th08PendingIdlePark) {
+      p.th08PendingIdlePark = false;
+      p.th08ShotIdleTimer = 30;
+    }
     // player+8 is 0-based (the initial normal-form callback begins at zero),
     // whereas Player.th08FocusFrames is incremented at this port's callback
     // head. Native Compare(30) therefore opens when our mirror has passed 30.
@@ -2207,7 +2224,14 @@ export class StageScene implements GameHost {
   // FUN_00403200 a plain field store, so seed oracles are untouched.
   th08DeathWipeBonus(dead: Enemy): void {
     const t = dead.ecl.th08;
-    if (!t || (t.flags2 & 2) === 0 || (t.flags2 & 1) !== 0) return;
+    // The tail gate (all.c:21659) reads the +0x3324 word: bit1 is the
+    // boss-slot REGISTRATION flag written by ins_127 (all.c:12700), not
+    // the ins_83(1) effect bit at +0x3328. Gating on the ins_83 bit fired
+    // the full-field wipe for ordinary enemies that author it (the Stage-1
+    // Sub1 familiar master converted all 80 live bullets at f585 where the
+    // native quad sweep converted only the seven inside its r32 quads —
+    // a 56-draw single-frame deficit, gx-st1 census 2026-08-28).
+    if (!t || (t.flags & 2) === 0 || (t.flags & 1) !== 0) return;
     let total = 0;
     let chip = 2000;
     for (const b of this.enemyBullets) {
@@ -2219,10 +2243,12 @@ export class StageScene implements GameHost {
     this.clearEnemyBullets(true);
     chip = 2000;
     for (const other of this.enemies) {
-      const ot = other.ecl.th08;
       if (other === dead || other.dead) continue;
-      const flags2 = ot ? ot.flags2 : (other.ecl.interactable ? 1 : 0);
-      if ((flags2 & 2) !== 0 || (flags2 & 1) === 0) continue;
+      const ot = other.ecl.th08;
+      // FUN_0042efb0's sweep gate (all.c:22367, same as
+      // killNonBossEnemies): registered/intangible (+0x3324 bit1) and
+      // exempt (+0x3328 bit6, e.g. the Sub14 controller) enemies survive.
+      if (!ot || (ot.flags & 2) !== 0 || (ot.flags2 & 0x40) !== 0) continue;
       this.spawnItem('pointStar', other.x, other.y, { state: 1 });
       total += chip;
       chip = Math.min(8000, chip + 30);
@@ -3204,15 +3230,11 @@ export class StageScene implements GameHost {
       const dx = b.x - z.x;
       const dy = b.y - z.y;
       if (dx * dx + dy * dy < z.radius * z.radius) {
-        // Bullet->item conversion on the quad kill (all.c:23597-23651):
-        // the quad's param6 (surfaced via player+0xe2a90) is the item type;
-        // 9 pays two time orbs, any other type > -1 pays one of that type.
-        if (z.convertType === 9) {
-          this.spawnItem('time', b.x, b.y, {});
-          this.spawnItem('time', b.x, b.y, {});
-        } else if (z.convertType > -1) {
-          this.spawnItem(z.convertType === 7 ? 'time' : 'pointSmall', b.x, b.y, {});
-        }
+        // Bullet->item conversion on the quad kill (all.c:23597-23651,
+        // DAT_018b8988 = the quad's param6): 9 pays TWO type-7 items, any
+        // other type > -1 pays one item of exactly that type (state arg 1;
+        // FUN_004400a0 still forces time items to their toss-arc state).
+        this.th08PayQuadConversion(z.convertType, b.x, b.y);
         return this.beginBulletClearFade(b);
       }
     }
@@ -3777,18 +3799,17 @@ export class StageScene implements GameHost {
       const bulletMaxY = Math.fround(b.y) + Math.fround(b.hitboxH) * 0.5;
       if (bulletMinY <= enemyMaxY && bulletMinX <= enemyMaxX &&
           enemyMinY <= bulletMaxY && enemyMinX <= bulletMaxX) {
-        {
-          // FUN_00451670 checks the PERSISTENT accumulator before adding any
-          // damage from this collision call. Crossing consumes the threshold
-          // even for a non-eligible/focused shot; only an extremely-human
-          // eligible shot turns that crossing into a state-3 time item.
-          while (e.timeOrbDamageAccumulator >= TH08_SHOT_TIME_ORB_THRESHOLD) {
-            if (this.runState.gaugeIsExtremelyHuman() && b.timeOrbEligible) {
-              this.spawnItem('time', b.x, b.y, { state: 3 });
-            }
-            e.timeOrbDamageAccumulator -= TH08_SHOT_TIME_ORB_THRESHOLD;
+        // FUN_00451670 checks the PERSISTENT accumulator before adding any
+        // damage from this collision call. Crossing consumes the threshold
+        // even for a non-eligible/focused shot; only an extremely-human
+        // eligible shot turns that crossing into a state-3 time item.
+        while (e.timeOrbDamageAccumulator >= TH08_SHOT_TIME_ORB_THRESHOLD) {
+          if (this.runState.gaugeIsExtremelyHuman() && b.timeOrbEligible) {
+            this.spawnItem('time', b.x, b.y, { state: 3 });
           }
-          rawDamage += Math.trunc(b.damage);
+          e.timeOrbDamageAccumulator -= TH08_SHOT_TIME_ORB_THRESHOLD;
+        }
+        rawDamage += Math.trunc(b.damage);
           this.damageEnemy(e, b.damage);
           b.state = 'collided';
           if (anm.hasScript(b.impactScript)) {
@@ -3813,7 +3834,6 @@ export class StageScene implements GameHost {
           b.vx /= 8;
           b.vy /= 8;
           this.playSfx(20);
-        }
       }
     }
     rawDamage += this.collideBombSlots(e, hitbox);
@@ -4006,15 +4026,12 @@ export class StageScene implements GameHost {
       c => !c.dead && c.ecl.parent === e && c.ecl.th08?.familiar
     );
     if (children.length === 0) return 0;
-    // FUN_0042adb0(1)'s per-child loop (all.c:20446-20528): each swept child
-    // in chain order gets the kill quad FIRST (FUN_0044df00, no draws), then
-    // its time-orb burst — local_30 orbs scattered by (frand01*(2*local_30),
-    // frandSigned*pi) around the CHILD, each spawned as FUN_004400a0(7,3)
-    // (state-3 velocity draws only when the item pool has a slot). The count
-    // tier for stage 1-2 (FUN_0042f270/2f230 both read the difficulty-side
-    // byte as < 4): childCount < 8 ? childCount*2+10 : 26. Then the child's
-    // own drop runs FUN_0042bea0(0) with +0x3304 = 8 (pointSmall, param_4=0)
-    // plus its (dropEffectId+4) effect burst, and the alternating enep pop.
+    // FUN_0041fd40 counts the FULL live chain at sweep entry (all.c:20428+
+    // walks +8 links from the master); every swept child uses that one
+    // snapshot for its tier: count < 8 ? count*2+10 : 26 (all.c:20456-20461,
+    // stage-1/2 difficulty branch). Then the child's own drop runs
+    // FUN_0042bea0(0) with +0x3304 = 8 (pointSmall, param_4=0) plus its
+    // (dropEffectId+4) effect burst, and the alternating enep pop.
     const childCount = children.length;
     const orbTier = childCount < 8 ? childCount * 2 + 10 : 26;
     for (const c of children) {
@@ -4061,21 +4078,40 @@ export class StageScene implements GameHost {
       this.spawnItem('pointSmall', c.x, c.y, {});
       this.playSfx(2 + (c.id & 1));
     }
-    // Master tail (all.c:20530-20544): two time orbs per swept child around
-    // the MASTER (frand01*128, frandSigned*pi), then the master's own
-    // (r32, +1/frame, 16-frame) kill quad.
-    for (let i = 0; i < childCount * 2; i++) {
+    // Master tail (all.c:20530-20544): one time orb per +0x3380 attach-ledger
+    // entry times two around the MASTER (frand01*128, frandSigned*pi, state
+    // arg 1 — FUN_004400a0 forces the toss arc), then the master's own
+    // (r32, +1/frame, 16-frame) kill quad. The ledger counts every attach
+    // minus children that already died through the normal death path — it
+    // diverges from the live chain length exactly when some children died
+    // before the master.
+    const tailOrbs = childCount * 2;
+    for (let i = 0; i < tailOrbs; i++) {
       const radius = this.rng.f() * 128;
       const angle = (this.rng.f() * 2 - 1) * Math.PI;
       this.spawnItem(
         'time',
         Math.fround(e.x + Math.cos(angle) * radius),
         Math.fround(e.y + Math.sin(angle) * radius),
-        {}
+        { state: 1 }
       );
     }
     this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16, 7);
     return childCount;
+  }
+
+  // Kill-quad bullet->item conversion (all.c:23597-23651 and its case-3/4
+  // twins): DAT_018b8988 == 9 pays TWO type-7 (time) items; any other id
+  // > -1 pays ONE item of exactly that native type. The state argument is
+  // 1; FUN_004400a0 internally forces time items to the toss-arc state
+  // regardless (all.c:30794-30796), which Th08ItemSpawnPool models.
+  private th08PayQuadConversion(t: number, x: number, y: number): void {
+    if (t === 9) {
+      this.spawnItem('time', x, y, { state: 1 });
+      this.spawnItem('time', x, y, { state: 1 });
+    } else if (t > -1) {
+      this.spawnItem(TH08_ITEM_TYPE_BY_ID[t] ?? 'pointSmall', x, y, { state: 1 });
+    }
   }
 
   private armTh08DeathClearZone(x: number, y: number, radius: number, growth: number, frames: number, convertType = -1): void {
@@ -4393,6 +4429,12 @@ export class StageScene implements GameHost {
       // positive HP (all.c:21613-21616). That clear is what lets the next
       // nonspell/spell phase die normally instead of freezing at 0 HP.
       if (this.runtime.shouldSettleEnemyDeath(e)) {
+        // LAB_0042d551 opens by decrementing the linked parent's +0x3380
+        // attach ledger (all.c:21627-21630) — before the sweep, the gauge
+        // delta and the death-mode switch. The sweep severs the parent link
+        // of every child it processes, so only children dying through this
+        // normal path reach the decrement.
+        if (e.ecl.parent?.ecl.th08) e.ecl.parent.ecl.th08.attachCount--;
         // FUN_0042d551 calls FUN_0042adb0(1) before the form-side gauge delta
         // and before entering the death-mode
         // switch, whose mode-0/1/2 path then calls FUN_0042bea0 for the
@@ -4645,13 +4687,7 @@ export class StageScene implements GameHost {
         b.quadKillType = null;
         const itemX = motion.transitionX ?? b.x;
         const itemY = motion.transitionY ?? b.y;
-        if (t === 9) {
-          this.spawnItem('time', itemX, itemY, {});
-          this.spawnItem('time', itemX, itemY, {});
-        } else if (t > -1) {
-          if (t === 6) this.spawnItem('pointStar', itemX, itemY, { state: 1 });
-          else this.spawnItem(t === 7 ? 'time' : 'pointSmall', itemX, itemY, {});
-        }
+        this.th08PayQuadConversion(t, itemX, itemY);
       }
       // op-79 0x2000 grace ticks in normal state (exe FUN_004241c0
       // all.c:16144-16146), immediately before the full-speed position add.
@@ -5611,11 +5647,12 @@ export class StageScene implements GameHost {
     for (const p of this.particles) {
       let alive = true;
       if (p.world) {
-        // FUN_0041a050 @ 0x41a050 is shared by effect ids
-        // 20/26/27/30/31 and runs before their ANM tick, including on the
-        // allocation frame: integrate acceleration/velocity, then retain the
-        // slot only inside the camera's 0.94 cosine cone and above the
-        // world-space ground plane (negative z).
+        // FUN_004264f0 (effect 51's world integrator, all.c:17989+) releases
+        // the VM once dot(normalize(pos-camera), facing) drops below 0.94 —
+        // cone-only liveness, NO ground-plane test (the z<0 kill was a TH07
+        // FUN_0041a050 carry-over; keeping it shortened firefly lives and
+        // perturbed the shared 512-slot effect pool's pressure). Integrate
+        // acceleration/velocity, then re-project survivors into the field.
         const w = p.world;
         w.vx = Math.fround(w.vx + w.ax);
         w.vy = Math.fround(w.vy + w.ay);
@@ -5634,7 +5671,7 @@ export class StageScene implements GameHost {
         const dl = Math.hypot(dx, dy, dz) || 1;
         const fl = Math.hypot(facing.x, facing.y, facing.z) || 1;
         const dot = (dx * facing.x + dy * facing.y + dz * facing.z) / (dl * fl);
-        alive = dot >= 0.94 && w.z < 0;
+        alive = dot >= 0.94;
         if (alive) {
           const projected = std.project(w.x, w.y, w.z, std.cameraFrame(std.frame), {
             x: 0, y: 0, width: PLAYFIELD.width, height: PLAYFIELD.height

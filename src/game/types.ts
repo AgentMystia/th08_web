@@ -738,6 +738,11 @@ export interface Th08EclState {
   // child-spawn ops 90-93 (all.c:12020-12117): the child is a FAMILIAR and
   // runs the per-tick human/youkai side sync FUN_0042c420.
   familiar: boolean;
+  // +0x3380: attached-children ledger on the MASTER (all.c:12044/12075/
+  // 12114 increment on attach, 21629 decrements when a linked child dies
+  // through the normal death path). The master-death sweep tail multiplies
+  // it by two for its orb count (all.c:20533).
+  attachCount: number;
   // Enemy flags bit 11 (0x800): the side mirror, synced to the player's
   // form byte each tick (FUN_0042c420 tail). 0 = human-side (materialized:
   // shootable, contact per team rules, damage flash), 1 = youkai-side

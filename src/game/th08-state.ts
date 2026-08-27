@@ -104,10 +104,14 @@ export class Th08RunState {
   // The player update's gauge block (0x44bdf0-0x44c012). Once the shot
   // cycle is armed and the separate idle timer has counted back to zero,
   // player+0xe2ae8 ramps the gauge contribution from zero: trunc(timer/15)
-  // through timer 300, then the fixed cap 21 (0x44be67-0x44bea8). This is
-  // NOT the player+8 focus-stability counter. The old max-like formula
-  // started at 20 and grew without bound, making the replay reach the
-  // extreme-human item-drop branch hundreds of frames too early.
+  // through timer 300 (the 0x41 fnstsw mask covers C0|C3, so EQUALITY also
+  // takes the divide path), then the fixed cap 21 (0x41a80000 @ 0x44be82;
+  // divisor 15.0 @ 0x4b6e94, bound 300.0 @ 0x4b6f30; the native Stage-2
+  // checkpoints -1002 @ f1237 / -2513 @ f1276 pin both the cap and the
+  // equality frame). Direction comes from the RAW focus key byte
+  // (player+3 @ 0x44bcb9) — equivalent to the form byte whenever the
+  // stability gate is open, since any edge closes the gate for 31 frames
+  // while the form settles within 8.
   gaugeFireDrift(focused: boolean, fireTimer: number): number {
     const amount = fireTimer > 300 ? 21 : Math.trunc(fireTimer / 15);
     if (amount === 0) return 0;
@@ -115,14 +119,14 @@ export class Th08RunState {
   }
 
   // The idle branch (0x44bef9-0x44c007): cycle disarmed for >= 30 frames
-  // and the gauge off zero — it drifts back toward the center by depth.
-  // Youkai side (0x44bf6b): >= tint(+2000) -> -5, >= 1 -> -2 (the -3
-  // effects-tier branch is dead code at team-0 thresholds, shallower tint
-  // shadows it). Human side (0x44bfa5): <= effects(-8000) -> +5,
-  // <= tint(-2000) -> +3, else +2.
+  // and the gauge off zero — it drifts back toward the center by depth,
+  // mirroring the human tiers: youkai side >= effects(+8000) -> -5,
+  // >= tint(+2000) -> -3 (0x44bd8f), >= 1 -> -2; human side
+  // <= effects(-8000) -> +5, <= tint(-2000) -> +3, else +2.
   gaugeIdleDrift(): number {
     const g = this.youkaiGauge;
-    if (g >= this.gaugeTintThresholds[1]) return -5;
+    if (g >= this.gaugeEffectThresholds[1]) return -5;
+    if (g >= this.gaugeTintThresholds[1]) return -3;
     if (g >= 1) return -2;
     if (g <= this.gaugeEffectThresholds[0]) return 5;
     if (g <= this.gaugeTintThresholds[0]) return 3;

@@ -179,6 +179,10 @@ export class Player {
   // (out of slice scope). Enemy familiars gate their whole tangibility on
   // this byte; bomb side selection reads it too.
   th08Form: 0 | 1 = 0;
+  // One-shot request from a youkai-ward form flip: park the shot-idle timer
+  // at 30 once the gauge block's bomb/dialogue gates allow it (consumed by
+  // StageScene.tickTh08Gauge; cleared if a bomb/dialogue intervenes first).
+  th08PendingIdlePark = false;
   // One-shot form-transition requests for the scene's etama effect layer
   // (FUN_0044aec0's toggle branch): 28 = effect 0x1c, the blue to-human
   // tint 0x808080ff; 29 = effect 0x1d, the red to-youkai tint 0x80ff8080.
@@ -310,7 +314,24 @@ export class Player {
       // passes 6 (player+8; 1-based here -> flip at 8). th08FocusFrames
       // was zeroed on the toggle frame and incremented right above, so
       // the flip lands on the 8th frame counting the toggle itself.
-      if (this.th08FocusFrames > 7) this.th08Form = this.focusHeld ? 1 : 0;
+      const flipped = this.th08FocusFrames > 7 && this.th08Form !== (this.focusHeld ? 1 : 0);
+      if (flipped) {
+        this.th08Form = this.focusHeld ? 1 : 0;
+        // A flip TO the youkai side switches the live SHT to the option
+        // system and parks the shot-idle timer (+0xe2ad0) at its 30 cap —
+        // but only through the bomb-gated machinery (+0xfdc == 0). The
+        // native gx stage-1 gauge curve (tmp/fa-native-gx/runstate.jsonl)
+        // pins the post-PRESS-FLIP fire drift to resume exactly 30 armed
+        // frames after the stability gate reopens (press f565 → flip f572
+        // → release f575 → gate f606 → fire timer from f636 → tier-1 at
+        // f651), while ly Stage-2's f704 press-flip — 26 frames into a
+        // running deathbomb, +0xfdc != 0 — resumes with NO extra delay
+        // (native checkpoint -1002 @ f1237). The scene consumes the flag
+        // in tickTh08Gauge only when the bomb gate is closed; the write
+        // itself lives in the un-decompiled shot-cycle region (0x4E4xx).
+        // §7-flagged model.
+        if (this.th08Form === 1) this.th08PendingIdlePark = true;
+      }
     }
     if (this.invulnFrames > 0) {
       const rateF32 = Math.fround(rate);
@@ -493,8 +514,8 @@ export class Player {
       // `3 < counter` on the 0-based player+8, i.e. five held frames.
       const prevHeld = this.th08FocusFrames;
       // Timer player+0xe2ae8 (the gauge fire-rate clock) re-arms to 0 at
-      // every focus transition (0x44b1b1/0x44b404). player+8 is the separate
-      // form-stability counter reset by the adjacent writes.
+      // every focus transition (asm 0x44b1b1/0x44b404). player+8 is the
+      // separate form-stability counter reset by the adjacent writes.
       this.th08FocusFrames = 0;
       this.th08GaugeFireTimer = 0;
       // The human/youkai sprite swap is immediate with the focus flip (no

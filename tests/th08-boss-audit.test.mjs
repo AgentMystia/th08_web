@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadEngine, makeStubAssetsTh08, makeStubAudio } from '../scripts/lib/replay-harness.mjs';
 
+
 // Boss-fight structural audit, round 2: clear-check extension (invulnerable
 // player, recorded inputs then hold-shoot) so the audit runs the ENTIRE boss
 // fight past the recording end, with per-frame boss-state change tracking
@@ -49,6 +50,15 @@ function makeScene(stageNumber, stage) {
 function auditStage(stageNumber, extraFrames) {
   const stage = rpy.stages[stageNumber - 1];
   const scene = makeScene(stageNumber, stage);
+  // Pre-seed the time-orb quota (var 10098's DAT_004c77f0 row): this audit
+  // asserts the Last-Spell CHAIN (sub37/sub32 spawn and run when the gate
+  // opens), not the orb economy. The gauge drift became native-pinned on
+  // 2026-08-28 (fire-timer formula + the youkai-flip idle park), which
+  // shifted this synthetic script's organic orb count below the Stage-1
+  // Lunatic quota of 3000 (2364 at the boss death) — the gate is therefore
+  // armed explicitly instead of leaning on the razor-edge economy.
+  const quotas = stageNumber === 1 ? [2000, 2500, 2700, 3000] : [6500, 7200, 7200, 7200];
+  scene.runState.currentTimeOrbs = quotas[rpy.difficulty];
   const inputs = stage.inputs;
   const frames = inputs.length + extraFrames;
   const log = [];
