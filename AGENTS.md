@@ -254,6 +254,44 @@ sub-context CALL channel (th08-subcontext), boss audits + presentation
 native seed values at st2 f1237/f1276 — gameplay changes must keep them
 or consciously regenerate). The 6 skipped tests are browser-only.
 
+## 7b. udGx01 divergence-hunt round (2026-08-27 pass 3, IN PROGRESS)
+
+Second oracle fixture `tests/replays/th8_udGx01.rpy` (Border Team Lunatic,
+anonyymi; st1 11460f seed 0x28ac rank8, st2 14024f seed 0x2653 rank12, both
+natively No-Miss with lives 4→4 bombs 3→3). Goal: formal No Miss on its
+stages 1-2 without replay-specific tuning. Working ledger: `tmp/gx-findings.md`
+(untracked). Verified facts so far:
+
+- Formal baselines on the new file reproduce the SAME defect family:
+  st1 earliest unexpected hit **f3184/85** (midboss t2995 rain spoke,
+  ownerSub15 sprite2#13, speed 2.20 vs ly's 2.10 — rank-lerped speed),
+  st2 **f2887/88** (aimed fairy Sub1 spawn f2779 speed 2.9625 == ly's).
+- RNG budget distances (same engine walker): gx st1 ≡ 864, st2 ≡ 22674.
+- Frame-exact A/B rebuilt on true replay path (old ?arcade=1 fa-port runs
+  NEVER restored the per-stage rngSeed — their bullet-level conclusions are
+  RETIRED): `tmp/pw-driver/frame-align-port-replay.mjs` boots through the
+  picker → startReplayStage; native side uses a pre-baked PURE WIN32 wine
+  prefix image (`localhost/th08winedop`, Containerfile.prefix in ignored
+  tmp/podman-trace) — fresh wow64 prefixes boot-mangled Th08.exe
+  (kernel32 c0000135) and win32 bakes in ~40 s. Boot now ~2 s.
+- Packet-level parity PROVEN for stage-1 opening through f930: spawns, hp
+  curves, kill frames, auto-fire volleys (sub3 template arm → 3 volleys at
+  identical frames/magnitudes), effect draw packets and P-item counts all
+  match native within a one-frame sampler phase. Port fires the same
+  bullets the exe does; earlier "native never fired" reads were my sampler
+  scanning bullet slots 0..95 while the exe allocates from index 1535 down.
+- REAL divergence: score wedge inside (600,900] (+105 @600 → +13.7k @900)
+  coincident with a net +290 u16 draw surplus concentrated around the
+  full-power conversion avalanche (~f889-924, enterTh08FullPower bursts of
+  hundreds of u32 draws). Prime suspect = economy-tier item/score path
+  feeding rank evolution upstream of the phantom contacts. NOT yet root-
+  caused; do not treat ±13k as harmless cascade noise until the native
+  per-frame SCORE curve (next step: extend native census to read RUN-state
+  score via run ptr 0x160f510) pins who pays what when.
+- Replay UX gap recorded: port returns to title when one block's stream ends;
+  the exe chains into the next block in-session (fa-native manifest shows
+  continuous s1→s2). Browser-side playback chaining is a fidelity TODO.
+
 ## 7. Standing residuals (honest, 2026-08-27 pass 2)
 
 - **Formal verifier**: stage-1 earliest unexpected hit **f3192**
