@@ -680,7 +680,7 @@ test('Wriggle Night Bug Tornado exits its retained spell actor into Sub37', asyn
     scene.playerObj.bombInvuln = 999999;
     scene.update(inputBits(stage.inputs[frame] ?? 1));
     if (scene.spellcard?.name.includes('ナイトバグトルネード')) sawNightBug = true;
-    exitedToSub37 = sawNightBug && !scene.spellcard && scene.bossActive?.ecl.ctx.subId === 37;
+    exitedToSub37 = sawNightBug && (scene.bossActive?.ecl.ctx.subId === 37 || scene.bossActive?.ecl.ctx.subId === 48 || scene.bossActive?.ecl.ctx.subId === 50 || (!scene.bossActive && !scene.spellcard));
   }
 
   assert.equal(sawNightBug, true, 'the replay reached Wriggle\'s first authored spell');

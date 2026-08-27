@@ -2212,7 +2212,7 @@ export class StageScene implements GameHost {
     let chip = 2000;
     for (const b of this.enemyBullets) {
       if (b.dead) continue;
-      this.spawnItem('point', b.x, b.y);
+      this.spawnItem('pointStar', b.x, b.y, { state: 1 });
       total += chip;
       chip = Math.min(8000, chip + 20);
     }
@@ -2223,7 +2223,7 @@ export class StageScene implements GameHost {
       if (other === dead || other.dead) continue;
       const flags2 = ot ? ot.flags2 : (other.ecl.interactable ? 1 : 0);
       if ((flags2 & 2) !== 0 || (flags2 & 1) === 0) continue;
-      this.spawnItem('point', other.x, other.y);
+      this.spawnItem('pointStar', other.x, other.y, { state: 1 });
       total += chip;
       chip = Math.min(8000, chip + 30);
     }
@@ -3580,6 +3580,11 @@ export class StageScene implements GameHost {
           // past frame 39 (0x27) the exe falls to the targetless branch
           // (accelerate 1/3, clamp 10) even while a target is fresh.
           const seeker = this.th08SeekerFor(b);
+          seeker.x = b.x;
+          seeker.y = b.y;
+          seeker.vx = b.vx;
+          seeker.vy = b.vy;
+          seeker.speed = b.speed;
           seeker.update(b.age < 40 ? this.th08TargetPos : null);
           b.vx = Math.fround(seeker.vx);
           b.vy = Math.fround(seeker.vy);
@@ -5552,12 +5557,6 @@ export class StageScene implements GameHost {
         item.vy = Math.fround(-0.5);
       }
       this.spawnEffectParticles(0, item.x, item.y, 1, 0xffffffff);
-      // FUN_004069f0(item, 0x45) re-arms the converted item's fragment VM.
-      // The VM arm consumes two u32 random operands (four raw u16); Stage-2
-      // f643 has exactly one converted field item and advances 32 draws
-      // versus the four pickup re-arms' 16 plus the other frame consumers.
-      this.rng.f();
-      this.rng.f();
       item.type = 'pointSmall';
     }
   }
