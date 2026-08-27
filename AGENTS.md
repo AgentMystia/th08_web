@@ -308,23 +308,31 @@ stages 1-2 without replay-specific tuning. Working ledger: `tmp/gx-findings.md`
   pickups whose credit SHAPE differs (instant vs 33-frame ramp) — resolve
   after the wipe fix lands if they survive it.
 
-## 7. Standing residuals (honest, 2026-08-27 pass 2)
+## 7. Standing residuals (honest, 2026-08-28 pass 4)
 
-- **Formal verifier**: stage-1 earliest unexpected hit **f3192**
-  (midboss phase-1 rain spoke — sub16 fire body, contact slack 1.44px),
-  stage-2 **f3367** (Sub2 aimed fairy bullet, slack 2.95px ≈ one speed
-  step, age 34) — unchanged by the ReplayInputSource feed fix. Every
-  kinematic ingredient of both bullets is machine-code- or
-  native-trace-pinned. Working unification hypothesis (pass 2): a small
-  RNG draw-count drift opening in (600,900] (score-only +1,334 by f900
-  with graze/power/lives exact at every native checkpoint through f1500)
-  shifts later random angle/speed draws (var 10060 etc.) by a few draws;
-  visible symptoms are the graze field deltas (-5 by f1800, +9 in the
-  (2400,3000] rain window) and the razor-edge phantom contacts. Pinning
-  the exact draw site needs native per-frame counts (ptrace closed) or a
-  full decompile audit of every consumer in the window. Do NOT paper over
-  the contacts.
-- **Stage-1 boss-fight pacing** (NEW, quantified pass 2): the stage
+- **The (600,900] draw-drift window is DEAD** (2026-08-28): the f585
+  56-draw/frame deficit was the death-wipe gate reading the ins_83 bit
+  (+0x3328) instead of the ins_127 boss-registration bit (+0x3324,
+  all.c:21659/12700) — ordinary enemies authoring ins_83(1) fired the
+  full-field wipe. The gauge drift family (fire-timer formula, youkai
+  idle -3 tier, the youkai-flip idle park through the +0xfdc bomb gate)
+  is now objdump/native-curve pinned (commit ce2ba87). Against the
+  native fa-native-gx census: **gx st1 draw parity f585 → f861, gauge
+  curve f620 → f917; ly st2 formal f2036 → f4487**.
+- **Formal verifier (post-ce2ba87)**: gx st1 **f3217** (Sub13 bullet,
+  spawn f2726), ly st1 **f3193** (Sub15 midboss rain spoke), gx st2
+  **f3021** (Sub4 aimed fairy, speed 2.9625), ly st2 **f4487** (Sub6,
+  speed 1.72). All four are the aimed-fairy/rain phantom family
+  downstream of the STILL-OPEN stream drifts: (a) gx st1 opens at
+  **f861** (+52 = two effect-51 fireflies — a ±2-slot effect-pool
+  pressure phase difference; port n62/n51/other counts otherwise match
+  the native steady state; needs native per-slot lifetimes to pin);
+  (b) gx st2 delta-domain parity holds to late stage except ONE -4
+  event at f696 (both HEAD and current — an extreme-gate time-orb the
+  native census did not pay) plus the constant -4 stage-entry offset.
+  Tooling: tmp/parity*.mjs, tmp/goffset.mjs (port[f-1]==native[f],
+  duplicate census rows = slowdown telemetry).
+- **Stage-1 boss-fight pacing** (quantified pass 2): the stage
   timeline itself is aligned — midboss spawn = authored t2935 exactly,
   蛍符 spell f3413-4280, boss spawn f5617, pre-boss dialogue Ctrl-skip
   recorded f5607-5751 — but the boss fight runs ~2.5-3x native's
