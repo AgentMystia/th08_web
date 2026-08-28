@@ -4396,17 +4396,16 @@ export class StageScene implements GameHost {
     // therefore eligible later in this same pass.
     this.runtime.update(this);
     for (let slot = 0; slot < ENEMY_POOL_CAP; slot++) {
-      // PASS-12 OPEN (reverted, frontier-gated): the lunge cache law around
-      // enemy REMOVAL has two contradictory census anchors — the st2 y=160
-      // wave (midboss self-deletes f1543 with hp30; the slot-1 fairy at
-      // f1545 must NOT inherit the lunge: |396-223|>=64 fails the gates and
-      // native keeps the fairy at hp10 until f1570.5 @x287, census-pinned)
-      // versus the f2925 Sub4->Sub5 alias witness. The discriminator is the
-      // removal path (FUN_0042bea0's 0x42be88 clear runs on SOME removals,
-      // not others — likely ins_1/cull vs damage-death); pinning it needs
-      // one more native anchor. Every variant that cleared on the f1543
-      // side broke the f2925 side (gx st2 f4365->f3019) and vice versa.
-      // Probes: tmp/p12-st2wave*.mjs, tmp/p12-sub4.mjs, tmp/p12-cache.mjs.
+      // PASS-15 RESOLVED: the removal-path discriminator is the death mode,
+      // pinned in the tickEnemyCore removal block below (FUN_0042bcf0's
+      // 0x42be88 identity clear runs for dispatcher-end teardowns only;
+      // mode-0 deaths and culls free the slot pointer-blind). This hook now
+      // only serves mode-0 aliasing: a dead mode-0 occupant whose slot was
+      // already reused adopts the replacement (the f2925 Sub4->Sub5 alias,
+      // gx st2 census), and an empty slot retires the pointer (the scan-side
+      // 0x42c88f inactive-slot clear). Retained corpses never reach it —
+      // their teardown clears the pointer first, which is what keeps the
+      // slot-1 fairy at f1546 from inheriting the midboss's lunge.
       // FUN_0042c660 clears DAT_018b89b4 when it reaches the pointed MEMORY
       // SLOT and finds its active bit gone. The native value is an Enemy*,
       // not an entity identity: if the allocator has already reused that
@@ -4446,6 +4445,12 @@ export class StageScene implements GameHost {
         continue;
       }
       e.frame++;
+      // FUN_0042bcf0's pointer clear fires only for dispatcher-end teardowns
+      // (script end / ins_1 -> -1 return at 0x42c99d). An off-screen cull
+      // frees the slot through a different, pointer-blind path — the st2
+      // Sub4 master's cull must NOT clear it, or the f2925 slot-5 alias
+      // (Ran pursuing the Sub5 replacement, census-pinned) breaks.
+      let deathViaCull = false;
       let transitioned: boolean;
       do {
         this.runtime.tickEnemyCore(this, e);
@@ -4460,7 +4465,10 @@ export class StageScene implements GameHost {
         this.tickSpellBonusDecay(e);
         this.updateEnemyTrailHistory(e);
         this.updateEnemyCull(e);
-        if (e.dead) break;
+        if (e.dead) {
+          deathViaCull = true;
+          break;
+        }
         transitioned = this.runtime.processEnemyCallbacks(this, e);
       } while (transitioned);
       if (e.dead) {
@@ -4470,6 +4478,16 @@ export class StageScene implements GameHost {
           // familiar marker VMs here — the slot null below ends the post-loop
           // sweep's ability to find this enemy (the 道中魔法阵残留 leak).
           this.releaseTh08EnemyVisuals(e);
+          // FUN_0042bcf0 @ 0x42be88: the dispatcher-end teardown
+          // identity-clears the Border option lunge pointer BEFORE the slot
+          // can be reused (census-pinned at gx st2 f1544: the mode-1 midboss
+          // tears down with the clear, so the slot-1 fairy entering f1546
+          // never inherits it — native holds the fairy at hp10 until
+          // f1570.5). Cull-path frees stay pointer-blind.
+          if (!deathViaCull && this.th08LungeEnemy === e &&
+              (((e.ecl.th08?.flags ?? 0) >> 20) & 7) !== 0) {
+            this.th08LungeEnemy = null;
+          }
           this.enemySlots[slot] = null;
           this.runtime.releaseEnemy(this, e);
         }
@@ -4545,6 +4563,21 @@ export class StageScene implements GameHost {
       }
       this.runtime.tickEnemyManagerTail(this, e);
       if (e.dead && this.enemySlots[slot] === e) {
+        // FUN_0042bcf0 @ 0x42be88: a retained corpse's ECL-script-end
+        // teardown (dispatcher -1 -> 0x42c9ba) identity-clears the Border
+        // option lunge pointer BEFORE its slot can be reused. A mode-0
+        // death instead frees the slot through FUN_0042bea0, which has no
+        // pointer write — there the pointer is retired only by the
+        // scan-side inactive-slot check (0x42c88f) or aliased by a
+        // same-pass slot reuse. The ins_129 mode bits are the
+        // discriminator, exactly as the native jump table left them.
+        // st2 wave mouth (census-pinned): the mode-1 midboss (sub7) tears
+        // down f1544 with the pointer clear, so the slot-1 fairy entering
+        // at f1546 must NOT inherit it (|395.5-player.x| >= 64 fails every
+        // publish gate) and survives at hp10 until f1570.5.
+        if (this.th08LungeEnemy === e && (((e.ecl.th08?.flags ?? 0) >> 20) & 7) !== 0) {
+          this.th08LungeEnemy = null;
+        }
         this.enemySlots[slot] = null;
         this.releaseTh08EnemyVisuals(e);
         this.runtime.releaseEnemy(this, e);
@@ -4555,6 +4588,9 @@ export class StageScene implements GameHost {
       if (!e.dead) continue;
       const slot = e.poolSlot;
       if (slot >= 0 && slot < ENEMY_POOL_CAP && this.enemySlots[slot] === e) {
+        if (this.th08LungeEnemy === e && (((e.ecl.th08?.flags ?? 0) >> 20) & 7) !== 0) {
+          this.th08LungeEnemy = null;
+        }
         this.enemySlots[slot] = null;
         this.releaseTh08EnemyVisuals(e);
         this.runtime.releaseEnemy(this, e);
