@@ -25,7 +25,9 @@ export const TH08_ITEM_POOL_SIZE = 2096;
 const f32 = Math.fround;
 
 function randomSigned(range: number, rng: Rng): number {
-  return f32(f32(f32(rng.f() * 2) - 1) * range);
+  // FUN_004143c0 @ 0x4143c0 / FUN_0043ed80 @ 0x43ed80:
+  // (u32 / 2147483648.0 - 1.0) * range in extended, then fstp to f32.
+  return f32((rng.f() * 2 - 1) * range);
 }
 
 export class Th08ItemSpawnPool {
@@ -99,24 +101,21 @@ export class Th08ItemSpawnPool {
       current.targetX = current.targetY = current.targetZ = undefined;
 
       if (state === 2) {
-        // FUN_004400a0 param_4==2 (asm 0x440256: push $0x43900000 =
-        // 288.0f, NOT 304 — 0x43980000 would be 304): target.x =
-        // rand01*288 + 48 (fadds 0x4b48c8=48.0), target.y = rand01*192 -
-        // 64. The earlier 304 transcription widened every death-drop
-        // scatter by 16px and shifted power-item collect timings.
-        current.targetX = f32(f32(options.rng.range(288)) + 48);
-        current.targetY = f32(f32(options.rng.range(192)) - 64);
+        // FUN_004400a0 param_4==2 (all.c:30814-30817):
+        // targetX = (float)(rng01 * 288.0 + 48.0), targetY = (float)(rng01 * 192.0 - 64.0).
+        current.targetX = f32(options.rng.f() * 288 + 48);
+        current.targetY = f32(options.rng.f() * 192 - 64);
         current.targetZ = 0;
         current.vx = current.x;
         current.vy = current.y;
         current.vz = current.z;
       } else if (state === 3 || state === 5) {
-        // FUN_004400a0 param_4==3: vy = -2.0 - rng01*0.2
-        // (0x3e4ccccd), vx a signed rng01*0.6. The old 0.1 transcription
-        // confused the IEEE-754 literal; native Stage-2 slot 1 starts at
-        // -2.017016 and reaches -1.957016 after its first update.
-        current.vy = f32(f32(-2) - f32(options.rng.range(0.2)));
-        current.vx = randomSigned(0.6, options.rng);
+        // FUN_004400a0 param_4==3 (all.c:30824-30827):
+        // vy = (float)(-2.0 - rng01 * 0.2), vx = (float)((rng01 * 2 - 1) * 0.6).
+        // 0x3e4ccccd / 0x3f19999a are f32 constants — narrow the multipliers
+        // themselves, not just the final store.
+        current.vy = f32(-2 - options.rng.f() * f32(0.2));
+        current.vx = randomSigned(f32(0.6), options.rng);
         if (options.playerDead) {
           current.state = 0;
           current.vx = 0;

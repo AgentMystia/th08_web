@@ -1870,7 +1870,7 @@ export class StageRuntime {
         };
         for (const seed of this.bulletsInPoolOrder(game)) {
           if (seed.effectState !== 0 || !this.isType8Seed(seed)) continue;
-          props.angle1 = normalizeAngle(seed.angle + Math.PI);
+          props.angle1 = normalizeNativeAngleF32(seed.angle, NATIVE_PI_F32);
           this.spawnBullets(game, e, props, { x: seed.x, y: seed.y }, occupied);
         }
         return;
@@ -3553,7 +3553,8 @@ export class StageRuntime {
       }
       case 37: {
         const target = Math.trunc(v.f32(a));
-        setFloatVar(target, Math.fround(normalizeAngle(gf(0))));
+        // FUN_0043edb0 @ all.c:11255: native float32 angle normalization
+        setFloatVar(target, normalizeNativeAngleF32(gf(0)));
         return null;
       }
       case 38: { // (xVar, yVar) = (cos, sin) * r  (all.c:11260-11288)
@@ -3722,10 +3723,9 @@ export class StageRuntime {
         const ease = gi(4);
         const speed = gf(8);
         let angle = e.x <= game.player.x
-          ? Math.fround(Math.fround(game.rng.f() * NATIVE_HALF_PI_F32) - NATIVE_QUARTER_PI_F32)
+          ? Math.fround(game.rng.f() * NATIVE_HALF_PI_F32 - NATIVE_QUARTER_PI_F32)
           : normalizeNativeAngleF32(
-              Math.fround(game.rng.f() * NATIVE_HALF_PI_F32),
-              2.356194496154785
+              Math.fround(game.rng.f() * NATIVE_HALF_PI_F32 + 2.356194496154785)
             );
         const rect = t.clampRect ?? { x1: 0, y1: 0, x2: 0, y2: 0 };
         // FUN_00422020 repeatedly passes enemy+0x2d34 through the identity

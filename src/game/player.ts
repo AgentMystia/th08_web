@@ -708,13 +708,17 @@ export class Player {
     if (!this.anm.hasScript(scriptId)) return null;
     const runner = new AnmRunner(this.anm, scriptId);
     const rect = this.anm.sprites.get(scriptId) ?? this.anm.sprites.get(64);
-    // Option-sourced records (source >= 1) spawn from the focused option's
-    // live trail position (player+0x6b0, FUN_0044fb70); the unfocused Border
-    // table uses source 0 (the player center). The exe reads the live option
-    // actor; this port anchors to the player-relative option position.
-    const source = shot.source >= 1 && this.th08OptionLive
-      ? { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) }
-      : { x: 0, y: 0 };
+    // Option-sourced records (source >= 1):
+    // In focused form (Yukari), spawns from the shikigami option trail (player+0x6b0).
+    // In unfocused form (Reimu), spawns from the yin-yang orb options (orb 1 = left, orb 2 = right).
+    let source = { x: 0, y: 0 };
+    if (shot.source >= 1) {
+      if (this.focusHeld && this.th08OptionLive) {
+        source = { x: Math.fround(this.th08OptionX - this.x), y: Math.fround(this.th08OptionY - this.y) };
+      } else if (shot.source === 1 || shot.source === 2) {
+        source = this.orbOffset(shot.source as 1 | 2);
+      }
+    }
     // TH08 impact: the settle path (all.c:40427-40431) re-arms the shot VM
     // with script sprite+0xb — one past the flight script, the odd-numbered
     // 30-frame fade-out family in player00.anm entry 0.

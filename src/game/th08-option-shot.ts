@@ -5,72 +5,55 @@ export interface Th08SeekTarget {
   y: number;
 }
 
-const f32 = Math.fround;
-
-function hypot32(x: number, y: number): number {
-  return f32(Math.hypot(x, y));
-}
-
-export class Th08SeekingOptionShot {
+export interface PlayerBulletTarget {
   x: number;
   y: number;
   vx: number;
   vy: number;
   speed: number;
-  heading: number;
+  angle: number;
+}
 
-  constructor(
-    x: number,
-    y: number,
-    angle: number,
-    speed: number,
-    private readonly mode = 1
-  ) {
-    this.x = f32(x);
-    this.y = f32(y);
-    this.speed = f32(speed);
-    this.heading = f32(angle);
-    this.vx = f32(f32(Math.cos(angle)) * speed);
-    this.vy = f32(f32(Math.sin(angle)) * speed);
-  }
+const f32 = Math.fround;
 
-  static spawnsNow(frame: number, interval: number, phase: number): boolean {
-    return interval > 0 && frame % interval === phase;
-  }
-
-  update(target: Th08SeekTarget | null): void {
-    if (this.mode !== 1) return;
-
-    if (!target) {
-      if (this.speed < 10) {
-        this.speed = f32(this.speed + f32(1 / 3));
-      }
-      const oldLength = hypot32(this.vx, this.vy);
-      if (oldLength !== 0) {
-        this.vx = f32(f32(this.vx / oldLength) * this.speed);
-        this.vy = f32(f32(this.vy / oldLength) * this.speed);
-      }
-    } else {
-      const dx = f32(target.x - this.x);
-      const dy = f32(target.y - this.y);
-      const distance = hypot32(dx, dy);
-      let denominator = f32(distance / f32(this.speed / 4));
-      if (denominator < 1) denominator = 1;
-      let desiredVx = f32(f32(dx / denominator) + this.vx);
-      let desiredVy = f32(f32(dy / denominator) + this.vy);
-      const desiredLength = hypot32(desiredVx, desiredVy);
-      let newSpeed = desiredLength;
-      if (newSpeed > 10) newSpeed = 10;
-      if (newSpeed < 1) newSpeed = 1;
-      this.speed = newSpeed;
-      if (desiredLength !== 0) {
-        this.vx = f32(f32(desiredVx / desiredLength) * newSpeed);
-        this.vy = f32(f32(desiredVy / desiredLength) * newSpeed);
-      }
+export function updateTh08SeekingOptionShot(b: PlayerBulletTarget, target: Th08SeekTarget | null): void {
+  if (!target) {
+    if (b.speed < 10) {
+      // DAT_004b6fd8 = 0x3eaaaaab = 0.3333333432674408f
+      b.speed = f32(b.speed + 0.3333333432674408);
     }
-
-    this.heading = f32(Math.atan2(this.vy, this.vx));
-    this.x = f32(this.x + this.vx);
-    this.y = f32(this.y + this.vy);
+    const oldLength = f32(Math.hypot(b.vx, b.vy));
+    if (oldLength !== 0) {
+      // Native: (vx * speed) / oldLength
+      b.vx = f32((b.vx * b.speed) / oldLength);
+      b.vy = f32((b.vy * b.speed) / oldLength);
+    }
+  } else {
+    // FUN_00450320 target branch, op-for-op: dx/dy stay in extended (x87
+    // subtract of two f32s never rounds before the hypot); the denominator
+    // narrows the FULL extended quotient `hypot / (speed / 4.0)` once, not
+    // the hypot before the divide.
+    const dx = target.x - b.x;
+    const dy = target.y - b.y;
+    let denominator = f32(Math.hypot(dx, dy) / (b.speed / 4));
+    if (denominator < 1) denominator = 1;
+    const desiredVx = f32(dx / denominator + b.vx);
+    const desiredVy = f32(dy / denominator + b.vy);
+    // The 10.0 clamp compares the EXTENDED hypot before any narrowing;
+    // the divisor of the final normalize is the f32-narrowed length (fVar1).
+    const lenExt = Math.hypot(desiredVx, desiredVy);
+    const desiredLength = f32(lenExt);
+    let newSpeed = desiredLength;
+    if (lenExt > 10) newSpeed = 10;
+    if (newSpeed < 1) newSpeed = 1;
+    b.speed = newSpeed;
+    if (desiredLength !== 0) {
+      b.vx = f32((desiredVx * b.speed) / desiredLength);
+      b.vy = f32((desiredVy * b.speed) / desiredLength);
+    }
   }
+
+  b.angle = f32(Math.atan2(b.vy, b.vx));
+  // Note: Position is NOT integrated here. Native FUN_00450320 only updates velocity/heading.
+  // The global bullet update loop handles the position integration.
 }

@@ -5,7 +5,7 @@ import {
 } from './types';
 import { Rng } from '../core/rng';
 import {
-  normalizeAngle, normalizeNativeAngleF32, clamp, NATIVE_PI_F32
+  normalizeAngle, normalizeNativeAngleF32, clamp, NATIVE_PI_F32, NATIVE_HALF_PI_F32
 } from '../core/util';
 import type { InputFrame } from '../core/input';
 import { Renderer, PLAYFIELD, SCREEN_W } from '../gfx/renderer';
@@ -19,7 +19,7 @@ import {
 } from './player';
 import { PlayerEffects, type PlayerEffectHandle } from './player-effects';
 import { Th08RunState } from './th08-state';
-import { Th08SeekingOptionShot } from './th08-option-shot';
+import { updateTh08SeekingOptionShot } from './th08-option-shot';
 import { Th08BorderBomb, TH08_BOMB_INVULN, type Th08BombHost } from './th08-border-bombs';
 import {
   Th08SpellDeclaration,
@@ -3639,7 +3639,6 @@ export class StageScene implements GameHost {
       if (!b) continue;
       if (b.dead) {
         this.playerBulletSlots[slot] = null;
-        this.th08Seekers?.delete(slot);
         continue;
       }
       if (b.state === 'fired') {
@@ -3649,17 +3648,7 @@ export class StageScene implements GameHost {
           // (player+0xe2aa4, the max-y enemy). Gates on the shot's own age:
           // past frame 39 (0x27) the exe falls to the targetless branch
           // (accelerate 1/3, clamp 10) even while a target is fresh.
-          const seeker = this.th08SeekerFor(b);
-          seeker.x = b.x;
-          seeker.y = b.y;
-          seeker.vx = b.vx;
-          seeker.vy = b.vy;
-          seeker.speed = b.speed;
-          seeker.update(b.age < 40 ? this.th08TargetPos : null);
-          b.vx = Math.fround(seeker.vx);
-          b.vy = Math.fround(seeker.vy);
-          b.speed = seeker.speed;
-          b.angle = seeker.heading;
+          updateTh08SeekingOptionShot(b, b.age < 40 ? this.th08TargetPos : null);
         }
       }
       // Both fired and collided slots keep integrating velocity at the
@@ -3694,7 +3683,6 @@ export class StageScene implements GameHost {
       b.age += rate;
       if (b.dead && this.playerBulletSlots[slot] === b) {
         this.playerBulletSlots[slot] = null;
-        this.th08Seekers?.delete(slot);
       }
     }
     this.compactLive(this.playerBullets);
@@ -3715,8 +3703,9 @@ export class StageScene implements GameHost {
         // velocity stands.
         const target = this.th08LungeEnemy;
         if (target) {
-          const spread = Math.fround(b.angle + Math.PI / 2);
-          const aim = Math.fround(Math.atan2(target.y - b.y, target.x - b.x) + spread);
+          const spread = Math.fround(b.angle + NATIVE_HALF_PI_F32);
+          const targetAngle = Math.fround(Math.atan2(target.y - b.y, target.x - b.x));
+          const aim = normalizeNativeAngleF32(targetAngle, spread);
           const speed = Math.fround(b.speed * 1.5);
           b.angle = aim;
           b.speed = speed;
@@ -3895,17 +3884,6 @@ export class StageScene implements GameHost {
     e.timeOrbDamageAccumulator += Math.min(rawDamage, 50);
   }
 
-  // Border Team callback-1 seeker state, keyed by fixed player-shot slot.
-  private th08Seekers = new Map<number, Th08SeekingOptionShot>();
-
-  private th08SeekerFor(b: PlayerBullet): Th08SeekingOptionShot {
-    let seeker = this.th08Seekers.get(b.poolSlot);
-    if (!seeker) {
-      seeker = new Th08SeekingOptionShot(b.x, b.y, b.angle, b.speed);
-      this.th08Seekers.set(b.poolSlot, seeker);
-    }
-    return seeker;
-  }
 
   private checkEnemyBulletCollision(b: EnemyBullet): void {
     const p = this.playerObj;
@@ -5062,11 +5040,16 @@ export class StageScene implements GameHost {
     } else {
       speed = Math.fround(b.speed - (elapsed * b.speed) / interval);
     }
-    // FUN_004074e0 AngleToVector: cos/sin and the rate-scaled speed are f32-staged
-    // before the velocity write (mirrors the speed-ramp path above).
+    // FUN_004286e0 AngleToVector: FSINCOS produces extended-precision cos/sin,
+    // multiplied by the (extended-promoted) speed, then fstp narrows the final
+    // product to f32. The earlier code over-narrowed cos/sin to f32 before the
+    // multiply — eclvm.ts:2720-2721 (the spawn-time path) already omits that
+    // inner Math.fround. Keeping it here introduced systematic per-tick drift
+    // on every direction-changed bullet (misread of "f32-staged" — the staging
+    // applies to the PRODUCT, not the trig operands).
     const scaledSpeed = Math.fround(Math.fround(speed) * rateF32);
-    b.vx = Math.fround(Math.fround(Math.cos(b.angle)) * scaledSpeed);
-    b.vy = Math.fround(Math.fround(Math.sin(b.angle)) * scaledSpeed);
+    b.vx = Math.fround(Math.cos(b.angle) * scaledSpeed);
+    b.vy = Math.fround(Math.sin(b.angle) * scaledSpeed);
     b.exDirFrac += this.slowRate;
     while (b.exDirFrac >= 1) {
       b.exDirFrac -= 1;
@@ -5095,12 +5078,11 @@ export class StageScene implements GameHost {
     if (b.y < 0 || (includeBottom && b.y >= 448)) b.angle = Math.fround(-b.angle);
     b.speed = bo.speed;
     // Native BulletManager.cpp:870-871 AngleToVector(&velocity, angle,
-    // speed * effectiveFramerateMultiplier): the rate-scaled speed and each
-    // cos/sin product store through float32 (same FUN_004074e0 staging as
-    // dirChangeBullet above).
+    // speed * effectiveFramerateMultiplier): same FUN_004286e0 chain as
+    // dirChangeBullet — FSINCOS in extended, multiply in extended, fstp to f32.
     const scaledSpeed = Math.fround(Math.fround(b.speed) * Math.fround(this.slowRate));
-    b.vx = Math.fround(Math.fround(Math.cos(b.angle)) * scaledSpeed);
-    b.vy = Math.fround(Math.fround(Math.sin(b.angle)) * scaledSpeed);
+    b.vx = Math.fround(Math.cos(b.angle) * scaledSpeed);
+    b.vy = Math.fround(Math.sin(b.angle) * scaledSpeed);
     b.exBounceTimes++;
     if (b.exBounceTimes >= maxTimes) b.exFlags &= ~0xc00;
   }
@@ -5426,7 +5408,7 @@ export class StageScene implements GameHost {
           it.vx = 0;
           it.vy = Math.fround(-0.7);
           it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
-          it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * moveRate));
+          it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
         } else {
           // TH08 ItemManager states 3/5 (all.c:31084-31108): the tossed item
           // climbs against 0.05 gravity, then flips to homing state 1 once it
@@ -5435,11 +5417,11 @@ export class StageScene implements GameHost {
           // acceleration tail. Native item-slot traces therefore advance vy by
           // 0.05 + 0.03*0.9 = 0.077 every full-speed frame (for example stage
           // 2 replay f473..476), rather than the 0.05 used by the old port.
-          it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.05) * globalRate));
+          it.vy = Math.fround(it.vy + Math.fround(0.05) * globalRate);
           it.x = Math.fround(it.x + Math.fround(it.vx * moveRate));
           it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
           if (it.vy > 0) it.state = 1;
-          it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * moveRate));
+          it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
           // FUN_00440500's state-3 arm reaches LAB_004409f2, whose first test
           // bypasses CalcItemBoxCollision while the state byte is still 3;
           // state 5 jumps to that same no-collection tail directly. This is
@@ -5462,12 +5444,9 @@ export class StageScene implements GameHost {
             it.vy = Math.fround(-0.7);
             it.state = 0;
           } else {
-            // FUN_0043f2b0 stages player-item deltas through float32 before
-            // atan2; its x87 result is then explicitly narrowed before
-            // FUN_004074e0 stores the velocity pair at +0x258/+0x25c.
-            const dx = Math.fround(p.x - it.x);
-            const dy = Math.fround(p.y - it.y);
-            const angle = Math.fround(Math.atan2(dy, dx));
+            // FUN_0044c1b0 @ all.c:37487-37497 computes atan2(py - iy, px - ix)
+            // in extended precision, returning f32 angle.
+            const angle = Math.fround(Math.atan2(p.y - it.y, p.x - it.x));
             it.vx = Math.fround(Math.cos(angle) * sht.autocollectSpeed);
             it.vy = Math.fround(Math.sin(angle) * sht.autocollectSpeed);
           }
@@ -5498,7 +5477,7 @@ export class StageScene implements GameHost {
           // snap to terminal speed immediately and let Stage-2's opening
           // P-items fall out before the replay's PoC sweep.
           if (it.vy >= 3) it.vy = 3;
-          else it.vy = Math.fround(it.vy + Math.fround(Math.fround(0.03) * moveRate));
+          else it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
         }
         // ItemManager::OnUpdate: `arcadeRegionSize.y + 16.0f <= y` — the
         // 448+16 boundary despawns INCLUSIVELY at exactly 464.
@@ -5510,24 +5489,23 @@ export class StageScene implements GameHost {
           this.adjustRank(-3);
         }
       }
-      // Player::CalcItemBoxCollision (0x0043b480): inclusive AABB of the
-      // item box (item ± f32(itemRadius/2), from ItemManager's local size
-      // vector) against the player's PRECOMPUTED grab corners
-      // (grabItemTopLeft/BottomRight = positionCenter ± grabItemSize, with
-      // grabItemSize fixed (12,12,5) — Player.cpp:1419/2444). Both sides
-      // round each corner through f32 before the comparisons; the
-      // algebraically equal center-distance form |Δ| <= r/2+12 rounds in
-      // different places and flipped marginal collects by one frame
-      // (th7_udMt01 stage 4 collect#161, oracle 4224 vs web 4225).
+      // Player::CalcItemBoxCollision (FUN_0044a5a0 @ 0x44a5a0): inclusive
+      // AABB of the ITEM-side box — computed live as item pos ± half of the
+      // ItemManager size vector (FUN_00440500 builds vec(SHT+0x18, SHT+0x18,
+      // 16.0) = (26,26,16), halved at collision via FUN_0040c7d0's /2.0) —
+      // against the PLAYER-side precomputed grab AABB (+0x3bc..0x3d0, written
+      // by the player tick as pos ± grabVec@+0x3ec = (12,12,5)). SHT+0x18 =
+      // itemRadius = 26.0 for Border (ply00a.sht header dump), so the two
+      // halves are 13 and 12 — an axis boundary at |Δ| = 25 inclusive.
       const itemHalf = Math.fround(sht.itemRadius * 0.5);
-      const itemMinX = Math.fround(Math.fround(it.x) - itemHalf);
-      const itemMaxX = Math.fround(Math.fround(it.x) + itemHalf);
-      const itemMinY = Math.fround(Math.fround(it.y) - itemHalf);
-      const itemMaxY = Math.fround(Math.fround(it.y) + itemHalf);
-      const grabMinX = Math.fround(Math.fround(p.x) - 12);
-      const grabMaxX = Math.fround(Math.fround(p.x) + 12);
-      const grabMinY = Math.fround(Math.fround(p.y) - 12);
-      const grabMaxY = Math.fround(Math.fround(p.y) + 12);
+      const itemMinX = Math.fround(it.x - itemHalf);
+      const itemMaxX = Math.fround(it.x + itemHalf);
+      const itemMinY = Math.fround(it.y - itemHalf);
+      const itemMaxY = Math.fround(it.y + itemHalf);
+      const grabMinX = Math.fround(p.x - 12);
+      const grabMaxX = Math.fround(p.x + 12);
+      const grabMinY = Math.fround(p.y - 12);
+      const grabMaxY = Math.fround(p.y + 12);
       if (!skipCollection && p.alive && !it.dead &&
           !(grabMinX > itemMaxX || grabMaxX < itemMinX ||
             grabMinY > itemMaxY || grabMaxY < itemMinY)) {
@@ -5724,7 +5702,7 @@ export class StageScene implements GameHost {
         w.x = Math.fround(w.x + w.vx);
         w.y = Math.fround(w.y + w.vy);
         w.z = Math.fround(w.z + w.vz);
-        w.angle = Math.fround(normalizeAngle(w.angle + w.angularVelocity));
+        w.angle = normalizeNativeAngleF32(w.angle, w.angularVelocity);
 
         const std = this.runtime.std;
         const camera = std.camera();
