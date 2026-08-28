@@ -140,7 +140,10 @@ export class Th08RunState {
   }
 
   // Enemy kill (0x42d65c-0x42d682, right before the death-mode switch):
-  // unfocused -200 (toward human), focused +200 (toward youkai).
+  // sign from the RAW focus key byte at player+3 (movzbl 0x17d5efb; test;
+  // jne) — unfocused -200 (toward human), focused +200 (toward youkai).
+  // This is the focus byte, NOT the form byte: they diverge for up to 8
+  // frames around every focus edge while the form settles.
   gaugeKillDelta(focused: boolean): number {
     return focused ? 200 : -200;
   }

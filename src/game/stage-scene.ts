@@ -4479,7 +4479,15 @@ export class StageScene implements GameHost {
         // but its cleared parent link suppresses the direct-familiar gauge
         // pull and item tail. Native Stage-2 f1553 exposes +200 for the
         // master followed by +800 for its four swept Sub10 familiars.
-        const gaugeKillDelta = this.runState.gaugeKillDelta(this.playerObj.th08Form === 1);
+        // The kill delta's sign byte is the RAW focus key (player+3), read
+        // at 0x42d65c (`movzbl 0x17d5efb; test; jne` -> +200 else -200) —
+        // NOT the form byte. Form follows focus only after the 8-frame
+        // flip settle, so kills inside that window (youkai form, focus
+        // released — e.g. gx st1 f2231's triple kill) flipped the sign,
+        // drifting the gauge +1200 vs native, keeping it short of the
+        // -8000 human-extreme threshold and silently disarming the
+        // per-death bonus time orb (4 draws each) from f2235 on.
+        const gaugeKillDelta = this.runState.gaugeKillDelta(this.playerObj.focusHeld);
         this.runState.addYoukaiGauge(gaugeKillDelta);
         for (let i = 0; i < sweptFamiliars; i++) {
           this.runState.addYoukaiGauge(gaugeKillDelta);
