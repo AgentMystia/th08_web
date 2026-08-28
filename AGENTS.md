@@ -209,33 +209,41 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-28 pass 7)
+## 6. Standing residuals (honest, 2026-08-29 pass 9)
 
-- CLOSED this pass (843f643 + fa6410f): (a) the extended-precision
-  staging family (homing atan2/cos-sin via FUN_0044c1b0+004286e0,
-  seeker op-for-op FUN_00450320, lunge FUN_00450240, et_ex FSINCOS,
-  item-spawn single-store reassociation, ECL op37/op67 normalize);
-  (b) the f2236/2250/2254/2255 staircase — NOT homing-collect razors:
-  the kill gauge delta signed on the FORM byte instead of the RAW focus
-  byte (player+3, objdump 0x42d65c: movzbl 0x17d5efb; test; jne → +200),
-  keeping the gauge short of the −8000 human-extreme threshold, which
-  silently disarmed the per-death bonus time orb (FUN_0042c420 tail,
-  4 u16 draws each). **st1 RNG stream now frame-exact over the FULL
-  native census coverage f0-f11457** (one self-cancelling ±4 pair at
-  f2254/f2260); gauge offset 0 from f919 through f2500.
-- Formal baselines (pass 7): gx st1 **f3184** (Sub15 rain spoke, spawn
-  f2995, age 180 — pure bullet geometry, stream exact); gx st2 **f4365**
-  (Sub4 aimed fairy); ly st1 f3174 / ly st2 f3708 (family shifts from
-  the realignment). 212 tests (206 pass + 6 browser skips).
-- st2 keeps ONE stream defect: **f696 −4** — port collects 8 items at
-  N696 vs native 10 (each collect pays a 2-draw id0 flash); the deficit
-  never repays. slot8 (powerSmall→pointSmall at full power) arrives one
-  frame late (5.21px short); the power timeline is frame-exact (128
-  crossing at N696 both sides) — the lag lives in its earlier pursue
-  path. Effect pool only 49/512 there: pool pressure ruled out.
-- Byte lesson: fire drift may read the form byte (stability gate makes
-  them equivalent, checkpoint-pinned), but the KILL delta and any
-  0x17d5efb read must use the RAW focus byte.
+- CLOSED this pass (4096776): the gauge fire-drift law fully decoded — the
+  0x44bdf0 block lives inside FUN_0044aec0 (gates: msg/0x4358bb, player+8>=30,
+  bomb +0xfdc); e2ad0 SATURATES at 30 (the >=30 tier path skips its own
+  advance at 0x44c007); the flip sites (0x44b1a5/0x44b3f8) write ONLY +8=0
+  and e2ae8=0 — no park write exists anywhere in .text. The old youkai-flip
+  park mis-fired on held presses (30 phantom countdown ticks) = the st1
+  f3139 −221 gauge deficit root. Replaced by the five-way-pinned SHORT-TAP
+  law (§7 in player.ts): a focus-OUT whose entire youkai visit fits inside
+  the still-closed +8 window (held<30, form still 1) restarts the 30
+  countdown. Gauge offset-curve changes 453→116 (residual = ±111
+  collect-phase transients); returns to 0 at f3244.
+- **Census tuple correction (pass 9)**: census enemies = [slot, hp, x, y,
+  eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
+  (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
+  HP; the midboss e[1]=1278 is HP).
+- Formal baselines (pass 9): gx st1 **f3586** (Sub24 ring now 3 frames
+  EARLY — the +8000 crossing moved; razor flipped sides); gx st2 **f4365**
+  (+900; the old 4.5px fire-position defect was damage-phase downstream of
+  the gauge); ly st1 f3176 / ly st2 **f4985** (+1277). 212 tests green.
+- st2 field parity (post-correction): enemy positions <0.4px exact through
+  f990; wave cadence exact through f1566. New measured defects: the port
+  kills the s1 y=160 left-mover waves 12-13 frames early from f1558
+  (shot-reach family, open); a sub12 enemy drifts 0.46→0.8px from f1787
+  (movement-precision family, open). Stream: delta-exact to f695; f696 −4,
+  then ±4 wander that does NOT repay (cum −124 @f4363, +200 @f4370).
+- st1: midboss x drifts ~4.3px by f3548 (native 160.1 vs port 155.8) — the
+  direct root of the f3586 ring razor (same movement-precision family).
+- Next-target queue (leverage order): (1) the item-collect ±1-tick family
+  — st2 f696's two unpaid collects and st1's ±111 gauge transients share
+  it; the 0x440500 walk's type switch is located (type 7 → FUN_004412b0)
+  but the motion integration is NOT in the walk — find the +0x2a4 writer;
+  (2) the f1558 early kills (amulet reach/spread geometry); (3) the
+  sub12/midboss 0.5-4.3px ECL float-path drifts.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
