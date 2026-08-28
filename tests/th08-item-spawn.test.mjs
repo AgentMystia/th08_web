@@ -69,9 +69,12 @@ test('time items force native state three and randomized death-drop motion', () 
 test('state two captures a random in-field tween target', () => {
   const seed = 0x4040;
   const expected = rng(seed);
-  // FUN_004400a0 param_4==2: target.x = rand01*304 + 48 (the 0x43900000
-  // literal — 304, not the TH07 288), target.y = rand01*192 - 64.
-  const tx = Math.fround(Math.fround(expected.range(304)) + 48);
+  // FUN_004400a0 param_4==2 (asm 0x440256: push $0x43900000 = 288.0f,
+  // fadds 0x4b48c8 = 48.0): target.x = rand01*288 + 48, target.y =
+  // rand01*192 - 64. 0x43900000 is unambiguously 288.0f (0x43980000 would
+  // be 304); an earlier pass transcribed it as 304 and this test encoded
+  // the misreading.
+  const tx = Math.fround(Math.fround(expected.range(288)) + 48);
   const ty = Math.fround(Math.fround(expected.range(192)) - 64);
   const pool = new Th08ItemSpawnPool();
   const item = pool.spawn({ x: 10, y: 400, type: 'point', state: 2, rng: rng(seed) });

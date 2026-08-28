@@ -273,6 +273,8 @@ const BG_MAX_CELL_STEPS = 24;
 export class StageScene implements GameHost {
   // Installed only by replay-verification tooling.
   traceReplayEvent?: ReplayTraceSink;
+  // Forensics gate for the per-item kinematics trace (window-scoped).
+  traceItemTick = false;
   rng = new Rng();
   difficulty = 1;
   // T8RP stage metadata stores the integer rank byte. The live accumulator is
@@ -1658,9 +1660,11 @@ export class StageScene implements GameHost {
     // many actually allocated, and the per-id occupancy after the call.
     if (this.traceReplayEvent) {
       let live = 0, n51 = 0, n62 = 0;
+      const byId: number[] = new Array(66).fill(0);
       for (const s of this.effectSlots) {
         if (s == null) continue;
         live++;
+        byId[s.effectId] = (byId[s.effectId] ?? 0) + 1;
         if (s.effectId === 51) n51++;
         else if (s.effectId === 62) n62++;
       }
@@ -1668,7 +1672,10 @@ export class StageScene implements GameHost {
         kind: 'effect-spawn', frame: this.frame,
         data: {
           effectId, requested, allocated: requested - remaining,
-          live, n51, n62
+          live, n51, n62, byId: byId.join(','),
+          ...(effectId === 0 ? {
+            src: new Error().stack?.split('\n').slice(2, 5).map((s) => s.trim().replace(/^at\s+/, '')).join(' <- ')
+          } : {})
         }
       });
     }
@@ -5325,6 +5332,18 @@ export class StageScene implements GameHost {
   }
 
   private updateItems(): void {
+    if (this.traceReplayEvent && this.traceItemTick) {
+      for (const it of this.items) {
+        this.traceReplayEvent({
+          kind: 'item-tick', frame: this.frame,
+          data: {
+            slot: it.poolSlot, type: it.type, state: it.state,
+            x: it.x, y: it.y, vx: it.vx, vy: it.vy, age: it.age,
+            px: this.playerObj.x, py: this.playerObj.y
+          }
+        });
+      }
+    }
     const p = this.playerObj;
     const sht = p.sht;
     if (this.th08ItemRunners) {
@@ -5713,6 +5732,30 @@ export class StageScene implements GameHost {
         const fl = Math.hypot(facing.x, facing.y, facing.z) || 1;
         const dot = (dx * facing.x + dy * facing.y + dz * facing.z) / (dl * fl);
         alive = dot >= 0.94;
+        // Firefly-death forensics (pool-pressure parity): FUN_004264f0's cone
+        // test is an f32 chain (D3DX normalize stores f32 components, x87 dot
+        // accumulated then ONE fstps rounding, fcomp against 0.94f =
+        // 0.9399999976158142). Emit the f32-emulated dot alongside the double
+        // one so razor-margin deaths are identifiable from traces; only
+        // near-boundary or dying fireflies are reported (volume).
+        if (this.traceReplayEvent && (Math.abs(dot - 0.94) < 0.01 || !alive)) {
+          const f32 = Math.fround;
+          const invDl = f32(1 / f32(dl));
+          const nx = f32(f32(dx) * invDl), ny = f32(f32(dy) * invDl), nz = f32(f32(dz) * invDl);
+          const invFl = f32(1 / f32(fl));
+          const ax = f32(f32(facing.x) * invFl), ay = f32(f32(facing.y) * invFl),
+            az = f32(f32(facing.z) * invFl);
+          const dot32 = f32(f32(f32(nx * ax) + f32(ny * ay)) + f32(nz * az));
+          this.traceReplayEvent({
+            kind: 'firefly-dot', frame: this.frame,
+            data: {
+              slot: p.poolSlot, age: p.age, dot, dot32,
+              alive, alive32: dot32 >= 0.9399999976158142,
+              x: w.x, y: w.y, z: w.z, cx: camera.x, cy: camera.y, cz: camera.z,
+              fx: facing.x, fy: facing.y, fz: facing.z
+            }
+          });
+        }
         if (alive) {
           const projected = std.project(w.x, w.y, w.z, std.cameraFrame(std.frame), {
             x: 0, y: 0, width: PLAYFIELD.width, height: PLAYFIELD.height
@@ -5743,6 +5786,10 @@ export class StageScene implements GameHost {
       p.age++;
       if (p.age >= p.life) alive = false;
       if (!alive) {
+        this.traceReplayEvent?.({
+          kind: 'effect-death', frame: this.frame,
+          data: { effectId: p.effectId, slot: p.poolSlot, age: p.age, life: p.life }
+        });
         p.age = p.life;
         if (this.effectSlots[p.poolSlot] === p) this.effectSlots[p.poolSlot] = null;
       }

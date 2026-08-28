@@ -9,7 +9,8 @@ export interface ReplayTraceEvent {
   kind:
     | 'timeline' | 'enemy-spawn' | 'enemy-kill' | 'ecl' | 'fire'
     | 'bullet-spawn' | 'bullet-contact' | 'graze' | 'item-spawn'
-    | 'item-collect' | 'effect-spawn' | 'rank' | 'frame' | 'rng';
+    | 'item-collect' | 'effect-spawn' | 'effect-death' | 'firefly-dot'
+    | 'item-tick' | 'rank' | 'frame' | 'rng';
   frame: number;
   replayFrame?: number;
   enemyId?: number;

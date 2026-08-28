@@ -125,7 +125,7 @@ frand·2n), child drop = pointSmall; master tail = +0x3380 attach ledger
 bullet→item conversion (all.c:23597-23651 and case-3/4 twins):
 param6==9 → TWO type-7 items; other >−1 → ONE of that type; state arg 1
 (FUN_004400a0 forces time items to their toss state internally; 7→state3,
-10→state5; state 2 = 304×192 scatter tween).
+10→state5; state 2 = 288×192 scatter tween — asm 0x440256 push $0x43900000=288.0f, the old 304 was a misread).
 
 **Death settle** (FUN_0041ed50 shared tail, all.c:21659-21668): a dying
 enemy with +0x3324 bit1 set and bit0 clear converts every live bullet to
@@ -209,7 +209,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-28 pass 5, post 6c24950)
+## 6. Standing residuals (honest, 2026-08-28 pass 6)
 
 - CLOSED this pass: the f861 firefly event (spawn geometry was
   camera+(0,+100,+30); native = camera + facing/2 + (0,−50,−100), the
@@ -232,6 +232,19 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   checksums, port four; stream re-aligns at f697 with constant −4;
   time-orb kinematics ruled out — the 5th native collect's item is not
   identifiable without a native item-position census).
+- PASS-6 RE-ATTRIBUTION (static, no wine): the f2236-family steps
+  (−4 at native f2236/2250/2254, −12 at f2255; frozen at −24 after) are
+  NOT pool saturation — at those frames the port has ZERO failed
+  allocations. They are native item-collect checksums the port misses:
+  razor-edge homing-item box arrivals (gx st1: time orb misses the
+  player grab box by 1.8px at f2235 → collects one frame late; gx st2
+  f696: powerSmall misses by 6.5px, then crosses full power and pays 0).
+  Same family as f696 — merged; the wine scope is now "item-position
+  census", not "per-slot effect lifetimes". The firefly/pool model is
+  exe-exact end-to-end (camera VM chain pinned this pass: 0x4e4030
+  camera channels at +0x6394/63a0/63ac, per-channel timers +0x63f4,
+  axis 0x4ea3e8 = normalize(A) per player tick; spawn uses −A; f32/double
+  verdict flips: zero over f2100-2400).
 - Boss-fight pacing ~2.5-3x native (timeline aligned: midboss t2935 exact,
   boss f5617; pools/hitboxes/rank authored-verified; suspect option
   layout / per-pellet damage vs SHT). Late spells time out.

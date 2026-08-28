@@ -214,6 +214,8 @@ if (traceRange || nativeTracePath) {
       eventTrace.push(enriched);
     }
   };
+  // High-volume per-item forensics trace opts in explicitly via its kind.
+  if (wantsTraceKind('item-tick')) scene.traceItemTick = true;
 }
 
 // Kill stream: instrument the runtime's killEnemy. Polling scene.enemies for
