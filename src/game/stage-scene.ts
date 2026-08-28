@@ -1540,7 +1540,8 @@ export class StageScene implements GameHost {
     // where a four-snow request at processing frame 939 finds only two slots.
     const requested = Math.max(0, count | 0);
     const spec = EFFECT_DRAW_COST[effectId];
-    for (let tries = 0, remaining = requested; tries < this.effectPoolCap && remaining > 0; tries++) {
+    let remaining = requested;
+    for (let tries = 0; tries < this.effectPoolCap && remaining > 0; tries++) {
       const slot = this.effectPoolCursor;
       this.effectPoolCursor = (this.effectPoolCursor + 1) % this.effectPoolCap;
       if (this.effectSlots[slot] !== null) continue;
@@ -1585,15 +1586,36 @@ export class StageScene implements GameHost {
           const randomSigned = (at: number, amplitude: number): number =>
             (random01(at) * 2 - 1) * amplitude;
           const camera = this.runtime.std.camera();
+          const facing = this.runtime.std.facing();
           const rate = Math.fround(this.slowRate);
+          // FUN_00426280 @ 0x426295-0x426366: the spawn base is vec(0x4ea3d0)
+          // (= A, the live RAW facing vector, |A|~680 in Stage 1) + vec
+          // (0x4ea3c4) (= B, the camera eye) via FUN_00409080, then each axis
+          // adds (rand − A/2) with divisor _DAT_004b42ec = 2.0: x = signed(60),
+          // y = signed(100) − _DAT_004b4530(50.0), z = rand(100) − _DAT_004b4980
+          // (100.0) — net center = B + A/2 + (0, −50, −100), the midpoint of
+          // the view ray. The old model pinned camera + (0, +100, +30), which
+          // coincides only at one facing pose; as the Stage-1 facing track
+          // lerps to (0,500,460) the native center walks to camera +
+          // (0,200,130) while the port stayed ~100 units behind along the view
+          // axis, spawning inside/behind the 0.94 cone edge (center dot ≈0.90
+          // vs native ≈0.99). Port fireflies died at spawn, kept ~2 effect-
+          // pool slots free, and let extra effect-51 arms allocate — the gx
+          // st1 f861 +52 draw event. Float ops follow the native f32 chain:
+          // per axis pos = f32(randTerm + f32(−A/2)) + f32(A + B), each store
+          // rounded like the fstp at 0x426302/0x426334/0x426366.
+          const ax = Math.fround(facing.x);
+          const ay = Math.fround(facing.y);
+          const az = Math.fround(facing.z);
+          const addAxis = (
+            base: number, randTerm: number, aComp: number
+          ): number => Math.fround(
+            Math.fround(base + aComp) + Math.fround(randTerm + Math.fround(-aComp / 2))
+          );
           world = {
-            // FUN_00426280: position = DAT_004ea3c4 (the live camera) plus
-            // signed(60), signed(100)+100, rand(100)+30. The callback reads
-            // the zeroed +0x2b0 vector here, not the effect emitter's screen
-            // position passed to FUN_00425430.
-            x: Math.fround(camera.x + randomSigned(10, 60)),
-            y: Math.fround(camera.y + randomSigned(12, 100) + 100),
-            z: Math.fround(camera.z + random01(14) * 100 + 30),
+            x: addAxis(Math.fround(camera.x), Math.fround(randomSigned(10, 60)), ax),
+            y: addAxis(Math.fround(camera.y), Math.fround(randomSigned(12, 100) - 50), ay),
+            z: addAxis(Math.fround(camera.z), Math.fround(random01(14) * 100 - 100), az),
             vx: Math.fround(Math.fround(randomSigned(16, 0.001)) * rate),
             vy: Math.fround(Math.fround(randomSigned(18, 0.03)) * rate),
             vz: Math.fround(Math.fround(-random01(20) * 0.1 - 0.3) * rate),
@@ -1630,6 +1652,25 @@ export class StageScene implements GameHost {
       const burstDir = burstDirs?.[requested - remaining];
       if (burstDir) particle.burstDir = burstDir;
       remaining--;
+    }
+    // Forensics for the shared 512-slot pool's pressure phase (native /proc
+    // census collides against these allocations): what was requested, how
+    // many actually allocated, and the per-id occupancy after the call.
+    if (this.traceReplayEvent) {
+      let live = 0, n51 = 0, n62 = 0;
+      for (const s of this.effectSlots) {
+        if (s == null) continue;
+        live++;
+        if (s.effectId === 51) n51++;
+        else if (s.effectId === 62) n62++;
+      }
+      this.traceReplayEvent?.({
+        kind: 'effect-spawn', frame: this.frame,
+        data: {
+          effectId, requested, allocated: requested - remaining,
+          live, n51, n62
+        }
+      });
     }
   }
 

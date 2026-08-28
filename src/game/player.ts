@@ -369,10 +369,6 @@ export class Player {
       }
     }
     if (this.controllable) this.move(input, rate);
-    // The option actor is a separate callback after the player's main
-    // movement job.  It therefore pursues this tick's player position; doing
-    // this before move() left its Stage-2 f907 source y exactly one frame old.
-    if (!this.hitState && this.dyingFrame < 0) this.updateTh08Option(input, rate);
     this.shooting = input.held.has('shoot') && this.controllable;
     // Shot-cycle ARM (exe FUN_0043a930): holding shoot re-arms the counter
     // to 0 only while it is DISARMED (< 0). A re-press mid-cycle does NOT
@@ -385,10 +381,24 @@ export class Player {
     // armed cycle keeps advancing and existing shots keep moving, but once
     // that cycle expires holding Z cannot start another until the message
     // ends.
+    // ORDER: the arm belongs to the player's MAIN callback, which the exe
+    // scheduler runs BEFORE the option actor's separate callback
+    // (FUN_0044e770). Arming after updateTh08Option made the option read a
+    // one-tick-stale fireFrame on every arm tick: its lunge gate failed and
+    // the fall-through clear of DAT_018b89b4 (player.ts updateTh08Option)
+    // ate the target the same tick's SHT FIRE pass needed for beh1 aiming.
+    // gx st1 witness: at replay f1171 the option volley flew straight;
+    // native aimed it from (323,148) and its id5 impact drew at counter
+    // 1181 — the port's first impact came at counter 1184 (draw parity
+    // broke −4 at f1181).
     if (allowShotArm && this.shooting && this.fireFrame < 0) {
       this.fireFrame = 0;
       this.fireFrameFrac = 0;
     }
+    // The option actor is a separate callback after the player's main
+    // movement job.  It therefore pursues this tick's player position; doing
+    // this before move() left its Stage-2 f907 source y exactly one frame old.
+    if (!this.hitState && this.dyingFrame < 0) this.updateTh08Option(input, rate);
     this.updatePose(input);
     this.runner.update(rate);
     this.th08OptionRunner?.update(rate);
