@@ -247,11 +247,22 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-29 pass 11)
+## 6. Standing residuals (honest, 2026-08-29 pass 15)
 
-- CLOSED this pass (11): **the st1 midboss movement defect family root** —
+- CLOSED this pass (15): **the st2 wave-mouth 12.5-frame-early kill** —
+  root was lunge-pointer ADOPTION, not volley timing or a damage veto
+  (the +104 draw bumps are option-firefly cadence, not hit sparks). The
+  retained-corpse teardown must identity-clear DAT_018b89b4
+  (FUN_0042bcf0 @0x42be88 via dispatcher −1 @0x42c9ba); mode-0 deaths
+  (FUN_0042bea0, no pointer write) and culls stay pointer-blind, and the
+  scan head (0x42c88f) clears only an inactive pointed slot — ins_129
+  mode bits discriminate. Post-fix: all four y=160 fairy kills
+  census-exact (port f1570/1578/1584/1585 ≡ native f1570.5/f1579/f1585/
+  f1586), census-clean window f1571-1806. Landed 4933480; 214 tests
+  green.
+- CLOSED pass 11: **the st1 midboss movement defect family root** —
   the op-75 rect clamp (§3 ECL block) plus the exe-exact firefly cone
-  decision (§3 effect-51 note). gx st1 frontier f3586 → f3630.
+  decision (§3 effect-51 note).
 - Pass-10 CLOSED: **the item side of the collect ±1-tick family**. The
   FUN_00440500 walk is fully decoded (§3 Items block): the +0x2a4 writer
   hunt closed (the walk integrates via dropped-this vector helpers), box
@@ -274,11 +285,13 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 11): **gx st1 f3630** (Sub24 ring razor, +44 over
-  pass-10's f3586 — the op-75 clamp fix moved the midboss back onto rails;
-  hit bullet ownerSub=24 spawnF=3557); gx st2 **f4365**; ly st1 f3176 /
-  ly st2 **f4985** (all held, no regressions). 220 tests green
-  (+tests/th08-rect-clamp.test.mjs).
+- Formal baselines (pass 15): **gx st1 f3630** (Sub24 ring razor; hit
+  bullet ownerSub=24 spawnF=3557), ly st1 f3176, ly st2 **f4985** all
+  held; gx st2 **f4365 → f3019** — a butterfly re-roll, NOT a pointer
+  regression: the old frontier rode a stream that was census-wrong from
+  f1546, the corrected stream re-rolls everything downstream, and the new
+  hit sits below the movement-precision family. Judges = census + RNG
+  curves (§1), and both improved. 214 tests green.
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
   trajectory is census-exact f3351-3524 and the residual 135 deviating
@@ -295,19 +308,22 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   histogram around f2930-3010). Downstream chain is proven: desync →
   Sub22 t190 op67 exit angle differs → 17px trajectory gap → the f3630
   razor.
-- st2 field parity (post-correction): enemy positions <0.4px exact through
-  f990; wave cadence exact through f1566. Measured defects: the port kills
-  the s1 y=160 left-mover waves 12-13 frames early from f1558
-  (shot-reach family, open); a sub12 enemy drifts 0.46→0.8px from f1787
-  (movement-precision family, open). Stream: delta-exact to f695; f696 −4
-  (slot8, see above), then ±4 wander that does NOT repay (cum −124
-  @f4363, +200 @f4370).
-- Next-target queue (leverage order): (1) the st1 effect-pool 3-slot gap
-  (the f3630 razor's direct root; sharpest probe = native pool id
-  histogram, user-gated wine round); (2) the MOVEMENT-PRECISION family —
-  player micro-position f661+ (slot8/st2-f696 probe), sub12 0.5px,
-  f1558 early kills (also best served by the same wine round); (3)
-  boss-fight pacing downstream of that wall; (4) visual fog law.
+- st2 field parity: wave mouth census-exact post-4933480 (f1571-1806
+  clean). **New first residual — sub12 spawn angle mirrored around 90°**:
+  port angle f32 1.6721524 (down-left) vs native ≈1.4694 (down-right),
+  vy and the ins_71 +0.05/f ramp identical; angle = var[10048] +
+  var[10035]·(π/16) (sub12 t0 ins_27/25 → ins_65), vars inherited from
+  the spawner sub11 (ins_91 t50..210, life 100) — the ±sign lives
+  upstream in the wave-controller float-op chain (next dig). Downstream
+  of it the drift compounds (2-7px by f2880) and gates gx st2's f3019.
+  Stream RNG: the ±4 wander family unchanged (does not repay).
+- Next-target queue (leverage order): (1) the sub12 spawn-angle var
+  chain (mirror sign in the wave-controller float ops; directly gates the
+  gx st2 f3019 razor); (2) the st1 effect-pool 3-slot gap (the f3630
+  razor's direct root; sharpest probe = native pool id histogram,
+  user-gated wine round); (3) the MOVEMENT-PRECISION family — player
+  micro-position f661+ (slot8/st2-f696 probe, wine-gated); (4) boss-fight
+  pacing downstream of those walls; (5) visual fog law.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
