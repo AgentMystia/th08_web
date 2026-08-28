@@ -5034,8 +5034,13 @@ export class StageScene implements GameHost {
       } else if (mode === 'absolute') {
         b.angle = Math.fround(d.angle);
       } else {
-        const dx = Math.fround(this.player.x - b.x);
-        const dy = Math.fround(this.player.y - b.y);
+        // FUN_004326e0 (0x80 aimed) calls FUN_0044c1b0(bullet+0xd44):
+        // atan2(py - by, px - bx) with EXTENDED-precision differences (the
+        // x87 subtract of two f32s never rounds before the fpatan), one
+        // f32 store, then FUN_0043edb0's wrap-add. Pre-narrowing dx/dy
+        // through f32 double-rounds the aim of every aimed dir-change.
+        const dx = this.player.x - b.x;
+        const dy = this.player.y - b.y;
         const aim = dx === 0 && dy === 0
           ? Math.fround(Math.PI / 2)
           : Math.fround(Math.atan2(dy, dx));

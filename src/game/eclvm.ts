@@ -46,8 +46,14 @@ function nativeAngleTowardPlayer(
   sourceX: number,
   sourceY: number
 ): number {
-  const dx = Math.fround(playerX - sourceX);
-  const dy = Math.fround(playerY - sourceY);
+  // FUN_0044c1b0 computes atan2(py - iy, px - ix) with EXTENDED-precision
+  // differences (x87 subtract of two f32s never rounds before fpatan) and
+  // a single f32 store. Every engine aim site goes through it — the ECL
+  // (all.c:11574, enemy+0x2d34), the bullet aimed dir-change (FUN_004326e0
+  // @ 24036, bullet+0xd44) and item homing (FUN_00440500 @ 31064,
+  // item+0x2a4). Pre-narrowing dx/dy double-rounds every aimed angle.
+  const dx = playerX - sourceX;
+  const dy = playerY - sourceY;
   return dx === 0 && dy === 0
     ? NATIVE_HALF_PI_F32
     : Math.fround(Math.atan2(dy, dx));
