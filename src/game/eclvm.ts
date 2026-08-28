@@ -3670,10 +3670,12 @@ export class StageRuntime {
         // with a stale snapshot our displacement collapsed to (0,144) and
         // parked the boss at (96,96), out of the player's shot column.
         if (s.th08) {
+          // Native case 0x3e writes +0x2d34/+0x2d38/+0x2d3c then calls
+          // FUN_0042c180, so the snapshot ins_64 sees is the clamped value.
+          this.applyTh08RectClamp(e);
           s.th08.loopHeadX = Math.fround(e.x);
           s.th08.loopHeadY = Math.fround(e.y);
         }
-        this.applyTh08PlayerClamp(game);
         return null;
       }
       case 64: { // interpolate position to (x, y) over `duration` frames,
@@ -4350,12 +4352,22 @@ export class StageRuntime {
     s.axisSpeed = { x: 0, y: 0, z: 0 };
   }
 
-  private applyTh08PlayerClamp(game: GameHost): void {
-    // FUN_0042c180 @ all.c:21039-21071: while the clamp rect is armed, every
-    // op-63 setPos also clamps the PLAYER into the rect. The player-side
-    // write lands with the Border Team motion wiring (Step 3); armed rects
-    // stay stored meanwhile.
-    void game;
+  // FUN_0042c180 @ all.c:21039-21071: while flags bit 19 (op 75) is armed,
+  // clamp the enemy's OWN logical position (+0x2d34/+0x2d38) into the armed
+  // rect, branch-for-branch (write only when a bound is crossed; the written
+  // bounds are the op-75 f32 fields). FUN_0040b460 is an identity accessor —
+  // the clamped vector is the enemy position, NOT the player (the old name
+  // misread that and left the whole mechanism a no-op: the stage-1 midboss's
+  // Sub22 t0 move to (192,144) rode 16px past the y<=128 ceiling while native
+  // pins at exactly 128.000 from the first clamped frame, census f3352+).
+  applyTh08RectClamp(e: Enemy): void {
+    const t = e.ecl.th08;
+    if (!t || (t.flags & 0x80000) === 0 || !t.clampRect) return;
+    const r = t.clampRect;
+    if (r.x1 > e.x) e.x = r.x1;
+    else if (r.x2 < e.x) e.x = r.x2;
+    if (r.y1 > e.y) e.y = r.y1;
+    else if (r.y2 < e.y) e.y = r.y2;
   }
 
   // TH08 familiar (使魔) spawn wrapper for the child-spawn ops 90-93 (exe

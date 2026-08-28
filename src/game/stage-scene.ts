@@ -4424,7 +4424,13 @@ export class StageScene implements GameHost {
       do {
         this.runtime.tickEnemyCore(this, e);
         if (e.dead) break;
+        // FUN_0042c180 clamps the op-75 rect on BOTH sides of the movement
+        // integrator FUN_0042deb0 (all.c:21347-21349) — an armed enemy can
+        // never render or collide outside its rect, no matter what the
+        // interp/polar displacement computes mid-curve.
+        this.runtime.applyTh08RectClamp(e);
         this.runtime.integrateEnemyPosition(e, this.slowRate);
+        this.runtime.applyTh08RectClamp(e);
         this.tickSpellBonusDecay(e);
         this.updateEnemyTrailHistory(e);
         this.updateEnemyCull(e);
@@ -5770,24 +5776,32 @@ export class StageScene implements GameHost {
         const dx = w.x - camera.x;
         const dy = w.y - camera.y;
         const dz = w.z - camera.z;
-        const dl = Math.hypot(dx, dy, dz) || 1;
-        const fl = Math.hypot(facing.x, facing.y, facing.z) || 1;
-        const dot = (dx * facing.x + dy * facing.y + dz * facing.z) / (dl * fl);
-        alive = dot >= 0.94;
-        // Firefly-death forensics (pool-pressure parity): FUN_004264f0's cone
-        // test is an f32 chain (D3DX normalize stores f32 components, x87 dot
-        // accumulated then ONE fstps rounding, fcomp against 0.94f =
-        // 0.9399999976158142). Emit the f32-emulated dot alongside the double
-        // one so razor-margin deaths are identifiable from traces; only
-        // near-boundary or dying fireflies are reported (volume).
+        // Exe-exact cone decision (asm 0x426549-0x4265a4): the displacement
+        // normalizes with D3DX semantics — the length rounds to f32 ONCE,
+        // then each component is its own f32 division — and the axis is the
+        // camera block's unit view vector (0x4ea3e8, the per-component-f32
+        // normalize of the raw facing track 0x4ea3d0). The dot itself
+        // (FUN_0040b540) accumulates all three products in x87 and rounds
+        // ONCE at the caller's fstp, so in JS it is a single fround of the
+        // exact double sum. fcomp 0x3f70a3d7 + fnstsw/test $5 + jp releases
+        // ONLY on the ordered below-threshold result (C0=1, C2=0): equality
+        // keeps, and a NaN dot (C2=1) parks on the KEEP path — the opposite
+        // of `dot >= 0.94`, which released NaNs and decided in double. The
+        // double-decide flipped razor flies (gx st1 f1062 slot41, margin
+        // 4e-10) against native and nudged the 512-slot pool's pressure.
+        const f32 = Math.fround;
+        const fx = f32(facing.x), fy = f32(facing.y), fz = f32(facing.z);
+        const dl = f32(Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const fl = f32(Math.sqrt(fx * fx + fy * fy + fz * fz));
+        const nx = f32(dx / dl), ny = f32(dy / dl), nz = f32(dz / dl);
+        const ax = f32(fx / fl), ay = f32(fy / fl), az = f32(fz / fl);
+        const dot = (dx * fx + dy * fy + dz * fz) / (Math.hypot(dx, dy, dz) * Math.hypot(fx, fy, fz));
+        const dot32 = f32(nx * ax + ny * ay + nz * az);
+        alive = !(dot32 < 0.9399999976158142);
+        // Firefly-death forensics (pool-pressure parity): dot is the double
+        // cosine (reference only), dot32 is the deciding f32 value above.
+        // Only near-boundary or dying fireflies are reported (volume).
         if (this.traceReplayEvent && (Math.abs(dot - 0.94) < 0.01 || !alive)) {
-          const f32 = Math.fround;
-          const invDl = f32(1 / f32(dl));
-          const nx = f32(f32(dx) * invDl), ny = f32(f32(dy) * invDl), nz = f32(f32(dz) * invDl);
-          const invFl = f32(1 / f32(fl));
-          const ax = f32(f32(facing.x) * invFl), ay = f32(f32(facing.y) * invFl),
-            az = f32(f32(facing.z) * invFl);
-          const dot32 = f32(f32(f32(nx * ax) + f32(ny * ay)) + f32(nz * az));
           this.traceReplayEvent({
             kind: 'firefly-dot', frame: this.frame,
             data: {

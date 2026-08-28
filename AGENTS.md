@@ -106,8 +106,8 @@ transition / spell arm / death-callback entry (FUN_00415c80).
 
 **ECL**: ins_2 = TH08 wait (clock gate ctx+0x90); timeline holds (ops
 7/10/13) net-freeze the clock, dispatcher fires on exact match. Death
-mode = flags bits 20-22 (ins_129; 0xff8fffff clears only those). ins_127
-registers the boss slot AND sets +0x3324 bit1 — that bit is the
+mode = flags bits 20-22 (ins_129; 0xff8fffff clears only those). ins_
+127 registers the boss slot AND sets +0x3324 bit1 — that bit is the
 death-wipe tail gate, NOT ins_83's +0x3328 bit1 (effect bit). ins_
 131/133/134 = phase HP pool/thresholds/timer; a phase jump frees all
 ins_135 sub-contexts and resets the FIRE template. ins_135 sub-contexts
@@ -126,6 +126,16 @@ bullet→item conversion (all.c:23597-23651 and case-3/4 twins):
 param6==9 → TWO type-7 items; other >−1 → ONE of that type; state arg 1
 (FUN_004400a0 forces time items to their toss state internally; 7→state3,
 10→state5; state 2 = 288×192 scatter tween — asm 0x440256 push $0x43900000=288.0f, the old 304 was a misread).
+**op-75 rect clamp** (pinned 2026-08-29 pass 11): ins_75 writes the rect
++0x3340..+0x334c and arms flags bit 19; FUN_0042c180 then clamps the
+enemy's OWN logical position (+0x2d34/+0x2d38 — FUN_0040b460 is an
+identity accessor, NOT a player clamp) into the rect EVERY manager pass,
+sandwiching the movement integrator (all.c:21347-21349), and again after
+every ins_63 setPos (case 0x3e). The ins_64 displacement base (loopHead)
+stays UNclamped, so a tween over the ceiling rides it: Sub22's
+ins_64(90,4,192,144) pins the st1 midboss at exactly y=128.000 (census
+f3352+) while x tweens free. All st1/st2 boss phases arm the same rect
+(32,48,352,128); ins_76 clears only the bit.
 
 **Items** (mgr global 0x1653648; pool 0x831 slots × stride 0x2e4, scan
 0..0x82f rotating next-fit; struct = embedded ANM VM in the first 0x2a4
@@ -176,7 +186,12 @@ pressure is load-bearing. Effect-51 firefly (0x426295-0x426366, pinned
 signed100−50, rand100−100) — the view-ray midpoint (A = vec 0x4ea3d0 =
 raw facing track, B = 0x4ea3c4 = eye; divisor 2.0 @ 0x4b42ec, −50 @
 0x4b4530, −100 @ 0x4b4980, all .rdata); cone test dot(normalize(pos−B),
-0x4ea3e8 unit axis) ≥ 0.94 (fnstsw $5 — NaN releases), ~25% die at
+0x4ea3e8 unit axis) ≥ 0.94 — exe-exact chain (pass 11): D3DX normalize
+(length ONE f32 round, per-component f32 divide), dot = single fround of
+the exact product sum; fcomp 0x3f70a3d7 + fnstsw/test $5 + **jp (PF)**:
+only the ORDERED below-threshold result releases — equality keeps and
+**NaN KEEPS** (C2=1 → PF=1 → keep path; the old "NaN releases" was
+backwards), ~25% die at
 spawn, rest reach the authored 241. Allocator FUN_00425430 = PARTIAL
 allocation over a 0x200 rolling scan; an init callback returning
 nonzero frees the slot same-frame (only FUN_004272e0 returns a
@@ -232,9 +247,12 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-29 pass 10)
+## 6. Standing residuals (honest, 2026-08-29 pass 11)
 
-- CLOSED this pass: **the item side of the collect ±1-tick family**. The
+- CLOSED this pass (11): **the st1 midboss movement defect family root** —
+  the op-75 rect clamp (§3 ECL block) plus the exe-exact firefly cone
+  decision (§3 effect-51 note). gx st1 frontier f3586 → f3630.
+- Pass-10 CLOSED: **the item side of the collect ±1-tick family**. The
   FUN_00440500 walk is fully decoded (§3 Items block): the +0x2a4 writer
   hunt closed (the walk integrates via dropped-this vector helpers), box
   = itemRadius/2 both sides (ply00a @24 = 24.0; the old "26.0" was a
@@ -256,9 +274,27 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 10, all held): gx st1 **f3586** (Sub24 ring 3
-  frames EARLY — the +8000 crossing moved; razor flipped sides); gx st2
-  **f4365**; ly st1 f3176 / ly st2 **f4985**. 219 tests green.
+- Formal baselines (pass 11): **gx st1 f3630** (Sub24 ring razor, +44 over
+  pass-10's f3586 — the op-75 clamp fix moved the midboss back onto rails;
+  hit bullet ownerSub=24 spawnF=3557); gx st2 **f4365**; ly st1 f3176 /
+  ly st2 **f4985** (all held, no regressions). 220 tests green
+  (+tests/th08-rect-clamp.test.mjs).
+- Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
+  op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
+  trajectory is census-exact f3351-3524 and the residual 135 deviating
+  rows all sit f3525+ (see the pool-gap residual below).
+- **st1 open root — effect-pool 3-slot composition gap → RNG desync
+  from f2965** (pass-11 evidence): RNG counter offset vs
+  fa-native-gx/rng-curve.jsonl is 0 through f2699 (85k draws frame-exact),
+  then at the first simultaneous pool-full (f2965) native allocates 1 of 4
+  fireflies (pre-batch 511) where the port allocates 4 (pre-batch 508) →
+  +78 draws, never repaid. All draw-costed spawns provably match; the gap
+  is 3 zero-draw VMs (candidates: id5/id51/id62 tick-boundary lifetimes,
+  or an unmodeled native zero-draw request; needs native pool-composition
+  evidence — a wine /proc round scanning the 0x200 effect pool's id
+  histogram around f2930-3010). Downstream chain is proven: desync →
+  Sub22 t190 op67 exit angle differs → 17px trajectory gap → the f3630
+  razor.
 - st2 field parity (post-correction): enemy positions <0.4px exact through
   f990; wave cadence exact through f1566. Measured defects: the port kills
   the s1 y=160 left-mover waves 12-13 frames early from f1558
@@ -266,14 +302,12 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   (movement-precision family, open). Stream: delta-exact to f695; f696 −4
   (slot8, see above), then ±4 wander that does NOT repay (cum −124
   @f4363, +200 @f4370).
-- st1: midboss x drifts ~4.3px by f3548 (native 160.1 vs port 155.8) — the
-  direct root of the f3586 ring razor (same movement-precision family).
-- Next-target queue (leverage order): (1) the MOVEMENT-PRECISION family —
+- Next-target queue (leverage order): (1) the st1 effect-pool 3-slot gap
+  (the f3630 razor's direct root; sharpest probe = native pool id
+  histogram, user-gated wine round); (2) the MOVEMENT-PRECISION family —
   player micro-position f661+ (slot8/st2-f696 probe), sub12 0.5px,
-  midboss 4.3px, f1558 early kills: ECL float-path + player-motion
-  instruction-level collation; the sharpest next probe is a wine round
-  dumping native player coords f660-700 (user-gated); (2) boss-fight
-  pacing downstream of that wall; (3) visual fog law.
+  f1558 early kills (also best served by the same wine round); (3)
+  boss-fight pacing downstream of that wall; (4) visual fog law.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
