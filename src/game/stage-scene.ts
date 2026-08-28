@@ -3858,6 +3858,10 @@ export class StageScene implements GameHost {
           e.timeOrbDamageAccumulator -= TH08_SHOT_TIME_ORB_THRESHOLD;
         }
         rawDamage += Math.trunc(b.damage);
+          this.traceReplayEvent?.({
+            kind: 'damage', frame: this.frame,
+            data: { slot: e.poolSlot, sub: e.ecl.subId, dmg: b.damage, hp: e.hp }
+          });
           this.damageEnemy(e, b.damage);
           b.state = 'collided';
           if (anm.hasScript(b.impactScript)) {

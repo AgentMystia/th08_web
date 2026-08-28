@@ -248,6 +248,15 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Boss-fight pacing ~2.5-3x native (timeline aligned: midboss t2935 exact,
   boss f5617; pools/hitboxes/rank authored-verified; suspect option
   layout / per-pellet damage vs SHT). Late spells time out.
+  Pass-6 measurement: total live enemy HP per 100f bucket matches native
+  EXACTLY f500-f2500 (d=0; transient ±13 inside the f2700 midboss bucket),
+  so the pacing defect lives in the post-f2926 boss fight only — it is
+  downstream of the contact wall, not the wall.
+- Gauge f918/f950 st1 steps (+400, one frame early) = kill/graze EVENT
+  PHASE flips (port kill lands 1-2 counter-frames early at razor-edge HP
+  zero crossings); the gauge machinery itself is checkpoint-pinned.
+  Unified residual family: per-frame micro-geometry (bullet paths, box
+  margins, HP zero crossings) — every macro subsystem is now exe-pinned.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
   fill-ratio micro-details.
 - Browser replay playback returns to title at a block's end; native

@@ -60,19 +60,25 @@ sweep + attach ledger), gauge machinery (see AGENTS §3), RNG draw economy
 
 ## Next targets (ordered)
 
-1. **f2236 pool-saturation −4 family** (gx st1): after the f2231 big
-   kill the port's 512-slot effect pool saturates and 4-draw
-   allocations start losing by 1-3 slots. Allocator semantics,
-   authored lifetimes and init-callback returns are all exe-verified
-   (pass 5) — the residual is the per-slot firefly cone-margin death
-   phase: needs a user-ordered wine round extending the census to
-   per-slot effect lifetimes. Decompound alternative: locate the
-   writer of the 0x4ea3c4-region camera struct to confirm A = raw
-   facing track (currently geometric + parity evidence).
-2. **gx st2 f696 −4**: full-power crossing frame, one extra native
-   paying collect; time-orb kinematics ruled out — needs a native
-   item-position census (same wine round).
-3. Boss-fight pacing ~2.5-3x slow (option layout / per-pellet damage).
+1. **Homing-item collect razor edges (f2236 + f696, merged)**: the −4
+   steps are native collect checksums the port misses — gx st1 time orb
+   misses the grab box by 1.8px at f2235 (collects one frame late), gx
+   st2 f696 powerSmall misses by 6.5px then crosses full power and pays
+   0. Both are long-homing pursuit micro-drift (~0.03-0.04px/frame) that
+   all pinned primitives cannot explain; a wine round with an
+   ITEM-POSITION census (per-frame x/y/vx/vy per slot) would split it.
+   The pool/firefly model is exe-exact (pass 6 pinned the whole camera
+   VM chain; f32-vs-double verdict flips: zero).
+2. **Formal contacts f2926/f4662/f3297/f4486**: phantom aimed-bullet
+   family; post-f2236 bullet rank-speed rolls ride the −24 draw drift,
+   so any stream realignment re-rolls the contact lottery. Same
+   micro-geometry family as the gauge event phase flips (f918/f950 st1
+   kills land 1-2 frames early at HP zero crossings) — pre-midboss
+   enemy HP curves match native EXACTLY, the wall is per-frame geometry,
+   not macro semantics.
+3. Boss-fight pacing ~2.5-3x slow (option layout / per-pellet damage)
+   — measured to live entirely POST-f2926; attack after the contact
+   wall falls.
 4. Visual: stage fog law, boss lifebar details. Replay block chaining UX.
 
 ## Tooling notes (hard-won)
