@@ -22,6 +22,16 @@ export class Th08RunState {
   currentTimeOrbs = 0;
   totalTimeOrbs = 0;
   stageTimeOrbs = 0;
+  // The ZunTimer at 0x18b89d4: CollectTimeOrb (FUN_004412b0) applies its ±111
+  // gauge step only while this timer reads zero (FUN_0040d3f0 gate @
+  // 0x441390-5). The master death sweep (FUN_0042adb0, param_2=1) rewrites it
+  // on every normal-path death: 0 when the dying enemy's child chain is
+  // non-empty (all.c:20542), then 50 when the dying enemy itself has a parent
+  // (all.c:20552-20554, the third of the 0/30/50 timer triple) — i.e. a
+  // familiar death closes the orb-gauge gate for 50 frames. The item
+  // manager's walk tail (FUN_00440500 @ 0x440c8b-0x440cb7) decrements it once
+  // per frame while nonzero, clamping at 0. BSS-zero at stage start.
+  timeOrbGaugeLockout = 0;
   gaugeLocked = false;
   // Border Team config (Player::AddedCallback @ 0x44d9ee-0x44da22, team 0):
   // limits ±10000, effects thresholds ±8000, tint thresholds ±2000. The
@@ -216,8 +226,12 @@ export class Th08RunState {
     return { award, creditedScore: this.addScore(award) };
   }
 
-  // Item::CollectTimeOrb @ 0x4412b0. Gauge movement is returned rather than
-  // applied here because the native branch also depends on the live player side.
+  // Item::CollectTimeOrb @ 0x4412b0. The ±111 gauge step is gated on the
+  // 0x18b89d4 lockout timer reading zero (FUN_0040d3f0(0) @ 0x441395), NOT on
+  // the spell timer: while a post-familiar-death lockout counts down (50
+  // frames, armed by FUN_0042adb0(1)'s child-with-parent tail), orb collects
+  // pay score/orbs/rank but leave the gauge alone. The sign follows the RAW
+  // focus byte (player+3, DAT_017d5efb): unfocused −111, focused +111.
   collectTimeOrb(options: {
     specialScoringMode?: boolean;
     timerCurrent?: number;

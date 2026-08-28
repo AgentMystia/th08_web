@@ -4050,6 +4050,11 @@ export class StageScene implements GameHost {
       t8.markerHandle?.release();
       t8.markerHandle = null;
       t8.markerActor = null;
+      // FUN_0042adb0's parented tail (all.c:20552-20554, gated on
+      // FUN_0041fd20 = a live parent link): a familiar's death sets the
+      // 0x18b89d4 time-orb-gauge lockout to 50 — CollectTimeOrb's ±111 gauge
+      // step is suppressed until the item-manager tail counts it down.
+      this.runState.timeOrbGaugeLockout = 50;
       return 0;
     }
     const children = this.enemies.filter(
@@ -4127,6 +4132,12 @@ export class StageScene implements GameHost {
       );
     }
     this.armTh08DeathClearZone(e.x, e.y, 32, 1, 16, 7);
+    // FUN_0042adb0's param_2!=0 block (all.c:20542) rewrites the 0x18b89d4
+    // lockout to 0 on every sweep whose dying enemy had a live child chain —
+    // a master's death re-opens the orb-gauge gate (the familiar-death 50
+    // above then wins the ordering when both apply, matching the binary's
+    // block A -> block B sequence).
+    this.runState.timeOrbGaugeLockout = 0;
     return childCount;
   }
 
@@ -4489,10 +4500,17 @@ export class StageScene implements GameHost {
         // per-death bonus time orb (4 draws each) from f2235 on.
         const gaugeKillDelta = this.runState.gaugeKillDelta(this.playerObj.focusHeld);
         this.runState.addYoukaiGauge(gaugeKillDelta);
+        const keep = this.runtime.killEnemy(this, e, bombContactThisFrame);
+        // A swept familiar's own ±200 lands on its OWN manager pass later in
+        // the same tick — AFTER the master's death tail, which hosts the
+        // extreme-gauge orb gate (all.c:21705-21710). Batching the children's
+        // deltas before killEnemy let the master read a post-cascade gauge:
+        // gx st1 f2231's sweep (gauge −7681, two severed Sub10 familiars)
+        // paid a phantom extreme orb (33 orbs/272 draws vs native 32/268);
+        // native's check at −7881 skips it, then the children's −200s land.
         for (let i = 0; i < sweptFamiliars; i++) {
           this.runState.addYoukaiGauge(gaugeKillDelta);
         }
-        const keep = this.runtime.killEnemy(this, e, bombContactThisFrame);
         if (!keep) e.dead = true;
       }
       this.runtime.tickEnemyManagerTail(this, e);
@@ -5540,6 +5558,11 @@ export class StageScene implements GameHost {
       }
     }
     this.items.length = w;
+    // Native item-manager walk tail (FUN_00440500 @ 0x440c8b-0x440cb7): the
+    // 0x18b89d4 time-orb-gauge lockout decrements once per walk while nonzero
+    // and clamps at 0 — AFTER this frame's collects, so a same-frame collect
+    // still sees the pre-decrement value.
+    if (this.runState.timeOrbGaugeLockout > 0) this.runState.timeOrbGaugeLockout--;
   }
 
   // TH08 item collection (ItemManager cases, reference/re-specs/
@@ -5611,11 +5634,12 @@ export class StageScene implements GameHost {
         break;
       case 'extend': p.lives = Math.min(8, p.lives + 1); break;
       case 'time': case 'time2': {
-        // Time orb (CollectTimeOrb, FUN_004412b0): score + orb counter +
-        // gauge ±111 when the spell timer reads zero + the night clock.
+        // Time orb (CollectTimeOrb, FUN_004412b0): score + orb counter + the
+        // gauge ±111 gated on the 0x18b89d4 post-familiar-death lockout timer
+        // reading zero (native item-manager tail decrements it once/frame).
         const r = run.collectTimeOrb({
           specialScoringMode: false,
-          timerCurrent: this.spellcard ? 1 : 0,
+          timerCurrent: this.runState.timeOrbGaugeLockout,
           playerRole: p.focusHeld ? 1 : 0
         });
         this.score = run.score;
