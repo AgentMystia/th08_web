@@ -209,54 +209,35 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-28 pass 6)
+## 6. Standing residuals (honest, 2026-08-28 pass 7)
 
-- CLOSED this pass: the f861 firefly event (spawn geometry was
-  camera+(0,+100,+30); native = camera + facing/2 + (0,−50,−100), the
-  view-ray midpoint — port spawned near/behind the cone edge, died
-  early, kept ~2 slots free) and the f1181 −4 (shot-cycle ARM ran after
-  updateTh08Option; on arm ticks the option's fall-through target clear
-  ate the same tick's beh1 aim). Measured vs native census: gx st1 draw
-  parity f861 → **f2236**; the gx st2 constant −4 stage-entry offset is
-  GONE (delta-domain exact to f695). 213/213 tests.
-- Formal baselines: gx st1 **f2926** (Sub13 in-family shift, spawn
-  f2788), ly st1 **f3297** (Sub15 rain spoke), gx st2 **f4662** (Sub4
-  aimed fairy, speed 3.54), ly st2 **f4486** (Sub6, speed 1.72 — same
-  family as f4487, −1 lottery noise). All phantom-family, downstream
-  of: (a) gx st1 draw stream opens **f2236** (−4 family during the
-  post-f2231 512/512 pool saturation; allocator semantics, authored
-  lives and init-callback returns all exe-verified — the residual is
-  per-slot firefly cone-margin death phase, needs a wine round
-  extending the census to per-slot effect lifetimes); (b) gx st2 ONE
-  −4 at f696 (full-power crossing frame: native pays five collect
-  checksums, port four; stream re-aligns at f697 with constant −4;
-  time-orb kinematics ruled out — the 5th native collect's item is not
-  identifiable without a native item-position census).
-- PASS-6 RE-ATTRIBUTION (static, no wine): the f2236-family steps
-  (−4 at native f2236/2250/2254, −12 at f2255; frozen at −24 after) are
-  NOT pool saturation — at those frames the port has ZERO failed
-  allocations. They are native item-collect checksums the port misses:
-  razor-edge homing-item box arrivals (gx st1: time orb misses the
-  player grab box by 1.8px at f2235 → collects one frame late; gx st2
-  f696: powerSmall misses by 6.5px, then crosses full power and pays 0).
-  Same family as f696 — merged; the wine scope is now "item-position
-  census", not "per-slot effect lifetimes". The firefly/pool model is
-  exe-exact end-to-end (camera VM chain pinned this pass: 0x4e4030
-  camera channels at +0x6394/63a0/63ac, per-channel timers +0x63f4,
-  axis 0x4ea3e8 = normalize(A) per player tick; spawn uses −A; f32/double
-  verdict flips: zero over f2100-2400).
-- Boss-fight pacing ~2.5-3x native (timeline aligned: midboss t2935 exact,
-  boss f5617; pools/hitboxes/rank authored-verified; suspect option
-  layout / per-pellet damage vs SHT). Late spells time out.
-  Pass-6 measurement: total live enemy HP per 100f bucket matches native
-  EXACTLY f500-f2500 (d=0; transient ±13 inside the f2700 midboss bucket),
-  so the pacing defect lives in the post-f2926 boss fight only — it is
-  downstream of the contact wall, not the wall.
-- Gauge f918/f950 st1 steps (+400, one frame early) = kill/graze EVENT
-  PHASE flips (port kill lands 1-2 counter-frames early at razor-edge HP
-  zero crossings); the gauge machinery itself is checkpoint-pinned.
-  Unified residual family: per-frame micro-geometry (bullet paths, box
-  margins, HP zero crossings) — every macro subsystem is now exe-pinned.
+- CLOSED this pass (843f643 + fa6410f): (a) the extended-precision
+  staging family (homing atan2/cos-sin via FUN_0044c1b0+004286e0,
+  seeker op-for-op FUN_00450320, lunge FUN_00450240, et_ex FSINCOS,
+  item-spawn single-store reassociation, ECL op37/op67 normalize);
+  (b) the f2236/2250/2254/2255 staircase — NOT homing-collect razors:
+  the kill gauge delta signed on the FORM byte instead of the RAW focus
+  byte (player+3, objdump 0x42d65c: movzbl 0x17d5efb; test; jne → +200),
+  keeping the gauge short of the −8000 human-extreme threshold, which
+  silently disarmed the per-death bonus time orb (FUN_0042c420 tail,
+  4 u16 draws each). **st1 RNG stream now frame-exact over the FULL
+  native census coverage f0-f11457** (one self-cancelling ±4 pair at
+  f2254/f2260); gauge offset 0 from f919 through f2500.
+- Formal baselines (pass 7): gx st1 **f3184** (Sub15 rain spoke, spawn
+  f2995, age 180 — pure bullet geometry, stream exact); gx st2 **f4365**
+  (Sub4 aimed fairy); ly st1 f3174 / ly st2 f3708 (family shifts from
+  the realignment). 212 tests (206 pass + 6 browser skips).
+- st2 keeps ONE stream defect: **f696 −4** — port collects 8 items at
+  N696 vs native 10 (each collect pays a 2-draw id0 flash); the deficit
+  never repays. slot8 (powerSmall→pointSmall at full power) arrives one
+  frame late (5.21px short); the power timeline is frame-exact (128
+  crossing at N696 both sides) — the lag lives in its earlier pursue
+  path. Effect pool only 49/512 there: pool pressure ruled out.
+- Byte lesson: fire drift may read the form byte (stability gate makes
+  them equivalent, checkpoint-pinned), but the KILL delta and any
+  0x17d5efb read must use the RAW focus byte.
+- Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
+  downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
   fill-ratio micro-details.
 - Browser replay playback returns to title at a block's end; native

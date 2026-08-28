@@ -7,34 +7,28 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` (213) + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-28, post 6c24950 — pass 5)
+## Convergence picture (2026-08-28, post fa6410f — pass 7)
 
 Formal-mode earliest unexpected player hit (THE metric):
 
 | fixture-stage | now | bullet family |
 |---|---|---|
-| udGx01 st1 | f2926 | Sub13 (spawn f2788, in-family shift) |
-| udGx01 st2 | f4662 | Sub4 aimed fairy, speed 3.54 |
-| udLy01 st1 | f3297 | Sub15 midboss rain spoke |
-| udLy01 st2 | f4486 | Sub6, speed 1.72 (family unchanged) |
+| udGx01 st1 | f3184 | Sub15 midboss rain spoke (spawn f2995, age 180) |
+| udGx01 st2 | f4365 | Sub4 aimed fairy (age 76, speed 3.11) |
+| udLy01 st1 | f3174 | Sub15 rain spoke (family shift) |
+| udLy01 st2 | f3708 | Sub1 (age 99, family shift) |
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
-All four current contacts are the same phantom family — razor-edge
-misalignment of aimed bullets — downstream of small RNG draw-stream
-drifts:
 
-- gx st1 draw parity vs native census (`tmp/fa-native-gx/`) now holds
-  to **f2236** (was f861). Two root causes closed this pass: the
-  firefly spawn center (native = camera + facing/2 + (0,−50,−100), the
-  view-ray midpoint — the port's camera+(0,+100,+30) spawned near the
-  0.94 cone edge and died early, keeping ~2 pool slots free → the
-  f861 +52), and the shot-cycle ARM/option-callback order (on arm
-  ticks the option's fall-through target clear ate the same tick's
-  beh1 SHT aim → the f1181 −4).
-- The gx st2 constant −4 stage-entry offset is GONE (delta-domain
-  exact to f695); ONE −4 remains at f696 (full-power crossing: five
-  native collect checksums vs four), stream re-aligns at f697.
-- RNG budget oracles: gx st1 ≡ 864, gx st2 ≡ 22674 (count-exact target).
+**st1 RNG stream: frame-exact parity over the FULL native census coverage
+f0-f11457** (was first-diff f2236 / frozen −24). Root cause closed this
+pass: the kill gauge delta signs on the RAW focus byte (player+3,
+objdump 0x42d65c), not the form byte — wrong signs kept the gauge short
+of the −8000 human-extreme threshold, silently disarming the per-death
+bonus time orb (4 draws each) = the whole f2236 staircase. Remaining st1
+defects are PURE bullet geometry (stream exact). st2 keeps one stream
+defect: f696 −4 (two item collects whose id0 flashes never pay; slot8
+arrives one frame late; power timeline verified frame-exact).
 
 ## Method that works (keep using it)
 
@@ -60,25 +54,18 @@ sweep + attach ledger), gauge machinery (see AGENTS §3), RNG draw economy
 
 ## Next targets (ordered)
 
-1. **Homing-item collect razor edges (f2236 + f696, merged)**: the −4
-   steps are native collect checksums the port misses — gx st1 time orb
-   misses the grab box by 1.8px at f2235 (collects one frame late), gx
-   st2 f696 powerSmall misses by 6.5px then crosses full power and pays
-   0. Both are long-homing pursuit micro-drift (~0.03-0.04px/frame) that
-   all pinned primitives cannot explain; a wine round with an
-   ITEM-POSITION census (per-frame x/y/vx/vy per slot) would split it.
-   The pool/firefly model is exe-exact (pass 6 pinned the whole camera
-   VM chain; f32-vs-double verdict flips: zero).
-2. **Formal contacts f2926/f4662/f3297/f4486**: phantom aimed-bullet
-   family; post-f2236 bullet rank-speed rolls ride the −24 draw drift,
-   so any stream realignment re-rolls the contact lottery. Same
-   micro-geometry family as the gauge event phase flips (f918/f950 st1
-   kills land 1-2 frames early at HP zero crossings) — pre-midboss
-   enemy HP curves match native EXACTLY, the wall is per-frame geometry,
-   not macro semantics.
-3. Boss-fight pacing ~2.5-3x slow (option layout / per-pellet damage)
-   — measured to live entirely POST-f2926; attack after the contact
-   wall falls.
+1. **Bullet-path micro-geometry (gx st1 f3184 + st2 f4365)**: with the st1
+   stream frame-exact end-to-end, every remaining contact is pure
+   per-frame geometry. Method: dump the contact bullet's full trajectory,
+   independently re-simulate the exe law in f32 from the same spawn
+   params, and diff — the port's own integration vs the decoded law.
+2. **st2 f696 −4**: two item collects whose id0 flashes never pay in the
+   port (8 vs 10 collects at N696; the deficit never repays — full-power
+   power→pointSmall conversion interaction suspected); slot8's one-frame
+   late arrival (5.21px short at f695; power/PoC timelines verified
+   exact, so the lag is in its earlier pursue path).
+3. Boss-fight pacing ~2.5-3x slow — measured to live entirely POST-wall;
+   attack after the contact wall falls.
 4. Visual: stage fog law, boss lifebar details. Replay block chaining UX.
 
 ## Tooling notes (hard-won)
