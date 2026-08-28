@@ -179,10 +179,6 @@ export class Player {
   // (out of slice scope). Enemy familiars gate their whole tangibility on
   // this byte; bomb side selection reads it too.
   th08Form: 0 | 1 = 0;
-  // One-shot request from a youkai-ward form flip: park the shot-idle timer
-  // at 30 once the gauge block's bomb/dialogue gates allow it (consumed by
-  // StageScene.tickTh08Gauge; cleared if a bomb/dialogue intervenes first).
-  th08PendingIdlePark = false;
   // One-shot form-transition requests for the scene's etama effect layer
   // (FUN_0044aec0's toggle branch): 28 = effect 0x1c, the blue to-human
   // tint 0x808080ff; 29 = effect 0x1d, the red to-youkai tint 0x80ff8080.
@@ -317,20 +313,18 @@ export class Player {
       const flipped = this.th08FocusFrames > 7 && this.th08Form !== (this.focusHeld ? 1 : 0);
       if (flipped) {
         this.th08Form = this.focusHeld ? 1 : 0;
-        // A flip TO the youkai side switches the live SHT to the option
-        // system and parks the shot-idle timer (+0xe2ad0) at its 30 cap —
-        // but only through the bomb-gated machinery (+0xfdc == 0). The
-        // native gx stage-1 gauge curve (tmp/fa-native-gx/runstate.jsonl)
-        // pins the post-PRESS-FLIP fire drift to resume exactly 30 armed
-        // frames after the stability gate reopens (press f565 → flip f572
-        // → release f575 → gate f606 → fire timer from f636 → tier-1 at
-        // f651), while ly Stage-2's f704 press-flip — 26 frames into a
-        // running deathbomb, +0xfdc != 0 — resumes with NO extra delay
-        // (native checkpoint -1002 @ f1237). The scene consumes the flag
-        // in tickTh08Gauge only when the bomb gate is closed; the write
-        // itself lives in the un-decompiled shot-cycle region (0x4E4xx).
-        // §7-flagged model.
-        if (this.th08Form === 1) this.th08PendingIdlePark = true;
+        // The flip sites (0x44b1a5/0x44b1b1 youkai-ward, 0x44b3f8/0x44b404
+        // human-ward) write ONLY player+8 = 0 and e2ae8 = 0 — no write to the
+        // idle timer e2ad0 anywhere in .text (its full write set is init
+        // 0x449e02, gauge-block decrement 0x44be57 / idle advance 0x44c007,
+        // and the materialize reset 0x44d90f). The old "idle park at 30"
+        // §7 model was a phantom: the gx stage-1 f565-651 episode it was
+        // tuned to is fully explained by the MIDBOSS DIALOGUE gate (0x44bdf0
+        // skips the whole block while dialogue is present; gauge frozen
+        // f585-635, dialogue-end item vacuum at f636, e2ae8 restarts from 0
+        // → tier-1 at f651), while the f2975 flip (no dialogue) resumes the
+        // fire ramp immediately at the +8 gate (tier-1 at f3022, native
+        // runstate-pinned) — a park would have delayed it to f3052.
       }
     }
     if (this.invulnFrames > 0) {
@@ -528,6 +522,22 @@ export class Player {
       // separate form-stability counter reset by the adjacent writes.
       this.th08FocusFrames = 0;
       this.th08GaugeFireTimer = 0;
+      // Short-tap idle park (§7): a focus-OUT whose ENTIRE youkai visit fit
+      // inside the still-closed +8 stability window (held frames < 30 and
+      // the form byte still youkai at the release — the return settle is
+      // still ~8 frames away) restarts the shot-idle countdown at its 30
+      // cap. Native gauge law: the countdown's length IS e2ad0's value at
+      // gate-reopen, and every fully-measured episode pins it — gx st1
+      // release@f576 (11 held frames → tier-1 at f576+75) vs release@f1239
+      // (101 held, drift was already live → f1239+45) vs press-only@f2975
+      // (held, → press+47) vs sub-settle taps f487/f829 (→ +45). No e2ad0
+      // write exists at the flip sites in .text (their full write set is
+      // +8=0, e2ae8=0, pose and the SHT swap), so the exact native arm of
+      // this law is unresolved; the model is this narrow condition,
+      // five-way pinned.
+      if (!focused && prevHeld < 30 && this.th08Form === 1) {
+        this.th08ShotIdleTimer = 30;
+      }
       // The human/youkai sprite swap is immediate with the focus flip (no
       // glide between different characters); refresh the pose runner here
       // since pose changes key off direction.

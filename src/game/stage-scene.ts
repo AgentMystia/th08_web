@@ -1845,16 +1845,7 @@ export class StageScene implements GameHost {
     // counters still run, so this gate belongs after tickGaugeTrickle().
     // Materialize state 3 is not excluded by the native dispatcher.
     if (p.hitState || p.dyingFrame >= 0 || this.th08Bomb || this.isDialogueActive()) {
-      // The idle park shares FUN_0044aec0's +0xfdc bomb gate: a flip that
-      // lands while a bomb runs never parks the idle timer (native ly
-      // Stage-2 f704 press-flip mid-deathbomb-bomb resumes drift with no
-      // extra delay; checkpoint -1002 @ f1237).
-      p.th08PendingIdlePark = false;
       return;
-    }
-    if (p.th08PendingIdlePark) {
-      p.th08PendingIdlePark = false;
-      p.th08ShotIdleTimer = 30;
     }
     // player+8 is 0-based (the initial normal-form callback begins at zero),
     // whereas Player.th08FocusFrames is incremented at this port's callback
