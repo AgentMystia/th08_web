@@ -203,6 +203,15 @@ const EFFECT_SCRIPT_LIFE: Record<number, number> = {
   // frame 20 (its +20 ins_1).
   38: 20
 };
+// Script-lifetime law (exe-pinned 2026-08-30 pass 12): the values above are
+// the AUTHORED ins_1 time T, and a VM dies on manager pass T after spawn.
+// FUN_0045e580 (VM init) already runs one dispatcher step at spawn time
+// (tick 0->1, executing the t=0 block), the spawn frame's manager pass
+// (FUN_00427bf0 @ priority 11) is step 2 (tick 1), and op1@t=T executes when
+// the timer tick first equals T — pass T. Spawns after the pass (priority
+// 12) shift one frame, which `age >= life` on the first-pass-relative age
+// also expresses. A +1 experiment (age > life) overshot the pool at the
+// f859 razor and was reverted against this chain.
 
 // TH08 sfx ids: .data 0x4c81b0 (36 filename pointers, loaded by the loop at
 // Th08.exe 0x45d45f; FUN_0045d550/FUN_0045d660 play by this index). Gains
@@ -1625,6 +1634,12 @@ export class StageScene implements GameHost {
             x: addAxis(Math.fround(camera.x), Math.fround(randomSigned(10, 60)), ax),
             y: addAxis(Math.fround(camera.y), Math.fround(randomSigned(12, 100) - 50), ay),
             z: addAxis(Math.fround(camera.z), Math.fround(random01(14) * 100 - 100), az),
+            // FUN_00426280 tail (asm 0x42636c-0x426407): vel/accel are
+            // drawn amplitudes — vel.x = ±0x3a83126f (f32 0.001), vel.y =
+            // ±0x03, vel.z = −rand(0.1)−0.3, acc = (±0x38d1b717, ±0x38d1b717,
+            // −0.0003) (f32 0.0001 each) — each ×slowRate ONCE here
+            // (FUN_00409120 with DAT_017ce8e0); the tick never re-scales.
+            // Verified per-constant against the disassembly 2026-08-30.
             vx: Math.fround(Math.fround(randomSigned(16, 0.001)) * rate),
             vy: Math.fround(Math.fround(randomSigned(18, 0.03)) * rate),
             vz: Math.fround(Math.fround(-random01(20) * 0.1 - 0.3) * rate),
@@ -4381,6 +4396,17 @@ export class StageScene implements GameHost {
     // therefore eligible later in this same pass.
     this.runtime.update(this);
     for (let slot = 0; slot < ENEMY_POOL_CAP; slot++) {
+      // PASS-12 OPEN (reverted, frontier-gated): the lunge cache law around
+      // enemy REMOVAL has two contradictory census anchors — the st2 y=160
+      // wave (midboss self-deletes f1543 with hp30; the slot-1 fairy at
+      // f1545 must NOT inherit the lunge: |396-223|>=64 fails the gates and
+      // native keeps the fairy at hp10 until f1570.5 @x287, census-pinned)
+      // versus the f2925 Sub4->Sub5 alias witness. The discriminator is the
+      // removal path (FUN_0042bea0's 0x42be88 clear runs on SOME removals,
+      // not others — likely ins_1/cull vs damage-death); pinning it needs
+      // one more native anchor. Every variant that cleared on the f1543
+      // side broke the f2925 side (gx st2 f4365->f3019) and vice versa.
+      // Probes: tmp/p12-st2wave*.mjs, tmp/p12-sub4.mjs, tmp/p12-cache.mjs.
       // FUN_0042c660 clears DAT_018b89b4 when it reaches the pointed MEMORY
       // SLOT and finds its active bit gone. The native value is an Enemy*,
       // not an entity identity: if the allocator has already reused that
