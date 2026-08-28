@@ -7,28 +7,37 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` (213) + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-28, post fa6410f — pass 7)
+## Convergence picture (2026-08-29, post ede504b — pass 11)
 
 Formal-mode earliest unexpected player hit (THE metric):
 
 | fixture-stage | now | bullet family |
 |---|---|---|
-| udGx01 st1 | f3184 | Sub15 midboss rain spoke (spawn f2995, age 180) |
+| udGx01 st1 | f3630 | Sub24 ring razor (spawn f3557) — was f3586 pre-clamp |
 | udGx01 st2 | f4365 | Sub4 aimed fairy (age 76, speed 3.11) |
-| udLy01 st1 | f3174 | Sub15 rain spoke (family shift) |
-| udLy01 st2 | f3708 | Sub1 (age 99, family shift) |
+| udLy01 st1 | f3176 | Sub15 rain spoke (spawn f2995, age 180) |
+| udLy01 st2 | f4985 | Sub4 (age 46) |
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
 
-**st1 RNG stream: frame-exact parity over the FULL native census coverage
-f0-f11457** (was first-diff f2236 / frozen −24). Root cause closed this
-pass: the kill gauge delta signs on the RAW focus byte (player+3,
-objdump 0x42d65c), not the form byte — wrong signs kept the gauge short
-of the −8000 human-extreme threshold, silently disarming the per-death
-bonus time orb (4 draws each) = the whole f2236 staircase. Remaining st1
-defects are PURE bullet geometry (stream exact). st2 keeps one stream
-defect: f696 −4 (two item collects whose id0 flashes never pay; slot8
-arrives one frame late; power timeline verified frame-exact).
+**Pass-11 closed the st1 midboss movement defect**: op-75's rect clamp
+(FUN_0042c180 — an ENEMY clamp, the identity accessor FUN_0040b460 was
+misread as a player clamp) runs every manager pass around the movement
+integrator and after every ins_63 setPos. The Sub22 ins_64(90,4,192,144)
+tween now rides the y ceiling exactly like native (census-exact 128.000
+from f3352; was parked at 144).
+
+**st1 RNG stream: offset-0 parity through f2699** (85k draws frame-exact
+vs fa-native-gx/rng-curve.jsonl, dedup keep-last). First persistent
+divergence f2965: both effect pools hit 512 full simultaneously; native's
+firefly batch allocates 1-of-4 (pre-batch 511), the port's 4-of-4
+(pre-batch 508) → +78 draws, never repaid. Gap = 3 zero-draw effect VMs
+(all draw-costed spawns provably match; id12/20/40/45/48 excluded —
+death/bomb/hit paths). Downstream chain proven: RNG desync → Sub22 t190
+op67 exit angle → 17px trajectory gap → the f3630 razor. Pinning the 3
+VMs needs a wine round scanning the 0x200 effect pool's id histogram
+f2930-3010 (user-gated). st2 keeps the f696 −4 collect deficit (slot8
+one frame late; movement-precision family).
 
 ## Method that works (keep using it)
 
@@ -54,16 +63,17 @@ sweep + attach ledger), gauge machinery (see AGENTS §3), RNG draw economy
 
 ## Next targets (ordered)
 
-1. **Bullet-path micro-geometry (gx st1 f3184 + st2 f4365)**: with the st1
-   stream frame-exact end-to-end, every remaining contact is pure
-   per-frame geometry. Method: dump the contact bullet's full trajectory,
-   independently re-simulate the exe law in f32 from the same spawn
-   params, and diff — the port's own integration vs the decoded law.
-2. **st2 f696 −4**: two item collects whose id0 flashes never pay in the
-   port (8 vs 10 collects at N696; the deficit never repays — full-power
-   power→pointSmall conversion interaction suspected); slot8's one-frame
-   late arrival (5.21px short at f695; power/PoC timelines verified
-   exact, so the lag is in its earlier pursue path).
+1. **st1 effect-pool 3-slot gap (the f3630 razor's direct root)**: RNG
+   draws match native frame-exact to f2699, then the first simultaneous
+   pool-full at f2965 splits the free-slot race. Candidates: id5/id51/id62
+   tick-boundary lifetimes or an unmodeled zero-draw request. Sharpest
+   probe: wine /proc round dumping the 0x200 effect pool's per-id
+   histogram f2930-3010 (user-gated); same round can take native player
+   coords f660-700 for the movement-precision family.
+2. **Movement-precision family**: st2 sub12 0.46→0.8px drift (f1787+),
+   f1558 early kills of the s1 y=160 left-movers, slot8/f696 player
+   micro-position — ECL float-path + player-motion instruction-level
+   collation.
 3. Boss-fight pacing ~2.5-3x slow — measured to live entirely POST-wall;
    attack after the contact wall falls.
 4. Visual: stage fog law, boss lifebar details. Replay block chaining UX.
