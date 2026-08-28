@@ -1502,7 +1502,14 @@ export class StageScene implements GameHost {
         ? { tween: { sx: spawned.x, sy: spawned.y, tx: spawned.targetX, ty: spawned.targetY ?? 0, elapsed: 0, frac: 0 } }
         : {})
     };
-    this.insertByPoolSlot(this.items, item);
+    // FUN_004400a0 links every spawn at the TAIL of the item manager's
+    // active list (+0x2dc/+0x2e0), and FUN_00440500 walks that list head to
+    // tail — iteration order is SPAWN order, not pool-slot order. The two
+    // diverge once the 2096-slot rotating cursor wraps or reuses freed
+    // slots, which reorders same-frame collects and with them the RNG draw
+    // sequence. Append keeps the dense array in spawn order (the compact in
+    // updateItems preserves relative order).
+    this.items.push(item);
     this.traceReplayEvent?.({
       kind: 'item-spawn', frame: this.frame,
       data: { type: item.type, slot: item.poolSlot, x: item.x, y: item.y, state: item.state }
@@ -5420,38 +5427,56 @@ export class StageScene implements GameHost {
           tw.elapsed++;
         }
       } else if (it.state === 3 || it.state === 5) {
-        if (p.hitState) {
-          // The first item pass in player state 2 routes tossed items through
-          // the dead-player fall: zero horizontal motion, write vy=-0.7,
-          // then perform the ordinary SHT-rate integration/gravity tail.
-          // Native Stage-2 f678 moves each former state-3 orb by -0.63px and
-          // stores vy=-0.673 instead of continuing its scatter trajectory.
-          it.state = 0;
-          it.vx = 0;
-          it.vy = Math.fround(-0.7);
-          it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
-          it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
+        // FUN_00440500 states 3/5 are TWO different toss laws, not one.
+        // State 3 (type-7 spawn arm, all.c:31084-31094): 0.05*global gravity,
+        // then the branch falls straight to the shared move label — ONE
+        // moveRate integration plus the 0.03*moveRate tail, and LAB_004409f2's
+        // state==3 test skips collection while the byte is still 3 (Stage-2
+        // native f661: a human-shot orb inside the grab box survives to crest
+        // instead of collecting on its allocation frame). The dead-player
+        // override (DAT_017d5ef8==2, i.e. hitState or the death squish) fires
+        // EVERY frame here: zero horizontal motion, vy=-0.7, ordinary-rate
+        // integration + tail (native Stage-2 f678: -0.63px, vy=-0.673).
+        // State 5 (type-10 tier orbs, 0x440746-0x4407e7): the branch
+        // integrates BEFORE the crest test; a non-crest frame jumps directly
+        // to the no-collection tail — NO 0.03 tail that frame. The crest
+        // frame sets state 1, then falls to the shared move label and
+        // integrates a SECOND time (double moveRate step) before paying the
+        // 0.03 tail; its dead-player override lives inside the crest arm
+        // only, so a rising state-5 orb keeps tossing under a dead player.
+        if (it.state === 3) {
+          if (p.hitState || p.dyingFrame >= 0) {
+            it.state = 0;
+            it.vx = 0;
+            it.vy = Math.fround(-0.7);
+            it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
+            it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
+          } else {
+            it.vy = Math.fround(it.vy + Math.fround(0.05) * globalRate);
+            it.x = Math.fround(it.x + Math.fround(it.vx * moveRate));
+            it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
+            if (it.vy > 0) it.state = 1;
+            it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
+            skipCollection = it.state === 3;
+          }
         } else {
-          // TH08 ItemManager states 3/5 (all.c:31084-31108): the tossed item
-          // climbs against 0.05 gravity, then flips to homing state 1 once it
-          // crests (vy > 0) — the time-orb auto-collect arc. After the local
-          // movement it also reaches FUN_00440500's shared 0.03*moveRate
-          // acceleration tail. Native item-slot traces therefore advance vy by
-          // 0.05 + 0.03*0.9 = 0.077 every full-speed frame (for example stage
-          // 2 replay f473..476), rather than the 0.05 used by the old port.
           it.vy = Math.fround(it.vy + Math.fround(0.05) * globalRate);
           it.x = Math.fround(it.x + Math.fround(it.vx * moveRate));
           it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
-          if (it.vy > 0) it.state = 1;
-          it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
-          // FUN_00440500's state-3 arm reaches LAB_004409f2, whose first test
-          // bypasses CalcItemBoxCollision while the state byte is still 3;
-          // state 5 jumps to that same no-collection tail directly. This is
-          // observable when a human-shot time orb spawns inside the player's
-          // grab box (Stage-2 native f661): it survives in state 3 instead of
-          // being collected on its allocation frame. Once the toss crests and
-          // flips to state 1, collection is allowed on that transition tick.
-          skipCollection = it.state === 3 || it.state === 5;
+          if (it.vy > 0) {
+            if (p.hitState || p.dyingFrame >= 0) {
+              it.state = 0;
+              it.vx = 0;
+              it.vy = Math.fround(-0.7);
+            } else {
+              it.state = 1;
+            }
+            it.x = Math.fround(it.x + Math.fround(it.vx * moveRate));
+            it.y = Math.fround(it.y + Math.fround(it.vy * moveRate));
+            it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
+          } else {
+            skipCollection = true;
+          }
         }
       } else {
         if (pocActive()) {
@@ -5501,9 +5526,13 @@ export class StageScene implements GameHost {
           if (it.vy >= 3) it.vy = 3;
           else it.vy = Math.fround(it.vy + Math.fround(0.03) * moveRate);
         }
-        // ItemManager::OnUpdate: `arcadeRegionSize.y + 16.0f <= y` — the
-        // 448+16 boundary despawns INCLUSIVELY at exactly 464.
-        if (it.y >= 464) {
+        // ItemManager::OnUpdate cull (0x44095b-0x440983): the fnstsw 0x41
+        // parity test keeps the item alive AT the line (C3-only = odd parity
+        // takes the gravity branch) and frees it only strictly beyond —
+        // `arcadeRegionSize.y + 16.0f < y`, the 448+16 boundary. Terminal
+        // velocity is exactly 3.0 and drops start near integer y, so the
+        // equality case is reachable: a >= kill executes one frame early.
+        if (it.y > 464) {
           it.dead = true;
           // FUN_00430c10 @ 0x4310ae-0x4310ba: every ordinary item that
           // leaves the bottom subtracts three rank points, regardless of
@@ -5513,21 +5542,24 @@ export class StageScene implements GameHost {
       }
       // Player::CalcItemBoxCollision (FUN_0044a5a0 @ 0x44a5a0): inclusive
       // AABB of the ITEM-side box — computed live as item pos ± half of the
-      // ItemManager size vector (FUN_00440500 builds vec(SHT+0x18, SHT+0x18,
-      // 16.0) = (26,26,16), halved at collision via FUN_0040c7d0's /2.0) —
-      // against the PLAYER-side precomputed grab AABB (+0x3bc..0x3d0, written
-      // by the player tick as pos ± grabVec@+0x3ec = (12,12,5)). SHT+0x18 =
-      // itemRadius = 26.0 for Border (ply00a.sht header dump), so the two
-      // halves are 13 and 12 — an axis boundary at |Δ| = 25 inclusive.
+      // ItemManager size vector (FUN_00440500's prologue @ 0x440538 builds
+      // vec(SHT+0x18, SHT+0x18, 16.0), halved at collision via FUN_0040c7d0's
+      // /2.0) — against the PLAYER-side precomputed grab AABB (+0x3bc..0x3d0).
+      // The player init (all.c:38182) derives that box's half-extents the
+      // SAME way: +0x3f0 = SHT+0x18 / 2.0 — both sides are itemRadius/2.
+      // ply00a.sht @24 = 24.0 for Border (the "26.0" in the old comment was
+      // a misread), so the axis boundary is |Δ| = 24 inclusive. The old
+      // hardcoded ±12 was numerically identical; this derives it from the
+      // same SHT field the exe uses twice.
       const itemHalf = Math.fround(sht.itemRadius * 0.5);
       const itemMinX = Math.fround(it.x - itemHalf);
       const itemMaxX = Math.fround(it.x + itemHalf);
       const itemMinY = Math.fround(it.y - itemHalf);
       const itemMaxY = Math.fround(it.y + itemHalf);
-      const grabMinX = Math.fround(p.x - 12);
-      const grabMaxX = Math.fround(p.x + 12);
-      const grabMinY = Math.fround(p.y - 12);
-      const grabMaxY = Math.fround(p.y + 12);
+      const grabMinX = Math.fround(p.x - itemHalf);
+      const grabMaxX = Math.fround(p.x + itemHalf);
+      const grabMinY = Math.fround(p.y - itemHalf);
+      const grabMaxY = Math.fround(p.y + itemHalf);
       if (!skipCollection && p.alive && !it.dead &&
           !(grabMinX > itemMaxX || grabMaxX < itemMinX ||
             grabMinY > itemMaxY || grabMaxY < itemMinY)) {

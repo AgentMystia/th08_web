@@ -127,6 +127,29 @@ param6==9 → TWO type-7 items; other >−1 → ONE of that type; state arg 1
 (FUN_004400a0 forces time items to their toss state internally; 7→state3,
 10→state5; state 2 = 288×192 scatter tween — asm 0x440256 push $0x43900000=288.0f, the old 304 was a misread).
 
+**Items** (mgr global 0x1653648; pool 0x831 slots × stride 0x2e4, scan
+0..0x82f rotating next-fit; struct = embedded ANM VM in the first 0x2a4
+bytes — hence the binary-wide 0x2a4 VM stride — then pos +0x2a4, vel
++0x2b0, type +0x2d4, state +0x2d7 (0 fall / 1 seek / 2 tween / 3 toss /
+5 point-toss), timer +0x2c8, next +0x2dc; active list is TAIL-linked at
+spawn → walk iteration is SPAWN order, not slot order). Walk FUN_00440500
+(pinned 2026-08-29 pass 10): integration pos += vel×(SHT@0x34·rate) via
+dropped-this vector helpers at 0x440936 (the "+0x2a4 writer" hunt is
+closed — it is the walk itself). Collect box: item pos ± SHT@0x18/2 vs
+player grab AABB (init all.c:38182: +0x3f0 = SHT@0x18/2) — both halves
+itemRadius/2 (Border 24.0, ply00a.sht @24), inclusive, z ignored; gate =
+player state ∈ {0,3,4} (FUN_0044a5a0). PoC arm: player above line AND
+(power ≥ 128 [0x4b5b30 is a DOUBLE 128.0, fild+fcomp QWORD] OR player+3
+raw-focus ≠ 0 OR mode 1/6). Cull: strictly beyond camera+16 (equality
+frame survives + gravity), rank −3. Gravity 0.03×moveRate (0x4b44c0),
+terminal vy 3.0 (0x4b42dc), rise clamp −2.2 (0x4b5b2c). State 3 vs 5 are
+TWO laws: 3 = 0.05×global + single moveRate integration + 0.03 tail +
+no-collect while state==3; 5 = integrate BEFORE the crest test, non-crest
+frames NO tail and NO collect test, crest frame double-integrates then
+pays the tail (state 3's `FUN_004066a0(0)` timer flip is dead — acc<0).
+Dead-player override (state 2 = hitState or squish, NOT materialize):
+state 3 every frame, state 5 only inside the crest arm; vel (0,−0.7,0).
+
 **Death settle** (FUN_0041ed50 shared tail, all.c:21659-21668): a dying
 enemy with +0x3324 bit1 set and bit0 clear converts every live bullet to
 a point item (chip 2000, +20 each, cap 8000) then surviving non-exempt
@@ -209,41 +232,48 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-29 pass 9)
+## 6. Standing residuals (honest, 2026-08-29 pass 10)
 
-- CLOSED this pass (4096776): the gauge fire-drift law fully decoded — the
-  0x44bdf0 block lives inside FUN_0044aec0 (gates: msg/0x4358bb, player+8>=30,
-  bomb +0xfdc); e2ad0 SATURATES at 30 (the >=30 tier path skips its own
-  advance at 0x44c007); the flip sites (0x44b1a5/0x44b3f8) write ONLY +8=0
-  and e2ae8=0 — no park write exists anywhere in .text. The old youkai-flip
-  park mis-fired on held presses (30 phantom countdown ticks) = the st1
-  f3139 −221 gauge deficit root. Replaced by the five-way-pinned SHORT-TAP
-  law (§7 in player.ts): a focus-OUT whose entire youkai visit fits inside
-  the still-closed +8 window (held<30, form still 1) restarts the 30
-  countdown. Gauge offset-curve changes 453→116 (residual = ±111
-  collect-phase transients); returns to 0 at f3244.
+- CLOSED this pass: **the item side of the collect ±1-tick family**. The
+  FUN_00440500 walk is fully decoded (§3 Items block): the +0x2a4 writer
+  hunt closed (the walk integrates via dropped-this vector helpers), box
+  = itemRadius/2 both sides (ply00a @24 = 24.0; the old "26.0" was a
+  misread — the hardcoded ±12 was numerically right), PoC arm uses the
+  RAW focus byte and a DOUBLE 128.0 power threshold, cull is strict
+  beyond the line, state-5 is its own law (double integration on crest,
+  no tail before it), iteration is spawn-order. Four fixes landed +
+  7 tests (219 green); frontiers all held. The old "8 vs 10 items" at
+  N696 was a unit error: a collect pays 4 u16 draws → native 5 vs port 4,
+  ONE item (slot8) short. slot8's whole orbit re-verified law-exact; the
+  nearby time-orb collects match frame-exact — the surviving ~6px gap at
+  the box edge comes from the long-arc homing TARGET = player
+  micro-position f661+ (never natively verified). **f696 −4, st1's ±111
+  transients and the ±4 wander all collapse into the movement-precision
+  family** (needs a user-ordered wine round for native player f660-700).
+- Pass-9 CLOSED (4096776): gauge fire-drift law — short-tap park model;
+  offset curve 453→116 (pass 10: 113, same f3244 zero).
 - **Census tuple correction (pass 9)**: census enemies = [slot, hp, x, y,
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 9): gx st1 **f3586** (Sub24 ring now 3 frames
-  EARLY — the +8000 crossing moved; razor flipped sides); gx st2 **f4365**
-  (+900; the old 4.5px fire-position defect was damage-phase downstream of
-  the gauge); ly st1 f3176 / ly st2 **f4985** (+1277). 212 tests green.
+- Formal baselines (pass 10, all held): gx st1 **f3586** (Sub24 ring 3
+  frames EARLY — the +8000 crossing moved; razor flipped sides); gx st2
+  **f4365**; ly st1 f3176 / ly st2 **f4985**. 219 tests green.
 - st2 field parity (post-correction): enemy positions <0.4px exact through
-  f990; wave cadence exact through f1566. New measured defects: the port
-  kills the s1 y=160 left-mover waves 12-13 frames early from f1558
+  f990; wave cadence exact through f1566. Measured defects: the port kills
+  the s1 y=160 left-mover waves 12-13 frames early from f1558
   (shot-reach family, open); a sub12 enemy drifts 0.46→0.8px from f1787
-  (movement-precision family, open). Stream: delta-exact to f695; f696 −4,
-  then ±4 wander that does NOT repay (cum −124 @f4363, +200 @f4370).
+  (movement-precision family, open). Stream: delta-exact to f695; f696 −4
+  (slot8, see above), then ±4 wander that does NOT repay (cum −124
+  @f4363, +200 @f4370).
 - st1: midboss x drifts ~4.3px by f3548 (native 160.1 vs port 155.8) — the
   direct root of the f3586 ring razor (same movement-precision family).
-- Next-target queue (leverage order): (1) the item-collect ±1-tick family
-  — st2 f696's two unpaid collects and st1's ±111 gauge transients share
-  it; the 0x440500 walk's type switch is located (type 7 → FUN_004412b0)
-  but the motion integration is NOT in the walk — find the +0x2a4 writer;
-  (2) the f1558 early kills (amulet reach/spread geometry); (3) the
-  sub12/midboss 0.5-4.3px ECL float-path drifts.
+- Next-target queue (leverage order): (1) the MOVEMENT-PRECISION family —
+  player micro-position f661+ (slot8/st2-f696 probe), sub12 0.5px,
+  midboss 4.3px, f1558 early kills: ECL float-path + player-motion
+  instruction-level collation; the sharpest next probe is a wine round
+  dumping native player coords f660-700 (user-gated); (2) boss-fight
+  pacing downstream of that wall; (3) visual fog law.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
