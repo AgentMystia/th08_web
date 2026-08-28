@@ -148,9 +148,22 @@ u32/rand01/signed/%range 2. ANM random ops 2 each at arm. Effect spawn
 costs = EFFECT_DRAW_COST table (2×(59+60 ops) + init callback draws).
 Effect-62 option afterimages (12 VMs every 3rd tick past counter 699)
 hold the 512-slot pool at ~280 and throttle effect-51 fireflies — pool
-pressure is load-bearing. Item spawns draw only for param_4 ∈ {2,3,5};
-time-orb type gives up after the FIRST occupied probe. time-orb collect
-pays a 4-u16 integrity checksum (FUN_00418220 → FUN_00406e50).
+pressure is load-bearing. Effect-51 firefly (0x426295-0x426366, pinned
+2026-08-28 pass 5): spawn center = camera + facing/2 + (signed60,
+signed100−50, rand100−100) — the view-ray midpoint (A = vec 0x4ea3d0 =
+raw facing track, B = 0x4ea3c4 = eye; divisor 2.0 @ 0x4b42ec, −50 @
+0x4b4530, −100 @ 0x4b4980, all .rdata); cone test dot(normalize(pos−B),
+0x4ea3e8 unit axis) ≥ 0.94 (fnstsw $5 — NaN releases), ~25% die at
+spawn, rest reach the authored 241. Allocator FUN_00425430 = PARTIAL
+allocation over a 0x200 rolling scan; an init callback returning
+nonzero frees the slot same-frame (only FUN_004272e0 returns a
+condition — ids 35+, unused in stages 1-2). Item spawns draw only for
+param_4 ∈ {2,3,5}; time-orb type gives up after the FIRST occupied
+probe. time-orb collect pays a 4-u16 integrity checksum (FUN_00418220
+→ FUN_00406e50). Player shot-cycle ARM (FUN_0043a930) runs in the
+player's MAIN callback BEFORE the option actor's FUN_0044e770: on arm
+ticks the option must see the armed fireFrame, or its fall-through
+clear of DAT_018b89b4 eats the same tick's beh1 SHT aim target.
 
 **Player/economy**: per-enemy timeOrb accumulator inits at 40
 (DAT_018b8a24) — same value is the threshold; FUN_00451670 repays before
@@ -196,24 +209,29 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-28 pass 4, post ce2ba87/f68c66b)
+## 6. Standing residuals (honest, 2026-08-28 pass 5, post 6c24950)
 
-- CLOSED this pass: the (600,900] draw-drift window (death-wipe gate read
-  ins_83's +0x3328 bit instead of ins_127's +0x3324 bit — ordinary
-  enemies fired the full-field wipe; gx f585 = 56-draw/frame deficit) and
-  the gauge drift family (cap 21 + equality-divides, youkai idle −3 tier,
-  youkai-flip idle park through the bomb gate). Measured vs native census:
-  gx st1 draw parity f585 → f861, gauge curve f620 → f917; ly st2 formal
-  f2036 → f4487. 213/213 tests.
-- Formal baselines: gx st1 **f3217** (Sub13 bullet, spawn f2726), ly st1
-  **f3193** (Sub15 rain spoke), gx st2 **f3021** (Sub4 aimed fairy, speed
-  2.9625), ly st2 **f4487** (Sub6, speed 1.72). All phantom-family,
-  downstream of: (a) gx st1 draw stream opens **f861** (+52 = two
-  effect-51 fireflies, ±2-slot pool-pressure phase; port n62/n51 match
-  native steady state — suspect STD camera / cone geometry lifetimes,
-  needs native per-slot lifetimes); (b) gx st2 delta parity holds except
-  ONE −4 event at f696 + constant −4 entry offset (both pre-existing
-  across HEAD) — an extreme-gate time-orb native did not pay.
+- CLOSED this pass: the f861 firefly event (spawn geometry was
+  camera+(0,+100,+30); native = camera + facing/2 + (0,−50,−100), the
+  view-ray midpoint — port spawned near/behind the cone edge, died
+  early, kept ~2 slots free) and the f1181 −4 (shot-cycle ARM ran after
+  updateTh08Option; on arm ticks the option's fall-through target clear
+  ate the same tick's beh1 aim). Measured vs native census: gx st1 draw
+  parity f861 → **f2236**; the gx st2 constant −4 stage-entry offset is
+  GONE (delta-domain exact to f695). 213/213 tests.
+- Formal baselines: gx st1 **f2926** (Sub13 in-family shift, spawn
+  f2788), ly st1 **f3297** (Sub15 rain spoke), gx st2 **f4662** (Sub4
+  aimed fairy, speed 3.54), ly st2 **f4486** (Sub6, speed 1.72 — same
+  family as f4487, −1 lottery noise). All phantom-family, downstream
+  of: (a) gx st1 draw stream opens **f2236** (−4 family during the
+  post-f2231 512/512 pool saturation; allocator semantics, authored
+  lives and init-callback returns all exe-verified — the residual is
+  per-slot firefly cone-margin death phase, needs a wine round
+  extending the census to per-slot effect lifetimes); (b) gx st2 ONE
+  −4 at f696 (full-power crossing frame: native pays five collect
+  checksums, port four; stream re-aligns at f697 with constant −4;
+  time-orb kinematics ruled out — the 5th native collect's item is not
+  identifiable without a native item-position census).
 - Boss-fight pacing ~2.5-3x native (timeline aligned: midboss t2935 exact,
   boss f5617; pools/hitboxes/rank authored-verified; suspect option
   layout / per-pellet damage vs SHT). Late spells time out.
