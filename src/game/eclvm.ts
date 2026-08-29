@@ -81,7 +81,14 @@ export function advanceBulletExBehavior(
     if (slot.cond === 0 && bullet.exFlags !== 0) return;
     idx++;
     bullet.exBehaviorIndex = idx;
-    if ((bullet.exFireFlags & slot.opcode) === 0) continue;
+    // Native FUN_0042ffc0 has NO fire-flags filter on the walk itself: every
+    // queue record is examined in order (all.c:22957-23076; the only gates
+    // are the cond==0 stall above and +0xdb0's bomb-time bit, zero in normal
+    // play). The old `exFireFlags & opcode` skip came from the TH07 heritage
+    // and wrongly buried later slots — the gx st2 contact bullet's 0x20
+    // spiral (angle -0.0262/tick, speed +0.0333/tick after the 0x10 accel's
+    // limit) never armed because 0x2252 & 0x20 == 0, freezing the coast and
+    // forking the path >= 34px from native by the f10043 contact.
     if (slot.opcode === 0x2000) {
       // +0xbf0 grace does not set +0xbf4 and does not consume the one-slot
       // movement budget; native immediately examines the next queue entry.
