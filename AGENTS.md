@@ -266,7 +266,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 24)
+## 6. Standing residuals (honest, 2026-08-30 pass 27)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,8 +379,20 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 26, commit 38c64dd): **gx st1 f7499**, **gx st2
-  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. The
+- Formal baselines (pass 27, commit 1bf6272): **gx st1 f7413**, **gx st2
+  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-27
+  closed the first half of the st1 f4122 settle fork: master-tail orbs read
+  the +0x3380 LEDGER ×2 (all.c:20533; was live-children ×2) and the wipe
+  sweep leaves quad-zone-covered bullets to the zone path (pointStar count
+  native-exact 209). f4122 draw deficit −828→−4; residual fork = the
+  missing boss-death ORBIT EMITTER (~442 type-10 orbs, 13/frame = min(budget,7)
+  + literal 6, spiral on enemy+0x2e0 with dθ −0.0533/frame, asm 0x4175f6
+  family, budget writer unresolved), quad double-conversion (+216), and the
+  ins_92 ledger cadence 46-vs-68 — until those land, gx st1 frontier numbers
+  are re-roll noise on a still-forked stream. The f5911 fan-aim story is
+  SUPERSEDED: the var chain is fully decoded (var10016 = rand10082×0.04 +
+  π/3-family constants; native drew rand≈0, port −2.29) — pure downstream of
+  the f4122 stream fork, NOT a var-semantics defect. The
   pass-20 fire-rank speed-bounds story is SUPERSEDED: the whole rank-lerp
   block is gated on the spell-declare singleton (0x4ea670 bit0, asm
   0x4229b7) — during spells fires pay authored values FLAT (wine-pinned:
@@ -417,18 +429,19 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 26): (1) **the st1 f5911 fan-aim divergence —
-  §AC14's var-inheritance family with a concrete witness**: sub25's
-  14-bullet fan fires with speed/step/span/count ALL native-exact but the
-  fan CENTER rotated 0.1104 rad (native ≈ exactly left; port off). The
-  bullet field is otherwise native-exact f3650-5910 (mid-pass-tolerant
-  scan, probe-driftscan2.mjs — the walk runs 0,1535..1 DESCENDING, so
-  mid-pass rows lag one tick on low slot numbers; never read a single
-  frozen bullet as a skip). Next: wine-capture the boss ECL var bank
-  (enemy 0x577f20, ctx +0x2ca0) f5800-5920 or statically audit sub25's
-  aim-var writer chain. (1b) **st2 bisection**: port field empty (enemies
-  not firing) by f8950 vs native 511 — wine-window bisect st2 from f3500
-  (first spell segment). (2) the st2 f9253 contact (sub17 rice, spawnF
+- Next-target queue (pass 27): (1) **the boss-death orbit emitter** (the
+  dominant residual, ~1768 draws): FUN_00416b90's emitter branch spawns
+  type-10 orbs at the dying enemy's +0x2e0 ephemeral pos (a spiral random-
+  walk: each burst adds polar(angle,128), angle field +0x318 decrements
+  −0.0533/−0.0156 per pass, constants 0x4b4390/0x4b4460/0x4b432c/0x4b4468),
+  min(budget,7)+6 per frame from director state +0x10 (442 total observed,
+  writer unresolved — likely a stage-ECL epilogue op). (2) quad double-
+  conversion at the wipe (+216: skipped bullets may pay via the deferred
+  spawn-state arm AND the normal block). (3) ins_92 ledger cadence 46-vs-68
+  (22 missing attaches → 44 tail orbs). (1b) **st2 bisection**: port field
+  empty (enemies not firing) by f8950 vs native 511 — wine-window bisect
+  st2 from f3500 (first spell segment); st2's own settle sweeps share the
+  pass-27 fix family. (2) the st2 f9253 contact (sub17 rice, spawnF
   9025, bottom edge) — downstream of (1b); (3) the
   dialogue's residual ~13f (17-wait arm granularity/row pacing);
   (4) the MOVEMENT-PRECISION family — player micro-position f661+
