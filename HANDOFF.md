@@ -7,7 +7,26 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 23)
+## Convergence picture (2026-08-30 pass 26, commit 38c64dd — the wine bullet-telemetry round)
+
+| run | pass-25 | pass-26 | note |
+|-----|---------|---------|------|
+| udGx01 st1 | f6021 | **f7499** | +1478; spell-gated fire lerp (asm 0x4229b7) — the whole bullet field is 0.01px-native-exact f3650-3660 |
+| udGx01 st2 | f10058 | **f9253** | legit re-roll of the exe-pinned gate; new wall = sub17 rice (spawnF 9025); port field empty by f8950 — bisect |
+| udLy01 st1 | f3177 | f3177 | flat |
+| udLy01 st2 | f3471 | f3471 | flat |
+
+Pass-26 landed three exe-pinned fixes (see gx-findings §AD2-AD4): the
+addTimeOrbs parity (pv curve now native-exact), the pointStar/type-6
+collect law (graze-scaled fixed award), and the FIRE rank-lerp spell gate
+(wine-pinned: sub24's 123-bullet volley fires exactly 3.0 native during
+the spell; the pass-20 ±0.15-lattice story is superseded). Next targets:
+the one-tick bullet skip (st1 f3664 native witness — a firefly bullet
+frozen exactly one tick, double-step catch-up; this is pass-21's wall) and
+the st2 post-gate bisection. The wine tooling is tmp/wine-bulcensus.mjs +
+tmp/wine-out/*.jsonl (full-pool bullets/items/player per frame).
+
+### Prior picture (pass 23, kept for history)
 
 Formal-mode earliest unexpected player hit (THE metric):
 

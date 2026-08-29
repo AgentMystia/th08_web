@@ -49,7 +49,11 @@ Simulation changes: run the verifier, record the movement honestly.
 - RNG budget oracles (LFSR walk mod 65536 from fixture seeds): udLy01
   st1 ≡ 32816, st2 ≡ 63672; udGx01 st1 ≡ 864, st2 ≡ 22674.
 - Native ground truth: `tmp/fa-native-gx/` (rng-curve / runstate / census
-  jsonl, /proc census of udGx01 st1-2). Alignment: **native counter f ==
+  jsonl, /proc census of udGx01 st1-2) + `tmp/wine-out/*.jsonl` (full-pool
+  bullet/item telemetry; wine-bulcensus.mjs recipe). CAVEAT: census
+  "bullets" counts only slots 0-95 (allocator-pointer artifact — never use
+  as a bullet oracle); census/wine rows are mid-pass samples (±1-frame
+  ambiguity on death/wipe rows). Alignment: **native counter f ==
   port state after input f−1**; duplicate census rows per frame = slowdown
   telemetry (dedupe, keep last). runstate blob +0x20 (i16) = gauge,
   RUN+0x0 = score (anchor-verified end 7,639,149).
@@ -375,8 +379,12 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 20): **gx st1 f6348**, **gx st2 f8061**,
-  ly st1 f3177, ly st2 f3471. The st1 stream is draw-true f3582→f3730;
+- Formal baselines (pass 26, commit 38c64dd): **gx st1 f7499**, **gx st2
+  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. The
+  pass-20 fire-rank speed-bounds story is SUPERSEDED: the whole rank-lerp
+  block is gated on the spell-declare singleton (0x4ea670 bit0, asm
+  0x4229b7) — during spells fires pay authored values FLAT (wine-pinned:
+  sub24's 123-bullet volley = exactly 3.0 native). The st1 stream is draw-true f3582→f3730;
   the sprite-7 graze family now runs 0-2 frames late with one event
   missing (the sub21 one-step wall above) — it re-rolls the
   Wriggle-fight fan angles and the f6348 contact is that noise, not a
@@ -409,16 +417,19 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue: (1) **the sub21 one-step wall, pass-23 narrowed**:
-  the native module table is fully resolved (12=bomb/effects, 13=effects
-  +0x59c familiar pool, 14=the ONLY bullet pass; enemy ECL at 11) — no
-  second bullet integration pass exists, and the port's et_ex handler
-  order matches native; the volley's birth tick and +34/+12 draw
-  attribution are settled (the fireflies fire their own stationary
-  sprite-3 bullets every ~5-6 inputs), so the remaining step deficit is
-  INSIDE the bullet pass mechanics or the graze geometry; (2) the st2
-  f8252 contact (sub28 parked rice, spawnF 7928, hit at the bottom
-  edge) / the f7869 auto-fire beat wall (pass-21 B anchors); (3) the
+- Next-target queue (pass 26): (1) **the one-tick bullet skip — pass-21's
+  wall with a native witness now**: a firefly bullet (spawnF 3473) froze
+  EXACTLY one tick at st1 f3664 (timer paused, position frozen, double-step
+  catch-up at f3665) where the port advances smoothly — the per-bullet
+  manager-pass step accounting (FUN_00431240's real walk) conditionally
+  skips a tick. Killing this restores st1 through the whole midboss
+  aftermath (bullets are 0.01px-exact before it); the module table stays
+  settled (12=bomb/effects, 13=effects+familiar pool, 14=the only bullet
+  pass, enemy ECL at 11) — the skip lives in the pass's per-bullet walk.
+  (1b) **st2 bisection**: port field empty (enemies not firing) by f8950
+  vs native 511 — wine-window bisect st2 from f3500 (first spell segment).
+  (2) the st2 f9253 contact (sub17 rice, spawnF 9025, bottom edge) —
+  downstream of (1b); (3) the
   dialogue's residual ~13f (17-wait arm granularity/row pacing);
   (4) the MOVEMENT-PRECISION family — player micro-position f661+
   (wine-gated); (5) visual: fog law, boss name plate, ring-bullet
