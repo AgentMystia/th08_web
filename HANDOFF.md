@@ -7,45 +7,48 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 20)
+## Convergence picture (2026-08-30 pass 23)
 
 Formal-mode earliest unexpected player hit (THE metric):
 
-| fixture-stage | pass 19 | now | note |
-|---|---|---|---|
-| udGx01 st1 | f6350 | f6348 | same wall re-rolled (sub21 one-step residual) |
-| udGx01 st2 | f8057 | **f8061** | +4; Mystia phase, stream clean to f8061 |
-| udLy01 st1 | f3176 | f3177 | same wall (sub15 volley family) |
-| udLy01 st2 | f3470 | f3471 | f677 native deathbomb still exact |
+| fixture-stage | pass 20 | pass 22 | now | note |
+|---|---|---|---|---|
+| udGx01 st1 | f6348 | f6013 | f6013 | true fidelity after the pacing fix; sub21 one-step residual |
+| udGx01 st2 | f8061 | **f8252** | f8252 | +191; Mystia phase, downstream of the f7869 beat wall |
+| udLy01 st1 | f3177 | f3177 | f3177 | same wall (sub15 volley family) |
+| udLy01 st2 | f3471 | f3471 | f3471 | f677 native deathbomb still exact |
 
-**Pass 20 overturned pass-19's "op-158 attack-controller" wall** (all
-three anchors were misattributions — op-158 is the laser-slot ins; the
-toggle callbacks are unreachable in st1/st2; +0xd34 can never be 32)
-and closed the REAL f3731 wall: **the fire-rank speed-bounds law**.
-FUN_00415c80's ±0.5 re-arm survives only where it runs AFTER the
-0x84-dword default-template copy (timeout path FUN_0042b930); the
-HP-threshold phase jump and death-callback paths copy afterwards and
-net ±0.15; the spell declare's re-arm (ecx = *(enemy+4), the manager
-link, asm 0x415511) flips the MANAGER DEFAULT template itself — later
-phase copies restore ±0.5 from it. The gx midboss ring volley fired at
-3.0+lerpF(±0.15, rank 12) = 2.9625 (unreachable on the ±0.5 lattice —
-that proved it); the port applied ±0.5 everywhere. Verified against the
-native screenshot s1-f03900 via a multimodal subagent (orb rows moved
-from +5px off to aligned within reading precision). Also fixed the
-bullet-size tier misread (thresholds 8/16/32, not 16/48).
+**Pass 22 closed the dialogue pacing root cause** (c22b8a1): the §7
+"1.5f/char typewriter floor" was mis-calibrated (the native ~348f budget
+IS the 6/8-frame confirm arms); removing it put the boss-fight entries
+~24f from native (was 182) and moved gx st2 +191. The old gx st1 f6348
+was a phantom of the shifted timeline — frontiers measured across a
+pacing defect measure nothing.
 
-**The next walls (pass 21, both anchored)**: (1) gx st1 — the sub21
-one-step residual survived three falsifications this round (round-robin
-advance-then-fetch, its exact variant, and the phase-entry double tick
-ALL break the stream at f1754): it is NOT a clock law; the fire-frame
-accounting is exact, so the missing step is bullet-pass-mechanical (see
-AGENTS §6). The f6348 contact is its downstream re-roll (Sub25 parked
-rice). (2) gx st2 — the f8061 contact is downstream of the f7869
-auto-fire volley regime: Mystia's ins_105/106 periodic emitter wobbles
-±1 frame (repaying) until the aim-tracking variable crosses zero at
-f7869, after which offsets stop repaying (−18 → +90 by f7950). Two laws
-to decode next round: the auto-fire timer order and the aim-tracking
-wrap. Probes for both walls are in tmp/probe-*.mjs.
+**Pass 23 (reconnaissance round, zero src changes)**: the native module
+table is fully resolved (ascending execution; 8=enemy ANM prep, 9/10=
+player, 11=enemy ECL main + tail, 12=bomb/POC + effects A, 13=effects B
++ the 0x59c×0x100 familiar pool, 14=the ONLY bullet pass with the item
+walk at its head) — there is NO second bullet integration pass, and the
+port's et_ex handler order matches native. The probe-label law is
+pinned (port scene.frame = input+1; census row f ≡ input f−1 ≡
+scene.frame f — all historical graze comparisons were correctly
+aligned). The fireflies fire their own stationary sprite-3 bullets every
+~5-6 inputs. One controlled experiment was implemented and FALSIFIED:
+"op90-93 children run eclT −1" (from census row f3626 e[4]=1) regressed
+gx st1 f6013 → f2919 via effect-pool pressure re-rolling the RNG; it
+was reverted same-round. e[4]'s identity for fresh children stays open.
+
+**The next walls (unchanged anchors)**: (1) gx st1 — the sub21 one-step
+residual is inside the bullet-pass mechanics or graze geometry (all
+clock stories falsified; the fire-frame accounting is exact). (2) gx
+st2 — the f8252 contact is downstream of the f7869 auto-fire volley
+regime: Mystia's ins_105/106 periodic emitter wobbles ±1 frame
+(repaying) until the aim-tracking variable crosses zero at f7869, after
+which offsets stop repaying (−18 → +90 by f7950). Two laws to decode:
+the auto-fire timer primitive order (FUN_00406610/660/40, b8e0, e390
+all read this pass) and the aim-tracking wrap. Probes for both walls
+are in tmp/probe-*.mjs.
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
 
