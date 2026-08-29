@@ -4,19 +4,42 @@ Repo `AgentMystia/th08_web`. Browser reimplementation of TH08 Stage 1+2
 (Border Team) from original data. Playable end to end: title → difficulty
 → team → stages with dialogue, HUD, ECL waves, spells, bombs, Wriggle and
 Mystia fights; browser replay load & playback (title → Replay → .rpy).
-Gates: `npm run check` / `npm run build` / `npm test` (213) + CI
+Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-29, post ede504b — pass 11)
+## Convergence picture (2026-08-30 pass 17)
 
 Formal-mode earliest unexpected player hit (THE metric):
 
-| fixture-stage | now | bullet family |
-|---|---|---|
-| udGx01 st1 | f3630 | Sub24 ring razor (spawn f3557) — was f3586 pre-clamp |
-| udGx01 st2 | f4365 | Sub4 aimed fairy (age 76, speed 3.11) |
-| udLy01 st1 | f3176 | Sub15 rain spoke (spawn f2995, age 180) |
-| udLy01 st2 | f4985 | Sub4 (age 46) |
+| fixture-stage | pass 16 | now | note |
+|---|---|---|---|
+| udGx01 st1 | f6352 | f6352 | **stream phantom** (see below) |
+| udGx01 st2 | f5853 | f5853 | stream phantom (same family) |
+| udLy01 st1 | f3176 | f3176 | Sub15 rain spoke (spawn f2995) |
+| udLy01 st2 | f3470 | f3470 | f677 native deathbomb still exact |
+
+Pass 17 was an AUDIT round: the pass-16 WIP verified 7/8 binary-exact
+(ins_128 clouds, 0x20000 OR+RETURN, 0x40000 state-5, the three power
+crossing checksums, extends, the time-orb ladder, the spell-capture
+checksum arm, pointItems carry); the 8th (0x20000 wait gate) cleared
+its bit one pass early — native checks the timer BEFORE decrementing
+(all.c:23507-23514) — fixed + test re-pinned; all four frontiers
+re-verified unmoved.
+
+**THE discovery: the st1 RNG draw stream diverges from native at
+f3582.** census.jsonl per-frame draws (native f == port after input
+f−1): first miss +8 at f3582 (3 events, period 6, 24 draws), then +4
+per hit-event through the midboss damage phase, −7778 by f5001. The
+consumer: native pays MORE player-shot impact sparks (effect-5, 4
+draws) than the port in the midboss window — 2 extra per 6 ticks
+against the INVULNERABLE parked boss (HP pinned f3582-3604), 1 extra
+per hit-tick during damage. Everything else is excluded (bullet ANM
+scripts have no random ops; the spawn-state manager path draws
+nothing; the enemy census is frame-exact through the window). Since
+sub27/sub17 rebuild their fan base angle from RNG var 10082, the
+f6352/f5853 contacts are phantoms of a diverged stream — the Sub25
+bullet's motion law (0x40 sawtooth/turn + 0x10 accel) is asm-verified
+binary-exact and was never the defect.
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
 
@@ -27,17 +50,15 @@ integrator and after every ins_63 setPos. The Sub22 ins_64(90,4,192,144)
 tween now rides the y ceiling exactly like native (census-exact 128.000
 from f3352; was parked at 144).
 
-**st1 RNG stream: offset-0 parity through f2699** (85k draws frame-exact
-vs fa-native-gx/rng-curve.jsonl, dedup keep-last). First persistent
-divergence f2965: both effect pools hit 512 full simultaneously; native's
-firefly batch allocates 1-of-4 (pre-batch 511), the port's 4-of-4
-(pre-batch 508) → +78 draws, never repaid. Gap = 3 zero-draw effect VMs
-(all draw-costed spawns provably match; id12/20/40/45/48 excluded —
-death/bomb/hit paths). Downstream chain proven: RNG desync → Sub22 t190
-op67 exit angle → 17px trajectory gap → the f3630 razor. Pinning the 3
-VMs needs a wine round scanning the 0x200 effect pool's id histogram
-f2930-3010 (user-gated). st2 keeps the f696 −4 collect deficit (slot8
-one frame late; movement-precision family).
+**st1 RNG stream (pass-17 revision)**: the old f2699/f2965 story is
+superseded — after the pass-16 ins_128 fix the stream is draw-exact
+through **f3581**, and the first persistent divergence is **f3582**
+(see the convergence picture above: missing native hit-event sparks in
+the midboss window, −7778 draws by f5001). Any downstream analysis
+that assumed a clean stream past f3582 (fan angles from var 10082,
+firefly cone inputs past f3731) is measuring the diverged stream.
+st2 keeps the f696 −4 collect deficit (slot8 one frame late;
+movement-precision family).
 
 ## Method that works (keep using it)
 
@@ -63,20 +84,19 @@ sweep + attach ledger), gauge machinery (see AGENTS §3), RNG draw economy
 
 ## Next targets (ordered)
 
-1. **st1 effect-pool 3-slot gap (the f3630 razor's direct root)**: RNG
-   draws match native frame-exact to f2699, then the first simultaneous
-   pool-full at f2965 splits the free-slot race. Candidates: id5/id51/id62
-   tick-boundary lifetimes or an unmodeled zero-draw request. Sharpest
-   probe: wine /proc round dumping the 0x200 effect pool's per-id
-   histogram f2930-3010 (user-gated); same round can take native player
-   coords f660-700 for the movement-precision family.
-2. **Movement-precision family**: st2 sub12 0.46→0.8px drift (f1787+),
-   f1558 early kills of the s1 y=160 left-movers, slot8/f696 player
-   micro-position — ECL float-path + player-motion instruction-level
-   collation.
-3. Boss-fight pacing ~2.5-3x slow — measured to live entirely POST-wall;
-   attack after the contact wall falls.
-4. Visual: stage fog law, boss lifebar details. Replay block chaining UX.
+1. **The f3582 stream wall (THE gate)**: identify why native pays 2
+   extra effect-5 impact sparks per 6 ticks against the invulnerable
+   parked midboss (f3582-3594) and 1 extra per hit-tick during damage
+   (f3628+). Compare the port's shot-vs-invulnerable-enemy collision
+   against the native shot settle (all.c:40425-40438, FUN_0043a980
+   re-arm / FUN_00425d70 init callback). Probes: tmp/probe-parity*.mjs,
+   tmp/probe-pdelta.mjs (aligned per-frame draw deltas vs census).
+2. Re-derive both gx frontiers on a stream-true run (they WILL move;
+   direction unknown — record honestly).
+3. Movement-precision family: st2 sub12 drift, slot8/f696 player
+   micro-position — wine-gated.
+4. Boss-fight pacing ~2.5-3x slow — POST-wall.
+5. Visual: stage fog law, boss lifebar details. Replay block chaining UX.
 
 ## Tooling notes (hard-won)
 

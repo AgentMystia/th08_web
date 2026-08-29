@@ -98,7 +98,11 @@ records (+0xdd0); FIRE flags select spawn state / sfx only. et_ex
 dir-change (machine-pinned): 0x40 → angle += f0 relative, 0x100 →
 angle = f0 absolute, 0x80 → aimed (+π/2 zero vector); waiting branch
 sawtooths speed = base·(1 − t/interval) every tick; speed ramp bit 1 =
-polar(angle, spawn + 5·(1 − t/16)) for 17 ticks. Graze: once per bullet,
+polar(angle, spawn + 5·(1 − t/16)) for 17 ticks. ins_111 opcode
+0x20000 (FUN_0042ffc0) ORs into +0xdac and RETURNS — the walk must not
+continue into 0x40000 fade-kill (state 5 at +0xdb8) on the construction
+pass; the +0xdac handler XOR-clears the bit when the command timer
+elapses. Graze: once per bullet,
 age>15, box = AABB/2 + 20 vs player graze rect, tiers +1/+2/+3 by gauge
 depth, form-gated. FIRE count1=0 fires NOTHING (authored shutdown);
 rank-lerp speed bounds ±0.15 at enemy spawn, reset ±0.5 at every phase
@@ -240,14 +244,49 @@ resolve through file-order enumeration).
 
 ## 5. Tests
 
-`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (213). Key surfaces:
+`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (222). Key surfaces:
 et_ex dir semantics, sub-context CALL channel, boss audits/presentation,
 item/damage economy, familiar cadence, pacing hard checkpoints (native
 gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-29 pass 15)
+## 6. Standing residuals (honest, 2026-08-30 pass 17)
+
+- **THE wall (new, pass 17): the st1 RNG draw stream diverges from
+  native at f3582** — first missing +8 (recurs f3588/f3594 at period 6,
+  exactly 3 events = 24 draws), then +4-per-hit-event deficits through
+  the midboss damage phase (f3628+), −7778 by f5001, −9696 by f6352
+  (census.jsonl per-frame draws, aligned native f == port after input
+  f−1). The consumer is a standalone event stream (frames where the
+  port pays ZERO and native pays 4/8) = player-shot impact sparks
+  effect-5: native logs MORE shot-hit events than the port in the
+  midboss window — 2 extra per 6 ticks during the invulnerable pre-
+  damage stretch (HP pinned 1278 f3582-3604) and 1 extra per hit-tick
+  during damage. Excluded: bullet spawn/main/aux ANM scripts (etama
+  3/16/21/22/23 — no 59/60 ops), the manager case-2/3/4 spawn-state
+  path (no RNG calls), FUN_0040c7d0 (pure vector scale), enemy census
+  (slots/HP/positions frame-exact f3570-3620). Surviving candidates:
+  invulnerable/phase-window hit accounting, a hitbox2 stream, or a
+  third hit source. **Consequence: the formal frontiers gx st1 f6352
+  and gx st2 f5853 sit ~2770 frames inside a diverged stream — sub27/
+  sub17 recompute their fan base angle from RNG var 10082 (sub27 t=110
+  op27), so both contacts are stream phantoms, not movement-law
+  defects. Until f3582's consumer is pinned and paid, frontier moves
+  are lottery re-rolls. The pass-16 "C-curve 0 through f3581" check
+  stopped one frame before the cliff.**
+- CLOSED pass 17 (audit): **pass-16's WIP is root-cause-correct 7/8
+  against the binary**; the eighth (et_ex 0x20000 wait gate) cleared
+  its bit one handler-pass early (native checks FUN_0040e390
+  remaining<=0 BEFORE FUN_00418110 decrements — the clear pass burns
+  no decrement, bit lives arg3+1 passes). Fixed to check-first; test
+  re-pinned to native timing; all four frontiers re-verified unmoved.
+  Also asm-pinned this pass: the 0x40/0x80/0x100 arm block @0x430380,
+  the 0x10 arm @0x4301db (f1<=−990 fallback = +0xd74 CURRENT HEADING —
+  the decompile's [0x35a] is wrong; vector baked = polar(angle,
+  mag×rate) into +0xfc0), and FUN_004322b0's tick (scale+add, atan2
+  heading recompute) — the Sub25 bullet's full motion law is
+  binary-exact in the port; f6352 was never a movement defect.
 
 - CLOSED this pass (15): **the st2 wave-mouth 12.5-frame-early kill** —
   root was lunge-pointer ADOPTION, not volley timing or a damage veto
@@ -285,45 +324,42 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 15): **gx st1 f3630** (Sub24 ring razor; hit
-  bullet ownerSub=24 spawnF=3557), ly st1 f3176, ly st2 **f4985** all
-  held; gx st2 **f4365 → f3019** — a butterfly re-roll, NOT a pointer
-  regression: the old frontier rode a stream that was census-wrong from
-  f1546, the corrected stream re-rolls everything downstream, and the new
-  hit sits below the movement-precision family. Judges = census + RNG
-  curves (§1), and both improved. 214 tests green.
+- Formal baselines (pass 17, post wait-gate fix): **gx st1 f6352**,
+  **gx st2 f5853**, ly st1 f3176, ly st2 f3470 — all four re-verified
+  unmoved after the audit fix. CAVEAT (pass 17): the two gx frontiers
+  are stream phantoms (see the f3582 wall above); treat them as
+  "furthest frame reached under a diverged stream", not as
+  movement-law failure points. The Sub25 "parked speed=0" reading was
+  wrong — the bullet's speed SCALAR is 0 by authorship (0x40
+  newSpeed=0) while it re-accelerates via the 0x10 slot (|v|=2.70 at
+  contact); its full motion law is asm-verified exact.
+- CLOSED pass 16: **gx st2 f3019** — `FUN_00440cf0` on power 127→128
+  pays `FUN_00406fa0(0x80)` (4 extra u16) on top of `FUN_00441850(1)`.
+  Missing that checksum shifted the whole st2 stream (the "sub12 mirror"
+  was a symptom).
+- CLOSED pass 16: **st1 f2965 effect-pool 3-slot gap** — ins_128 was a
+  no-op; native `FUN_00425430(0xd)` allocates a zero-draw effect-13
+  cloud (Sub15 six arms at t0..50). C-curve vs rng-curve.jsonl is 0
+  through f3581 after the port.
+- CLOSED pass 16: **st1 f4013 Sub24 leftovers** — ins_111 0x20000 wait
+  `continue`'d into 0x40000 fade-kill at construction; `dead=true` leaked
+  fixed-pool slots (`if (b.dead) return` never compacted). Native ORs
+  the bit into +0xdac and RETURNS. Midboss now death-wipes ~f4140
+  (bullets 409→0) instead of parking speed-0 rice onto the replay path.
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
-  trajectory is census-exact f3351-3524 and the residual 135 deviating
-  rows all sit f3525+ (see the pool-gap residual below).
-- **st1 open root — effect-pool 3-slot composition gap → RNG desync
-  from f2965** (pass-11 evidence): RNG counter offset vs
-  fa-native-gx/rng-curve.jsonl is 0 through f2699 (85k draws frame-exact),
-  then at the first simultaneous pool-full (f2965) native allocates 1 of 4
-  fireflies (pre-batch 511) where the port allocates 4 (pre-batch 508) →
-  +78 draws, never repaid. All draw-costed spawns provably match; the gap
-  is 3 zero-draw VMs (candidates: id5/id51/id62 tick-boundary lifetimes,
-  or an unmodeled native zero-draw request; needs native pool-composition
-  evidence — a wine /proc round scanning the 0x200 effect pool's id
-  histogram around f2930-3010). Downstream chain is proven: desync →
-  Sub22 t190 op67 exit angle differs → 17px trajectory gap → the f3630
-  razor.
-- st2 field parity: wave mouth census-exact post-4933480 (f1571-1806
-  clean). **New first residual — sub12 spawn angle mirrored around 90°**:
-  port angle f32 1.6721524 (down-left) vs native ≈1.4694 (down-right),
-  vy and the ins_71 +0.05/f ramp identical; angle = var[10048] +
-  var[10035]·(π/16) (sub12 t0 ins_27/25 → ins_65), vars inherited from
-  the spawner sub11 (ins_91 t50..210, life 100) — the ±sign lives
-  upstream in the wave-controller float-op chain (next dig). Downstream
-  of it the drift compounds (2-7px by f2880) and gates gx st2's f3019.
-  Stream RNG: the ±4 wander family unchanged (does not repay).
-- Next-target queue (leverage order): (1) the sub12 spawn-angle var
-  chain (mirror sign in the wave-controller float ops; directly gates the
-  gx st2 f3019 razor); (2) the st1 effect-pool 3-slot gap (the f3630
-  razor's direct root; sharpest probe = native pool id histogram,
-  user-gated wine round); (3) the MOVEMENT-PRECISION family — player
-  micro-position f661+ (slot8/st2-f696 probe, wine-gated); (4) boss-fight
-  pacing downstream of those walls; (5) visual fog law.
+  trajectory is census-exact f3351-3524.
+- Next-target queue: (1) **the f3582 stream wall** — identify and port
+  the missing native hit-event/spark consumer (start: why does native
+  pay 2 extra effect-5 sparks per 6 ticks against the INVULNERABLE
+  parked midboss f3582-3594, and 1 extra per hit-tick during damage?
+  Compare the port's shot-vs-invulnerable-enemy collision against
+  FUN_0043a980/FUN_00425d70's arm conditions); (2) re-derive the gx
+  frontiers on a stream-true run (both will move — direction unknown);
+  (3) the MOVEMENT-PRECISION family — player micro-position f661+
+  (wine-gated); (4) boss-fight pacing downstream of those walls;
+  (5) visual fog law; (6) ly st2 f3470 if a later stream-true fix
+  restores the old f4985 without re-rolling gx.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
