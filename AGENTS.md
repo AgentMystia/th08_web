@@ -262,7 +262,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 23)
+## 6. Standing residuals (honest, 2026-08-30 pass 24)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -399,6 +399,16 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
   trajectory is census-exact f3351-3524.
+- CLOSED pass 24 (3f1560f): **the st2 dialogue confirm law** — native
+  confirms on the SHOT-KEY RISING EDGE + armed counter (all.c:24781-24793;
+  0x164d534 = the previous frame's input word), not the level rule; the
+  replay taps Z, so the level rule ate 1-4f per op4 wait → Mystia's entry
+  79 ticks late → the whole stationary-seed lattice re-rolled. Fix: edge
+  confirm. **gx st2 f8252→f10043 (+1791), gx st1 f6013→f6021, ly flat,
+  216 green.** The 2026-08-27 A/B's "level confirm" reading is falsified
+  — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
+  never edge). Lesson: re-audit any A/B that inferred confirm semantics
+  from "input words all odd" against all.c:24781-24793.
 - Next-target queue: (1) **the sub21 one-step wall, pass-23 narrowed**:
   the native module table is fully resolved (12=bomb/effects, 13=effects
   +0x59c familiar pool, 14=the ONLY bullet pass; enemy ECL at 11) — no
