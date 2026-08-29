@@ -399,16 +399,19 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
   trajectory is census-exact f3351-3524.
-- Next-target queue: (1) **close the sub21 one-step wall** — find the
-  native mechanism that gives the first volley one extra bullet-manager
-  step (probe-spawstep.mjs reproduces the alignment; constructor asm
-  and ECL-clock census already rule out the naive stories — suspect
-  bullet-pass counting/order or the runstate poll phase); st1's stream
-  then holds past the midboss ring and the gx st1 frontier re-derives;
-  (2) the MOVEMENT-PRECISION family — player micro-position f661+
-  (wine-gated); (3) boss-fight pacing downstream of those walls;
-  (4) visual fog law; (5) ly st2 f3470 if a later stream-true fix
-  restores the old f4985 without re-rolling gx.
+- Next-target queue: (1) **close the sub21 one-step wall** (now also the
+  source of the 12f boss-spawn drift f5566 vs f5578 and thus most of the
+  remaining 24f Wriggle entry gap) — the three pass-21 clock models are
+  falsified; the step is bullet-pass-mechanical; (2) the st2 f8252
+  contact (sub28 parked rice, spawnF 7928, hit at the bottom edge);
+  (3) the dialogue's residual ~13f (17-wait arm granularity/row pacing);
+  (4) the MOVEMENT-PRECISION family — player micro-position f661+
+  (wine-gated); (5) visual: fog law, boss name plate, ring-bullet
+  render scale, HP-bar inset, timer tint (pass-21/22 acceptance list).
+- **Pass-22 headline**: the dialogue reveal-floor removal (c22b8a1) put
+  the boss-fight entries ~24f from native (was 182) and moved gx st2 to
+  f8252. The old gx st1 f6348 was a phantom of the shifted timeline —
+  frontiers measured across a pacing defect measure nothing.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
