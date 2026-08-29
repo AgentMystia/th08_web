@@ -417,19 +417,19 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 26): (1) **the one-tick bullet skip — pass-21's
-  wall with a native witness now**: a firefly bullet (spawnF 3473) froze
-  EXACTLY one tick at st1 f3664 (timer paused, position frozen, double-step
-  catch-up at f3665) where the port advances smoothly — the per-bullet
-  manager-pass step accounting (FUN_00431240's real walk) conditionally
-  skips a tick. Killing this restores st1 through the whole midboss
-  aftermath (bullets are 0.01px-exact before it); the module table stays
-  settled (12=bomb/effects, 13=effects+familiar pool, 14=the only bullet
-  pass, enemy ECL at 11) — the skip lives in the pass's per-bullet walk.
-  (1b) **st2 bisection**: port field empty (enemies not firing) by f8950
-  vs native 511 — wine-window bisect st2 from f3500 (first spell segment).
-  (2) the st2 f9253 contact (sub17 rice, spawnF 9025, bottom edge) —
-  downstream of (1b); (3) the
+- Next-target queue (pass 26): (1) **the st1 f5911 fan-aim divergence —
+  §AC14's var-inheritance family with a concrete witness**: sub25's
+  14-bullet fan fires with speed/step/span/count ALL native-exact but the
+  fan CENTER rotated 0.1104 rad (native ≈ exactly left; port off). The
+  bullet field is otherwise native-exact f3650-5910 (mid-pass-tolerant
+  scan, probe-driftscan2.mjs — the walk runs 0,1535..1 DESCENDING, so
+  mid-pass rows lag one tick on low slot numbers; never read a single
+  frozen bullet as a skip). Next: wine-capture the boss ECL var bank
+  (enemy 0x577f20, ctx +0x2ca0) f5800-5920 or statically audit sub25's
+  aim-var writer chain. (1b) **st2 bisection**: port field empty (enemies
+  not firing) by f8950 vs native 511 — wine-window bisect st2 from f3500
+  (first spell segment). (2) the st2 f9253 contact (sub17 rice, spawnF
+  9025, bottom edge) — downstream of (1b); (3) the
   dialogue's residual ~13f (17-wait arm granularity/row pacing);
   (4) the MOVEMENT-PRECISION family — player micro-position f661+
   (wine-gated); (5) visual: fog law, boss name plate, ring-bullet

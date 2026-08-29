@@ -21,10 +21,15 @@ addTimeOrbs parity (pv curve now native-exact), the pointStar/type-6
 collect law (graze-scaled fixed award), and the FIRE rank-lerp spell gate
 (wine-pinned: sub24's 123-bullet volley fires exactly 3.0 native during
 the spell; the pass-20 ±0.15-lattice story is superseded). Next targets:
-the one-tick bullet skip (st1 f3664 native witness — a firefly bullet
-frozen exactly one tick, double-step catch-up; this is pass-21's wall) and
-the st2 post-gate bisection. The wine tooling is tmp/wine-bulcensus.mjs +
-tmp/wine-out/*.jsonl (full-pool bullets/items/player per frame).
+the st1 f5911 fan-aim divergence (sub25's 14-bullet fan: everything
+native-exact except the center rotated 0.1104 rad — §AC14's var family
+made concrete) and the st2 post-gate bisection (port field empty by f8950
+vs native 511). CAVEAT learned this pass: the bullet walk runs 0,1535..1
+DESCENDING — mid-pass wine/census rows lag one tick on LOW slot numbers;
+use the position-or-minus-velocity matcher (probe-driftscan2.mjs) before
+believing any single-bullet "skip". The wine tooling is
+tmp/wine-bulcensus.mjs + tmp/wine-out/*.jsonl (full-pool bullets/items/
+player per frame).
 
 ### Prior picture (pass 23, kept for history)
 
