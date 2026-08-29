@@ -7,39 +7,36 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 17)
+## Convergence picture (2026-08-30 pass 19)
 
 Formal-mode earliest unexpected player hit (THE metric):
 
 | fixture-stage | pass 16 | now | note |
 |---|---|---|---|
-| udGx01 st1 | f6352 | f6352 | **stream phantom** (see below) |
-| udGx01 st2 | f5853 | f5853 | stream phantom (same family) |
-| udLy01 st1 | f3176 | f3176 | Sub15 rain spoke (spawn f2995) |
+| udGx01 st1 | f6352 | f6350 | stream true f3582→f3730; f6350 = op-158-wall noise |
+| udGx01 st2 | f5853 | **f8057** | +2204 — Mystia phase, post orb-law fix |
+| udLy01 st1 | f3176 | f3176 | held |
 | udLy01 st2 | f3470 | f3470 | f677 native deathbomb still exact |
 
-Pass 17 was an AUDIT round: the pass-16 WIP verified 7/8 binary-exact
-(ins_128 clouds, 0x20000 OR+RETURN, 0x40000 state-5, the three power
-crossing checksums, extends, the time-orb ladder, the spell-capture
-checksum arm, pointItems carry); the 8th (0x20000 wait gate) cleared
-its bit one pass early — native checks the timer BEFORE decrementing
-(all.c:23507-23514) — fixed + test re-pinned; all four frontiers
-re-verified unmoved.
+**Pass 19 closed the f3582 stream wall**: the native graze orb law
+(FUN_0044a930 tail) drops up to THREE time orbs per bullet graze —
+boss registered + gauge >= +8000 (orb 1), + spell active + bullet
+graze (orbs 2-3; the spell gate = 0x4ea670 bit 0 set by the declare).
+The port dropped one unconditionally → −8 draws per extreme-gauge
+spell graze from f3582, −9696 by f6352; the fan angles sub27/sub17
+build from RNG var 10082 made both old gx frontiers stream phantoms.
+Also pinned: graze score doubling = gauge >= +2000 (0x164d30a); the
+threshold table 0x164d300-30a = ±10000/∓8000/±2000 (asm 0x44d9ee).
 
-**THE discovery: the st1 RNG draw stream diverges from native at
-f3582.** census.jsonl per-frame draws (native f == port after input
-f−1): first miss +8 at f3582 (3 events, period 6, 24 draws), then +4
-per hit-event through the midboss damage phase, −7778 by f5001. The
-consumer: native pays MORE player-shot impact sparks (effect-5, 4
-draws) than the port in the midboss window — 2 extra per 6 ticks
-against the INVULNERABLE parked boss (HP pinned f3582-3604), 1 extra
-per hit-tick during damage. Everything else is excluded (bullet ANM
-scripts have no random ops; the spawn-state manager path draws
-nothing; the enemy census is frame-exact through the window). Since
-sub27/sub17 rebuild their fan base angle from RNG var 10082, the
-f6352/f5853 contacts are phantoms of a diverged stream — the Sub25
-bullet's motion law (0x40 sawtooth/turn + 0x10 accel) is asm-verified
-binary-exact and was never the defect.
+**The next wall (fully anchored)**: the op-158 attack-controller
+subsystem — FUN_00424a20/00424c40 toggle matching bullets' +0x1fc,
+shifting sprites ±0x10, setting +0x10b4 (the no-collision gate over
+the whole graze/hurt block) and re-aiming velocity at the attack's
+angle/speed; +0xd34 = the live VM size (FUN_00462ff0). Without it the
+sprite-7 ring grazes 3 frames late (flat tier 10) — the transient
+wobbles at f3731+ re-roll the Wriggle fight → f6350. st2's stream was
+already clean; its f8057 contact is the first post-orb real divergence
+(Mystia sub17 family, unexamined).
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
 

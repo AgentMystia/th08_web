@@ -2788,9 +2788,11 @@ export class StageRuntime {
           // color offset without changing this backup, which matters for a
           // template-6 bullet spawned after slowmo has already begun.
           slowmoShapeBackupRect: this.bulletRect(p.sprite, 0),
-          // TH08 hitboxes are PROTOTYPE-derived (main script id + base
-          // sprite height, AddedCallback @ all.c:24344-24420), never
-          // per-offset.
+          // TH08 bullet +0xd34/+0xd38 = the prototype's live-sprite AABB
+          // full width (FUN_00462ff0 rewrites it from the VM size whenever
+          // the VM carries the size flag; the spawn copy is all.c:22774).
+          // th08BulletHitbox() is its tier law; see the class note there for
+          // the sprite-7 ring-bullet witness (32x32 rect grazes at 37.4px).
           grazeW: this.th08BulletHitbox(p.sprite),
           grazeH: this.th08BulletHitbox(p.sprite),
           grazed: false,
@@ -4614,6 +4616,15 @@ export class StageRuntime {
     // = 8, default 10; v>48 -> 24 (cat 0). Native Stage-2 slot tracing
     // directly reads +0xd34=6 for type-1's 16px non-rice pair; that field is
     // the full AABB width and FUN_0044a230 divides it by 2 at contact.
+    // KNOWN RESIDUAL (pass 18): FUN_00462ff0 rewrites +0xd34 per frame from
+    // the live VM size whenever the VM carries the size flag, and the gx st1
+    // midboss ring (sprite 7, rect 32x32) provably grazes at 16+21.4 =
+    // 37.4px at f3731 while its hurt test must fail <16.1px at f3739 — the
+    // live size SHRINKS mid-flight somewhere in that window. A flat rect
+    // width (32) reproduces the graze but phantom-hurts the player at
+    // f3738; the flat tier 10 misses the graze by 3 frames (the f3731/37/
+    // 43-class transient wobbles). The live-size law needs per-bullet VM
+    // size tracking (op7/op14/op36 timelines) and is the next wall.
     if (h > 48) return 24;
     if (h > 16) {
       if (s === 8 || s === 113 || s === 114 || s === 115) return 5;
@@ -4664,7 +4675,8 @@ export class StageRuntime {
 
   // Bullet command 0x4000 (FUN_0042ffc0, all.c:23066-23074): swap the
   // bullet's prototype block (DAT_00f54e90 + proto*0xd44) and shift its live
-  // sprite by spriteShift (FUN_0045e430 current+shift).
+  // sprite by spriteShift (FUN_0045e430 current+shift). The +0xd34 AABB
+  // follows the new prototype's tier (see th08BulletHitbox).
   th08BulletTransform(bullet: EnemyBullet, proto: number, spriteShift: number): void {
     if (!TH08_BULLET_PROTOTYPES[proto]) return;
     bullet.sprite = proto;

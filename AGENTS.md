@@ -251,42 +251,42 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 17)
+## 6. Standing residuals (honest, 2026-08-30 pass 19)
 
-- **THE wall (new, pass 17): the st1 RNG draw stream diverges from
-  native at f3582** — first missing +8 (recurs f3588/f3594 at period 6,
-  exactly 3 events = 24 draws), then +4-per-hit-event deficits through
-  the midboss damage phase (f3628+), −7778 by f5001, −9696 by f6352
-  (census.jsonl per-frame draws, aligned native f == port after input
-  f−1). The consumer is a standalone event stream (frames where the
-  port pays ZERO and native pays 4/8) = player-shot impact sparks
-  effect-5: native logs MORE shot-hit events than the port in the
-  midboss window — 2 extra per 6 ticks during the invulnerable pre-
-  damage stretch (HP pinned 1278 f3582-3604) and 1 extra per hit-tick
-  during damage. Excluded: bullet spawn/main/aux ANM scripts (etama
-  3/16/21/22/23 — no 59/60 ops), the manager case-2/3/4 spawn-state
-  path (no RNG calls), FUN_0040c7d0 (pure vector scale), enemy census
-  (slots/HP/positions frame-exact f3570-3620). Surviving candidates:
-  invulnerable/phase-window hit accounting, a hitbox2 stream, or a
-  third hit source. **Consequence: the formal frontiers gx st1 f6352
-  and gx st2 f5853 sit ~2770 frames inside a diverged stream — sub27/
-  sub17 recompute their fan base angle from RNG var 10082 (sub27 t=110
-  op27), so both contacts are stream phantoms, not movement-law
-  defects. Until f3582's consumer is pinned and paid, frontier moves
-  are lottery re-rolls. The pass-16 "C-curve 0 through f3581" check
-  stopped one frame before the cliff.**
+- CLOSED pass 19: **the f3582 stream wall** — the native graze orb law
+  (FUN_004930 tail, all.c:36844-36862): up to THREE time-orb drops per
+  bullet graze — orb 1: stage gate + any live boss slot + gauge >= +8000
+  (run-init constant 0x164d306, asm 0x44d9f7); orb 2: bullet graze only
+  (param_2==0) while a spell is up (0x4ea670 bit 0, set by the spell
+  declare FUN_004152a0); orb 3: stages 1-3 always. The port dropped one
+  unconditionally → −8 draws per extreme-gauge spell graze from f3582
+  (−9696 by f6352). Also pinned: the graze score doubling gate is gauge
+  >= +2000 (0x164d30a, youkai side only — the ±8000 pair is the effects
+  band); the threshold table 0x164d300-30a read in full at 0x44d9ee.
+  **gx st2 f5853 → f8057 (+2204). gx st1 stream true f3582→f3730
+  (+650 draws); frontier f6350.**
+- **THE next wall (pass 19, fully anchored): the op-158 attack-controller
+  subsystem** — sprite-7 ring bullets graze with +0xd34 = 32 at f3731
+  but must hurt-fail <16.1 by f3739: the et_ex attack toggles
+  (FUN_00424a20/00424c40, called via the op-158-registered attack
+  callback table; 0x4ea670 = the attack-manager singleton) flip
+  bullet +0x1fc, shifting the sprite ±0x10, setting +0x10b4 (the
+  no-collision gate over the whole graze/hurt block, all.c:23525) and
+  re-aiming velocity at the attack's +0x38/+0x3c angle/speed. The port
+  lacks op-158, the attack tick, +0x10b4 and the live +0xd34 size
+  (FUN_00462ff0) entirely; its static tier (10) misses the sprite-7
+  graze by 3 frames — the f3731-class transient wobbles that re-rolled
+  the Wriggle-fight fan angles and produced the f6350 contact.
 - CLOSED pass 17 (audit): **pass-16's WIP is root-cause-correct 7/8
   against the binary**; the eighth (et_ex 0x20000 wait gate) cleared
   its bit one handler-pass early (native checks FUN_0040e390
   remaining<=0 BEFORE FUN_00418110 decrements — the clear pass burns
   no decrement, bit lives arg3+1 passes). Fixed to check-first; test
-  re-pinned to native timing; all four frontiers re-verified unmoved.
-  Also asm-pinned this pass: the 0x40/0x80/0x100 arm block @0x430380,
-  the 0x10 arm @0x4301db (f1<=−990 fallback = +0xd74 CURRENT HEADING —
-  the decompile's [0x35a] is wrong; vector baked = polar(angle,
-  mag×rate) into +0xfc0), and FUN_004322b0's tick (scale+add, atan2
-  heading recompute) — the Sub25 bullet's full motion law is
-  binary-exact in the port; f6352 was never a movement defect.
+  re-pinned to native timing. Also asm-pinned: the 0x40/0x80/0x100 arm
+  block @0x430380, the 0x10 arm @0x4301db (f1<=−990 fallback = +0xd74
+  CURRENT HEADING — the decompile's [0x35a] is wrong), FUN_004322b0's
+  tick — the Sub25 bullet's motion law is binary-exact; f6352 was
+  never a movement defect.
 
 - CLOSED this pass (15): **the st2 wave-mouth 12.5-frame-early kill** —
   root was lunge-pointer ADOPTION, not volley timing or a damage veto
@@ -324,15 +324,14 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 17, post wait-gate fix): **gx st1 f6352**,
-  **gx st2 f5853**, ly st1 f3176, ly st2 f3470 — all four re-verified
-  unmoved after the audit fix. CAVEAT (pass 17): the two gx frontiers
-  are stream phantoms (see the f3582 wall above); treat them as
-  "furthest frame reached under a diverged stream", not as
-  movement-law failure points. The Sub25 "parked speed=0" reading was
-  wrong — the bullet's speed SCALAR is 0 by authorship (0x40
-  newSpeed=0) while it re-accelerates via the 0x10 slot (|v|=2.70 at
-  contact); its full motion law is asm-verified exact.
+- Formal baselines (pass 19): **gx st1 f6350**, **gx st2 f8057**
+  (+2204 over pass-16), ly st1 f3176, ly st2 f3470. The st1 stream is
+  draw-true f3582→f3730; the remaining sprite-7 graze wobble (3 frames
+  late, the op-158 toggle wall above) re-rolled the Wriggle-fight fan
+  angles → the f6350 contact is new-stream noise, not a movement
+  defect. The old "parked speed=0" reading of the f6352 bullet was
+  wrong — 0x40 newSpeed=0 with a live 0x10 accel (|v|=2.70 at contact),
+  asm-verified exact.
 - CLOSED pass 16: **gx st2 f3019** — `FUN_00440cf0` on power 127→128
   pays `FUN_00406fa0(0x80)` (4 extra u16) on top of `FUN_00441850(1)`.
   Missing that checksum shifted the whole st2 stream (the "sub12 mirror"
@@ -349,16 +348,13 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
   trajectory is census-exact f3351-3524.
-- Next-target queue: (1) **the f3582 stream wall** — identify and port
-  the missing native hit-event/spark consumer (start: why does native
-  pay 2 extra effect-5 sparks per 6 ticks against the INVULNERABLE
-  parked midboss f3582-3594, and 1 extra per hit-tick during damage?
-  Compare the port's shot-vs-invulnerable-enemy collision against
-  FUN_0043a980/FUN_00425d70's arm conditions); (2) re-derive the gx
-  frontiers on a stream-true run (both will move — direction unknown);
-  (3) the MOVEMENT-PRECISION family — player micro-position f661+
-  (wine-gated); (4) boss-fight pacing downstream of those walls;
-  (5) visual fog law; (6) ly st2 f3470 if a later stream-true fix
+- Next-target queue: (1) **port the op-158 attack-controller subsystem**
+  (registration, tick, +0x1fc toggle, +0x10b4 gate, re-aim, live
+  +0xd34) — all asm anchors in §6/finding pass 19; st1's stream then
+  holds past the midboss ring and the gx st1 frontier re-derives;
+  (2) the MOVEMENT-PRECISION family — player micro-position f661+
+  (wine-gated); (3) boss-fight pacing downstream of those walls;
+  (4) visual fog law; (5) ly st2 f3470 if a later stream-true fix
   restores the old f4985 without re-rolling gx.
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.

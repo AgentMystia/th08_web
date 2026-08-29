@@ -4242,7 +4242,9 @@ export class StageScene implements GameHost {
     if (e.ecl.sweepItemFlag && timer !== (e.ecl.bossTimerPrevious ?? -999) && timer % 6 === 0 &&
         Math.abs(x - px) <= hitbox.x / 1.4 + p.grazeboxHalf + 20 &&
         Math.abs(y - py) <= hitbox.y / 1.4 + p.grazeboxHalf + 20) {
-      this.onGrazeAward(x, y);
+      // FUN_0044a930's param_2: the body/laser callers pass nonzero, which
+      // disqualifies the spell-active orb 2/3 drops (bullet graze only).
+      this.onGrazeAward(x, y, false);
     }
     if (Math.abs(x - px) <= hitbox.x / 3 + p.hitboxHalf &&
         Math.abs(y - py) <= hitbox.y / 3 + p.hitboxHalf) {
@@ -4256,7 +4258,7 @@ export class StageScene implements GameHost {
   // bonus grows by 2500 + floor(cherry/1500)*20 (all.c:27969; the exe
   // accumulator DAT_012f40b0 is reset at each declare, so accumulating
   // only while a card is active is equivalent).
-  private onGrazeAward(sourceX = this.playerObj.x, sourceY = this.playerObj.y): void {
+  private onGrazeAward(sourceX = this.playerObj.x, sourceY = this.playerObj.y, isBulletGraze = true): void {
     const p = this.playerObj;
     // Th07.exe (v1.00b) FUN_0043bb30 @ 0x43bc2f-0x43bc81: every graze
     // spawns generic effect id 8 at the midpoint between player and contact,
@@ -4273,16 +4275,11 @@ export class StageScene implements GameHost {
     // FUN_0043bb30 @ 0x43bc81-8d: effect allocation precedes the
     // rank award; every bullet/laser/body graze contributes six points.
     this.adjustRank(6);
-    // TH08 graze (FUN_0044a930): the award is FUN_004181f0(2000), doubling
-    // to 4000 under the gauge-extreme condition (the exe's compare reads
-    // FUN_00406da0 — PROBABLE mapping to the ±8000 extremes, flagged).
-    // While any boss slot is registered, the graze also drops a time orb
-    // (item type 10 -> time/state-5) at the contact — the native orb
-    // income stream (all.c:36844-36862).
-    const extreme = this.runState.gaugeIsExtremelyHuman() || this.runState.gaugeIsExtremelyYoukai();
-    // FUN_0044a930 head: the displayed graze counter is +1, +2 past the
-    // human tint (−2000), +3 past the human effects threshold (−8000).
-    // Score/rank/time-orb awards stay per-event; only the counter steps.
+    // TH08 graze (FUN_0044a930): the counter tier is +1, +2 past the human
+    // tint (−2000), +3 past the human effects threshold (−8000) — the human
+    // side only. While any boss slot is registered the graze also drops
+    // time orbs at the contact — the native orb income stream (all.c:
+    // 36844-36862), modeled in full below.
     if (!this.bombActiveThisFrame) this.graze += this.runState.grazeCounterIncrement();
     this.traceReplayEvent?.({
       kind: 'graze', frame: this.frame,
@@ -4295,9 +4292,36 @@ export class StageScene implements GameHost {
     if (p.th08Form === 1) {
       this.runState.addYoukaiGauge(this.runState.gaugeGrazeDelta());
     }
-    this.addScore(extreme ? 4000 : 2000);
-    if (this.runtime.bossSlots.some((b) => b && !b.dead)) {
+    // FUN_00406da0 doubles the award once the gauge reaches the run-init
+    // constant 0x164d30a = +2000 — the youkai side only; the ±8000 pair is
+    // the effects/trickle band, not this gate (asm 0x44aa43-0x44aa5b).
+    this.addScore(this.runState.youkaiGauge >= 2000 ? 4000 : 2000);
+    // FUN_0044a930 tail (0x44aa86-0x44ab0f): the graze orb stream — up to
+    // THREE FUN_004400a0(pos, 10, 1) spawns (state byte 1; FUN_004400a0
+    // forces type-10 to its state-5 toss internally), 4 draws each:
+    //   orb 1: stage not (even && >=4) — FUN_0042f230 reads the stage byte
+    //          0x164d0b1 — or stage 10; any live boss slot (FUN_0042f1f0
+    //          over the 8 slots); and gauge >= +8000 (FUN_00406d70 reads
+    //          run-init constant 0x164d306 = 0x1f40, asm 0x44d9f7-0x44da12).
+    //   orb 2: bullet graze only (param_2 == 0; laser/body callers pass
+    //          nonzero) while a spell card is up — FUN_004178a0 tests the
+    //          side-mirror bit 0 that FUN_004152a0 sets at declare.
+    //   orb 3: unless stage >= 4 && odd (FUN_0042f270) — always open on
+    //          stages 1-3. The under-drop starved the gx st1 stream by 8
+    //          draws per extreme-gauge spell graze from f3582 (the midboss
+    //          nonspell window) and the over-drop paid phantom orbs below
+    //          the +8000 gate.
+    const stage = this.stageNumber;
+    if (this.runtime.bossSlots.some((b) => b && !b.dead) &&
+        this.runState.youkaiGauge >= 8000 &&
+        (stage < 4 || stage % 2 === 0 || stage === 10)) {
       this.spawnItem('time2', sourceX, sourceY, {});
+      if (isBulletGraze && this.runtime.spellActive) {
+        this.spawnItem('time2', sourceX, sourceY, {});
+        if (stage < 4 || stage % 2 === 0) {
+          this.spawnItem('time2', sourceX, sourceY, {});
+        }
+      }
     }
     this.playSfx(30); // graze: TH08 id 30
   }
@@ -5396,7 +5420,7 @@ export class StageScene implements GameHost {
       this.onPlayerContact?.('laser');
       this.onPlayerHit(null, 'laser');
     }
-    else if (result === 'graze') this.onGrazeAward();
+    else if (result === 'graze') this.onGrazeAward(this.playerObj.x, this.playerObj.y, false);
   }
 
   // Player-vs-laser test, exe FUN_0043b650 (all.c:27867-27925) via
