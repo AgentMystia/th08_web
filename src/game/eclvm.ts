@@ -343,6 +343,20 @@ export class StageRuntime {
   // kill, release, boss-slot and visibility transitions, ring-capped.
   // Gameplay never reads it; the ?test=1 snapshot exposes it.
   lifecycleLog: { f: number; ev: string; id: number; sub: number; a?: number }[] = [];
+  // The enemy manager's DEFAULT fire template (0x577f20 + 0x2e24 =
+  // DAT_0057ad44), initialized ±0.15 by the shared per-slot init
+  // FUN_00429e00 (all.c:19955-19956, also run on the manager record at
+  // all.c:21200). Every HP-threshold/death-callback/timeout phase entry
+  // copies it over the enemy's template — and the spell declare's
+  // FUN_00415c80 re-arm (FUN_004152a0 @ 0x415511: ecx = *(enemy+4), the
+  // manager link) retargets THIS record, not the declaring enemy: the
+  // manager default flips to ±0.5 and every LATER phase-entry copy
+  // restores ±0.5. The gx st1 midboss is the witness: phase 2 (蛍符)
+  // fires its ring volley at raw+lerpF(±0.15, rank 12) = 2.9625 — the
+  // ±0.5 lattice cannot produce that speed, and the native graze events
+  // (f3731 pair) only fit the ±0.15 side.
+  managerFireRankSpeedLow = -0.15000000596046448;
+  managerFireRankSpeedHigh = 0.15000000596046448;
   private randomItemIndex = 0;
   private randomSpawnIndex = 0;
   // FUN_00421e90 starts at a retained cursor and scans the 0x400-slot pool
@@ -1453,19 +1467,30 @@ export class StageRuntime {
       // +0x2e2a bit6 flag): cherry -25% penalty — fires on nonspell
       // timeouts as well, not just spell cards.
       if (!s.spellTimeoutFlag) game.onBossPhaseTimeout?.();
-      this.phaseTransition(game, e, sub);
+      // FUN_0042b930 path: template copy first, FUN_00415c80 after — the
+      // only phase entry whose ±0.5 re-arm survives.
+      this.phaseTransition(game, e, sub, true);
       return true;
     }
     return false;
   }
 
-  private phaseTransition(game: GameHost, e: Enemy, sub: number): void {
+  private phaseTransition(game: GameHost, e: Enemy, sub: number, timeoutPath = false): void {
     const s = e.ecl;
+    // FUN_00415c80 (all.c:9249-9254) re-arms the wide ±0.5 rank-lerp pair
+    // (fresh-enemy default ±0.15, all.c:19955-19956), but the THREE native
+    // phase-entry paths differ in whether the default-template copy follows
+    // it: the copy is 0x84 dwords from DAT_0057ad44 = enemy-manager
+    // 0x577f20 + 0x2e24 (the manager's own template, ±0.15 from the shared
+    // enemy init) and COVERS +0x2dec/+0x2df0. FUN_0042b490 (life/HP
+    // threshold, all.c:20726-20736) re-arms FIRST and copies after — the
+    // copy overwrites the re-arm, net ±0.15. FUN_0042b930 (timer/timeout,
+    // all.c:20862-20870) copies FIRST and re-arms after — net ±0.5.
+    // FUN_0042c660 (death-callback entry, all.c:21712-21725) re-arms first,
+    // copies after — net ±0.15. The spell declare FUN_004152a0 re-arms with
+    // NO copy after (all.c:9097) — ±0.5 survives (modeled at the declare).
     s.bulletRankSpeedLow = -0.5;
     s.bulletRankSpeedHigh = 0.5;
-    // FUN_00415c80 (all.c:9249-9254): every phase entry / spell declaration
-    // re-arms the wider ±0.5 rank-lerp pair on the TH08 fire template too
-    // (the fresh-enemy default is ±0.15, all.c:19955-19956).
     s.th08!.fireRankSpeedLow = -0.5;
     s.th08!.fireRankSpeedHigh = 0.5;
     s.bulletRankAmount1Low = 0;
@@ -1473,6 +1498,15 @@ export class StageRuntime {
     s.bulletRankAmount2Low = 0;
     s.bulletRankAmount2High = 0;
     this.resetFireTemplateState(s);
+    // FUN_0042b930's order only: the copy lands first and the FUN_00415c80
+    // re-arm AFTER it survives as ±0.5. Every other phase path (b490/c660)
+    // keeps the copy's default ±0.15 restored inside the reset above.
+    if (timeoutPath) {
+      s.bulletRankSpeedLow = -0.5;
+      s.bulletRankSpeedHigh = 0.5;
+      s.th08!.fireRankSpeedLow = -0.5;
+      s.th08!.fireRankSpeedHigh = 0.5;
+    }
     s.stack.length = 0;
     s.periodicExportArmed = false;
     // The exe disarms the op144 periodic sub (+0x2ee4 = -1) on EVERY phase
@@ -1502,6 +1536,19 @@ export class StageRuntime {
     // that block and deliberately survives while the zero interval keeps it
     // dormant. Retaining the old template leaked a previous Stage-6 phase's
     // third/fourth EX behaviours into the next phase's bullets.
+    // The copy restores the WHOLE 0x84-dword fire template including the
+    // rank-lerp bounds at +0x2dec/+0x2df0 from the manager's default
+    // record (0x577f20 + 0x2e24, initialized ±0.15 by FUN_00429e00 and
+    // flipped to ±0.5 by every spell declare — see the field note above).
+    // A preceding FUN_00415c80 ±0.5 re-arm on the b490/c660 paths is
+    // overwritten by this; only b930 (timeout) re-arms again after the
+    // copy.
+    s.bulletRankSpeedLow = this.managerFireRankSpeedLow;
+    s.bulletRankSpeedHigh = this.managerFireRankSpeedHigh;
+    if (s.th08) {
+      s.th08.fireRankSpeedLow = this.managerFireRankSpeedLow;
+      s.th08.fireRankSpeedHigh = this.managerFireRankSpeedHigh;
+    }
     s.bulletProps = null;
     s.bulletExSlots.fill(null);
     s.bulletSfx = 0;
@@ -2788,11 +2835,10 @@ export class StageRuntime {
           // color offset without changing this backup, which matters for a
           // template-6 bullet spawned after slowmo has already begun.
           slowmoShapeBackupRect: this.bulletRect(p.sprite, 0),
-          // TH08 bullet +0xd34/+0xd38 = the prototype's live-sprite AABB
-          // full width (FUN_00462ff0 rewrites it from the VM size whenever
-          // the VM carries the size flag; the spawn copy is all.c:22774).
-          // th08BulletHitbox() is its tier law; see the class note there for
-          // the sprite-7 ring-bullet witness (32x32 rect grazes at 37.4px).
+          // TH08 bullet +0xd34/+0xd38 = the prototype's static AABB full
+          // width, copied at spawn (all.c:22774) and swapped wholesale by
+          // the et 0x4000 prototype rewrite. th08BulletHitbox() is its
+          // tier law.
           grazeW: this.th08BulletHitbox(p.sprite),
           grazeH: this.th08BulletHitbox(p.sprite),
           grazed: false,
@@ -3140,20 +3186,16 @@ export class StageRuntime {
     // (2026-07-11): the dispatch IS reached, the sub does NOT run.
     if (mode === 0) return false;
     if (callback >= 0) {
-      // FUN_0041ed50 death-callback entry, Th07.exe v1.00b
-      // @ 0x4203de-0x420411 (all.c:14373-14379): every retained callback
-      // actor receives the same rank-template reset as a boss phase entry
-      // before its callback ECL runs. This also applies to ordinary mode-1
-      // enemies; Stage-4 Sub17's death callback immediately fires bullets
-      // whose native rank-32 speed is raw+0.5, not the fresh-enemy +0.15.
+      // FUN_0042c660 death-callback entry (all.c:21708-21725): FUN_00415c80
+      // re-arms ±0.5 FIRST, then the default-template copy (DAT_0057ad44,
+      // ±0.15) overwrites it — net ±0.15, matching the fresh-enemy bounds.
+      // The resetFireTemplateState call below performs that copy.
       s.bulletRankSpeedLow = -0.5;
       s.bulletRankSpeedHigh = 0.5;
       s.bulletRankAmount1Low = 0;
       s.bulletRankAmount1High = 0;
       s.bulletRankAmount2Low = 0;
       s.bulletRankAmount2High = 0;
-      // Same FUN_00415c80 reset on the TH08 fire template (±0.5 for
-      // death-callback entries; fresh enemies carry ±0.15).
       if (s.th08) {
         s.th08.fireRankSpeedLow = -0.5;
         s.th08.fireRankSpeedHigh = 0.5;
@@ -4443,6 +4485,15 @@ export class StageRuntime {
     const name = new TextDecoder('shift_jis').decode(decoded);
     const s = e.ecl;
     s.spellName = name;
+    // FUN_004152a0 @ 0x415511-0x415514: the spell declare's FUN_00415c80
+    // re-arm takes ecx = *(declaring enemy + 4) — the MANAGER link, not
+    // the enemy. It flips the manager's default fire template
+    // (0x577f20+0x2e24) to ±0.5, which every later phase-entry copy then
+    // restores onto enemies; the declaring enemy itself keeps whatever its
+    // last phase entry left it (the midboss witness: fires at ±0.15 after
+    // declaring 蛍符).
+    this.managerFireRankSpeedLow = -0.5;
+    this.managerFireRankSpeedHigh = 0.5;
     this.spellActive = true;
     this.currentSpellId = spellId;
     const timer = s.timerCallbackThreshold > 0 ? s.timerCallbackThreshold : 60;
@@ -4609,23 +4660,19 @@ export class StageRuntime {
     const s = proto[0];
     const h = this.th08BulletBaseHeight(type);
     // The fnstsw parity chains at 0x43331d/0x433387 decode to inclusive
-    // tiers on the VM's +0x30 sprite-size field (the same field FUN_0042fea0
-    // compares against the 16/48 .rdata thresholds): v<=8 -> 4 (cat 5);
-    // 8<v<=16 -> rice-family scripts {2,4,5,6,106,107,108,111,112} = 4,
-    // DEFAULT 6.0 (cat 3); 16<v<=48 -> {8,113,114,115} = 5, {9,109,110}
-    // = 8, default 10; v>48 -> 24 (cat 0). Native Stage-2 slot tracing
-    // directly reads +0xd34=6 for type-1's 16px non-rice pair; that field is
-    // the full AABB width and FUN_0044a230 divides it by 2 at contact.
-    // KNOWN RESIDUAL (pass 18): FUN_00462ff0 rewrites +0xd34 per frame from
-    // the live VM size whenever the VM carries the size flag, and the gx st1
-    // midboss ring (sprite 7, rect 32x32) provably grazes at 16+21.4 =
-    // 37.4px at f3731 while its hurt test must fail <16.1px at f3739 — the
-    // live size SHRINKS mid-flight somewhere in that window. A flat rect
-    // width (32) reproduces the graze but phantom-hurts the player at
-    // f3738; the flat tier 10 misses the graze by 3 frames (the f3731/37/
-    // 43-class transient wobbles). The live-size law needs per-bullet VM
-    // size tracking (op7/op14/op36 timelines) and is the next wall.
-    if (h > 48) return 24;
+    // tiers on the VM's +0x30 sprite-size field against .rdata 8.0/16.0/
+    // 32.0 (0x4b4300/0x4b42d4/0x4b42cc — the earlier "48" was a misread
+    // of 0x42000000): v>32 -> 24 (cat 0); 16<v<=32 -> scripts
+    // {8,113,114,115} = 5, {9,109,110} = 8, DEFAULT 10; 8<v<=16 ->
+    // rice-family {2,4,5,6,106,107,108,111,112} = 4, DEFAULT 6; v<=8 ->
+    // 4 (cat 5). Native Stage-2 slot tracing directly reads +0xd34=6 for
+    // type-1's 16px non-rice pair; that field is the full AABB width and
+    // FUN_0044a230 divides it by 2 at contact. The value is copied from
+    // the prototype at spawn (all.c:22774) and swaps wholesale with the
+    // 0x4000 prototype rewrite — it is NOT rewritten per frame. (The old
+    // "live-size shrink" residual was a misdiagnosis: the sprite-7 graze
+    // lateness was the fire-rank ±0.5/±0.15 law, closed in phaseTransition.)
+    if (h > 32) return 24;
     if (h > 16) {
       if (s === 8 || s === 113 || s === 114 || s === 115) return 5;
       if (s === 9 || s === 109 || s === 110) return 8;

@@ -7,36 +7,43 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 19)
+## Convergence picture (2026-08-30 pass 20)
 
 Formal-mode earliest unexpected player hit (THE metric):
 
-| fixture-stage | pass 16 | now | note |
+| fixture-stage | pass 19 | now | note |
 |---|---|---|---|
-| udGx01 st1 | f6352 | f6350 | stream true f3582→f3730; f6350 = op-158-wall noise |
-| udGx01 st2 | f5853 | **f8057** | +2204 — Mystia phase, post orb-law fix |
-| udLy01 st1 | f3176 | f3176 | held |
-| udLy01 st2 | f3470 | f3470 | f677 native deathbomb still exact |
+| udGx01 st1 | f6350 | f6348 | same wall re-rolled (sub21 one-step residual) |
+| udGx01 st2 | f8057 | **f8061** | +4; Mystia phase, stream clean to f8061 |
+| udLy01 st1 | f3176 | f3177 | same wall (sub15 volley family) |
+| udLy01 st2 | f3470 | f3471 | f677 native deathbomb still exact |
 
-**Pass 19 closed the f3582 stream wall**: the native graze orb law
-(FUN_0044a930 tail) drops up to THREE time orbs per bullet graze —
-boss registered + gauge >= +8000 (orb 1), + spell active + bullet
-graze (orbs 2-3; the spell gate = 0x4ea670 bit 0 set by the declare).
-The port dropped one unconditionally → −8 draws per extreme-gauge
-spell graze from f3582, −9696 by f6352; the fan angles sub27/sub17
-build from RNG var 10082 made both old gx frontiers stream phantoms.
-Also pinned: graze score doubling = gauge >= +2000 (0x164d30a); the
-threshold table 0x164d300-30a = ±10000/∓8000/±2000 (asm 0x44d9ee).
+**Pass 20 overturned pass-19's "op-158 attack-controller" wall** (all
+three anchors were misattributions — op-158 is the laser-slot ins; the
+toggle callbacks are unreachable in st1/st2; +0xd34 can never be 32)
+and closed the REAL f3731 wall: **the fire-rank speed-bounds law**.
+FUN_00415c80's ±0.5 re-arm survives only where it runs AFTER the
+0x84-dword default-template copy (timeout path FUN_0042b930); the
+HP-threshold phase jump and death-callback paths copy afterwards and
+net ±0.15; the spell declare's re-arm (ecx = *(enemy+4), the manager
+link, asm 0x415511) flips the MANAGER DEFAULT template itself — later
+phase copies restore ±0.5 from it. The gx midboss ring volley fired at
+3.0+lerpF(±0.15, rank 12) = 2.9625 (unreachable on the ±0.5 lattice —
+that proved it); the port applied ±0.5 everywhere. Verified against the
+native screenshot s1-f03900 via a multimodal subagent (orb rows moved
+from +5px off to aligned within reading precision). Also fixed the
+bullet-size tier misread (thresholds 8/16/32, not 16/48).
 
-**The next wall (fully anchored)**: the op-158 attack-controller
-subsystem — FUN_00424a20/00424c40 toggle matching bullets' +0x1fc,
-shifting sprites ±0x10, setting +0x10b4 (the no-collision gate over
-the whole graze/hurt block) and re-aiming velocity at the attack's
-angle/speed; +0xd34 = the live VM size (FUN_00462ff0). Without it the
-sprite-7 ring grazes 3 frames late (flat tier 10) — the transient
-wobbles at f3731+ re-roll the Wriggle fight → f6350. st2's stream was
-already clean; its f8057 contact is the first post-orb real divergence
-(Mystia sub17 family, unexamined).
+**The next wall (anchored)**: the midboss Sub22→ins_135 Sub21 first
+volley runs one bullet-manager step short — its seven graze events are
+0-2 frames late with one permanently missing (net −16 draws). Adding
+ONE velocity step at creation aligns ALL seven exactly
+(tmp/probe-spawstep.mjs), but the constructor asm and the ECL-clock
+census reconciliation rule out the naive stories; the mechanism hides
+in bullet-pass counting/order or the runstate poll phase. This residual
+re-rolls the Wriggle fight and produces the f6348 contact (Sub25 parked
+rice, spawnF 6170). st2's f8061 contact (Mystia sub17 family) is still
+unexamined.
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
 

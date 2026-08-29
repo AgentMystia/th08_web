@@ -105,8 +105,19 @@ pass; the +0xdac handler XOR-clears the bit when the command timer
 elapses. Graze: once per bullet,
 age>15, box = AABB/2 + 20 vs player graze rect, tiers +1/+2/+3 by gauge
 depth, form-gated. FIRE count1=0 fires NOTHING (authored shutdown);
-rank-lerp speed bounds ±0.15 at enemy spawn, reset ±0.5 at every phase
-transition / spell arm / death-callback entry (FUN_00415c80).
+ring speed(j) = speed1 − (speed1−speed2)·j/count2 (FUN_0042f5f0).
+Fire-rank speed bounds (pass 20, exe-pinned): fresh enemy ±0.15
+(FUN_00429e00, also run on the manager record); the 0x84-dword
+default-template copy (DAT_0057ad44 = mgr 0x577f20+0x2e24 →
+enemy+0x2e24) covers +0x2dec/+0x2df0, so FUN_00415c80's ±0.5 survives
+ONLY where it runs after the copy — timeout phase (FUN_0042b930);
+HP-threshold phase (FUN_0042b490) and death-callback (FUN_0042c660)
+net ±0.15; the spell declare (FUN_004152a0, ecx=*(enemy+4) = manager
+link @0x415511) flips the MANAGER DEFAULT to ±0.5 (later phase copies
+restore ±0.5); ins_152 (exe 0x97) authors the pair directly (st2 uses
+[0,0] 7x). Bullet AABB +0xd34 = the prototype tier value {4,5,6,8,10,24},
+copied at spawn (all.c:22774) and swapped by the 0x4000 prototype
+rewrite; size thresholds 8/16/32 (.rdata 0x4b4300/0x4b42d4/0x4b42cc).
 
 **ECL**: ins_2 = TH08 wait (clock gate ctx+0x90); timeline holds (ops
 7/10/13) net-freeze the clock, dispatcher fires on exact match. Death
@@ -251,8 +262,48 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 19)
+## 6. Standing residuals (honest, 2026-08-30 pass 20)
 
+- CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
+  triple misattribution** — op-158 is the LASER-slot instruction (exe
+  case 0x9d, FUN_004230e0/110; the port's case 158 was already right);
+  the toggle callbacks FUN_00424a20/00424c40 live in the PTR_FUN_004c6cb0
+  tick table reachable only via ins 136/137 (exe 0x87/0x88) or effects
+  12/14 — NONE used in st1/st2; live +0xd34 ∈ {4,5,6,8,10,24} always
+  (spawn copy all.c:22774; the 0x4000 prototype swap replaces it
+  wholesale; FUN_00462ff0 is the sprite-quad DRAW, not an AABB writer —
+  the "32px/16.1px witness" was inference, not observation).
+- CLOSED pass 20: **the fire-rank speed-bounds law (THE real f3731
+  wall)** — FUN_00415c80 (±0.5) has four callers whose ORDER decides
+  survival against the 0x84-dword default-template copy
+  DAT_0057ad44→enemy+0x2e24 (covers +0x2dec/+0x2df0): HP-threshold
+  phase jump FUN_0042b490 re-arms then copies → ±0.15; timeout
+  FUN_0042b930 copies then re-arms → ±0.5; death-callback FUN_0042c660
+  re-arms then copies → ±0.15; spell declare FUN_004152a0 re-arms with
+  ecx = *(enemy+4) = the MANAGER link (asm 0x415511) — it flips the
+  manager default record itself (0x577f20+0x2e24 = DAT_0057ad44,
+  initialized ±0.15 by FUN_00429e00 at all.c:21200), so every LATER
+  phase copy restores ±0.5 while the declaring enemy keeps its current
+  bounds. Port now models managerFireRankSpeed{Low,High} + per-path
+  order. Lattice proof: the gx st1 midboss ring volley fires at
+  3.0+lerpF(±0.15, rank 12)=2.9625 — unreachable on the ±0.5 lattice.
+  Also fixed the tier misread: size thresholds are 8/16/32 (.rdata
+  0x4b4300/0x4b42d4/0x4b42cc), not 16/48 → h>32→24.
+  **gx st1 graze events f3731-class now 1-frame-late instead of 4-7;
+  gx st2 f8057→f8061; st1 frontier f6350→f6348 (same wall, re-rolled).**
+- **THE next wall (pass 20, anchored): the sub21-context emission is
+  one bullet-manager step short** — the midboss Sub22→ins_135 Sub21
+  first volley's seven graze events (native f3731×2/3736/3754/3759/
+  3775/3781) all shift 0-2 frames late with one permanently missing
+  (net −16 draws). Adding ONE velocity step at creation (monkey-patch
+  tmp/probe-spawstep.mjs) aligns ALL seven exactly. But the constructor
+  asm (0x42f946-98b: position = template copy, velocity =
+  FUN_004286e0(angle, speed×DAT_017ce8e0), NO construction-time
+  integration) and the ECL-clock census reconciliation (eclT 284@f3620
+  exact) both rule out the naive stories — the missing step hides in
+  bullet-pass counting/order (or the runstate poll's intra-frame
+  phase). This residual rolls the Wriggle-fight fan angles and produces
+  the f6348 contact (Sub25 parked rice, spawnF 6170).
 - CLOSED pass 19: **the f3582 stream wall** — the native graze orb law
   (FUN_004930 tail, all.c:36844-36862): up to THREE time-orb drops per
   bullet graze — orb 1: stage gate + any live boss slot + gauge >= +8000
@@ -264,19 +315,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   >= +2000 (0x164d30a, youkai side only — the ±8000 pair is the effects
   band); the threshold table 0x164d300-30a read in full at 0x44d9ee.
   **gx st2 f5853 → f8057 (+2204). gx st1 stream true f3582→f3730
-  (+650 draws); frontier f6350.**
-- **THE next wall (pass 19, fully anchored): the op-158 attack-controller
-  subsystem** — sprite-7 ring bullets graze with +0xd34 = 32 at f3731
-  but must hurt-fail <16.1 by f3739: the et_ex attack toggles
-  (FUN_00424a20/00424c40, called via the op-158-registered attack
-  callback table; 0x4ea670 = the attack-manager singleton) flip
-  bullet +0x1fc, shifting the sprite ±0x10, setting +0x10b4 (the
-  no-collision gate over the whole graze/hurt block, all.c:23525) and
-  re-aiming velocity at the attack's +0x38/+0x3c angle/speed. The port
-  lacks op-158, the attack tick, +0x10b4 and the live +0xd34 size
-  (FUN_00462ff0) entirely; its static tier (10) misses the sprite-7
-  graze by 3 frames — the f3731-class transient wobbles that re-rolled
-  the Wriggle-fight fan angles and produced the f6350 contact.
+  (+650 draws).**
 - CLOSED pass 17 (audit): **pass-16's WIP is root-cause-correct 7/8
   against the binary**; the eighth (et_ex 0x20000 wait gate) cleared
   its bit one handler-pass early (native checks FUN_0040e390
@@ -324,14 +363,14 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 19): **gx st1 f6350**, **gx st2 f8057**
-  (+2204 over pass-16), ly st1 f3176, ly st2 f3470. The st1 stream is
-  draw-true f3582→f3730; the remaining sprite-7 graze wobble (3 frames
-  late, the op-158 toggle wall above) re-rolled the Wriggle-fight fan
-  angles → the f6350 contact is new-stream noise, not a movement
-  defect. The old "parked speed=0" reading of the f6352 bullet was
-  wrong — 0x40 newSpeed=0 with a live 0x10 accel (|v|=2.70 at contact),
-  asm-verified exact.
+- Formal baselines (pass 20): **gx st1 f6348**, **gx st2 f8061**,
+  ly st1 f3177, ly st2 f3471. The st1 stream is draw-true f3582→f3730;
+  the sprite-7 graze family now runs 0-2 frames late with one event
+  missing (the sub21 one-step wall above) — it re-rolls the
+  Wriggle-fight fan angles and the f6348 contact is that noise, not a
+  movement defect. The old "parked speed=0" reading of the f6352 bullet
+  was wrong — 0x40 newSpeed=0 with a live 0x10 accel (|v|=2.70 at
+  contact), asm-verified exact.
 - CLOSED pass 16: **gx st2 f3019** — `FUN_00440cf0` on power 127→128
   pays `FUN_00406fa0(0x80)` (4 extra u16) on top of `FUN_00441850(1)`.
   Missing that checksum shifted the whole st2 stream (the "sub12 mirror"
@@ -348,10 +387,12 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
   trajectory is census-exact f3351-3524.
-- Next-target queue: (1) **port the op-158 attack-controller subsystem**
-  (registration, tick, +0x1fc toggle, +0x10b4 gate, re-aim, live
-  +0xd34) — all asm anchors in §6/finding pass 19; st1's stream then
-  holds past the midboss ring and the gx st1 frontier re-derives;
+- Next-target queue: (1) **close the sub21 one-step wall** — find the
+  native mechanism that gives the first volley one extra bullet-manager
+  step (probe-spawstep.mjs reproduces the alignment; constructor asm
+  and ECL-clock census already rule out the naive stories — suspect
+  bullet-pass counting/order or the runstate poll phase); st1's stream
+  then holds past the midboss ring and the gx st1 frontier re-derives;
   (2) the MOVEMENT-PRECISION family — player micro-position f661+
   (wine-gated); (3) boss-fight pacing downstream of those walls;
   (4) visual fog law; (5) ly st2 f3470 if a later stream-true fix
@@ -359,7 +400,11 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Boss-fight pacing ~2.5-3x native: HP buckets d=0 through f2500 —
   downstream of the wall, not the wall.
 - Visual: stage background fog law unresolved (dominant); boss lifebar
-  fill-ratio micro-details.
+  fill-ratio micro-details. Pass-20 visual acceptance (multimodal
+  subagent, s1-f03900 port-vs-native): scene/midboss/bullet field
+  aligned (orbs Δy −3..−5px = the sub21 residual; rice ≤2.5px); one
+  artifact to watch — a pale lavender double-ring blob drawn OVER a
+  rice bullet at ~(87,165), single occurrence.
 - Browser replay playback returns to title at a block's end; native
   chains blocks in-session (fidelity TODO).
 - §7-flagged code approximations are grep-able (`§7`); none gameplay-
