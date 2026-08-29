@@ -13,8 +13,8 @@ Formal-mode earliest unexpected player hit (THE metric):
 
 | fixture-stage | pass 20 | pass 22 | now | note |
 |---|---|---|---|---|
-| udGx01 st1 | f6348 | f6013 | f6013 | true fidelity after the pacing fix; sub21 one-step residual |
-| udGx01 st2 | f8061 | **f8252** | f8252 | +191; Mystia phase, downstream of the f7869 beat wall |
+| udGx01 st1 | f6348 | f6013 | **f6021** | +8; dialogue now runs at native pace |
+| udGx01 st2 | f8061 | f8252 | **f10043** | +1791; dialogue-edge fix cleared the seed-lattice regime |
 | udLy01 st1 | f3177 | f3177 | f3177 | same wall (sub15 volley family) |
 | udLy01 st2 | f3471 | f3471 | f3471 | f677 native deathbomb still exact |
 
@@ -24,6 +24,17 @@ IS the 6/8-frame confirm arms); removing it put the boss-fight entries
 ~24f from native (was 182) and moved gx st2 +191. The old gx st1 f6348
 was a phantom of the shifted timeline — frontiers measured across a
 pacing defect measure nothing.
+
+**Pass 24 closed the st2 dialogue root cause (3f1560f)**: the native
+confirm is the SHOT-KEY RISING EDGE + armed threshold (all.c:24781-24793;
+0x164d534 = the previous frame's input), not the level rule — the replay
+taps the shot key, so the port's level rule ate 1-4 extra frames per op4
+wait: Mystia's entry landed 79 ticks late and the whole stationary-seed
+lattice re-rolled. The fix moved gx st2 f8252 -> f10043 (+1791) and gx
+st1 f6013 -> f6021; ly unchanged; 216 tests green. The old 2026-08-27
+A/B ("edge rules stall the ly dialogue") mis-attributed the ly dialogue's
+speed — its waits TIME OUT at short authored durations because held keys
+never produce edges.
 
 **Pass 23 (reconnaissance round, zero src changes)**: the native module
 table is fully resolved (ascending execution; 8=enemy ANM prep, 9/10=
