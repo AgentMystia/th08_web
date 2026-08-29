@@ -5610,8 +5610,14 @@ export class StageScene implements GameHost {
             it.state = 0;
           } else {
             // FUN_0044c1b0 @ all.c:37487-37497 computes atan2(py - iy, px - ix)
-            // in extended precision, returning f32 angle.
-            const angle = Math.fround(Math.atan2(p.y - it.y, p.x - it.x));
+            // as FPATAN over EXTENDED-precision differences (the x87 subtracts
+            // of two f32s never round), and the result feeds FSINCOS still in
+            // extended — the f32 rounding happens only at the velocity fstp.
+            // Rounding the angle here (the old form) injected an extra f32
+            // quantization per tick that compounds over the long-arc seek —
+            // the slot-8 time-orb's ~6px collect-box miss at f696. Keep the
+            // angle in f64 (the closest JS analog of x87 extended).
+            const angle = Math.atan2(p.y - it.y, p.x - it.x);
             it.vx = Math.fround(Math.cos(angle) * sht.autocollectSpeed);
             it.vy = Math.fround(Math.sin(angle) * sht.autocollectSpeed);
           }
