@@ -14,7 +14,7 @@ Formal-mode earliest unexpected player hit (THE metric):
 | fixture-stage | pass 20 | pass 22 | now | note |
 |---|---|---|---|---|
 | udGx01 st1 | f6348 | f6013 | **f6021** | +8; dialogue now runs at native pace |
-| udGx01 st2 | f8061 | f8252 | **f10043** | +1791; dialogue-edge fix cleared the seed-lattice regime |
+| udGx01 st2 | f8061 | f8252 | **f10058** | +1805; dialogue-edge fix + the 0x20-spiral queue-gate fix |
 | udLy01 st1 | f3177 | f3177 | f3177 | same wall (sub15 volley family) |
 | udLy01 st2 | f3471 | f3471 | f3471 | f677 native deathbomb still exact |
 
@@ -35,6 +35,14 @@ st1 f6013 -> f6021; ly unchanged; 216 tests green. The old 2026-08-27
 A/B ("edge rules stall the ly dialogue") mis-attributed the ly dialogue's
 speed — its waits TIME OUT at short authored durations because held keys
 never produce edges.
+
+**Pass 25 closed the queue-walk gate defect (cbd8d9d)**: the bullet
+behavior walk's TH07-heritage `exFireFlags & opcode` skip buried later
+queue slots — native FUN_0042ffc0 gates only on cond==0 (+0xdb0 is a
+bomb-time bit). The gx st2 contact bullet's 0x20 spiral slot (angle
+-0.0262/tick after the 0x10 accel) never armed, freezing the coast; the
+fork explained the f10043 contact. Fix: gate removed, gx st2
+f10043 -> f10058; ly/st1 unchanged.
 
 **Pass 23 (reconnaissance round, zero src changes)**: the native module
 table is fully resolved (ascending execution; 8=enemy ANM prep, 9/10=
