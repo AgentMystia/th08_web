@@ -2307,11 +2307,35 @@ export class StageScene implements GameHost {
     let chip = 2000;
     for (const b of this.enemyBullets) {
       if (b.dead) continue;
+      // The settle arms its per-child/master quads (FUN_0042adb0 →
+      // FUN_0044df00) BEFORE the field sweep runs, and the quad-destined
+      // bullets are already gone when FUN_00430aa0 walks the pool: wine
+      // st1c f4123 splits the wiped field into 209 sweep pointStars AND 63
+      // quad-converted time items around the five swept Sub24s. Converting
+      // everything here starved the port's death-clear zones (273 pointStar
+      // vs native 209, zero quad orbs, −252 draws) — leave zone-covered
+      // bullets to the zone path.
+      let inZone = false;
+      for (const z of this.th08DeathClearZones) {
+        if (z.framesLeft <= 0) continue;
+        const dx = b.x - z.x;
+        const dy = b.y - z.y;
+        if (dx * dx + dy * dy < z.radius * z.radius) { inZone = true; break; }
+      }
+      if (inZone) continue;
       this.spawnItem('pointStar', b.x, b.y, { state: 1 });
       total += chip;
       chip = Math.min(8000, chip + 20);
+      // FUN_00422ea0's item-producing clear `rep stos`s the whole slot —
+      // including the +0xbfe off-screen counter (clearEnemyBullets(true)
+      // semantics), applied per removed slot here.
+      if (this.enemyBulletOffscreenCounters && b.poolSlot >= 0 &&
+          b.poolSlot < this.enemyBulletOffscreenCounters.length) {
+        this.enemyBulletOffscreenCounters[b.poolSlot] = 0;
+      }
+      this.removeEnemyBullet(b);
     }
-    this.clearEnemyBullets(true);
+    this.compactLive(this.enemyBullets);
     chip = 2000;
     for (const other of this.enemies) {
       if (other === dead || other.dead) continue;
@@ -4139,11 +4163,13 @@ export class StageScene implements GameHost {
     // Master tail (all.c:20530-20544): one time orb per +0x3380 attach-ledger
     // entry times two around the MASTER (frand01*128, frandSigned*pi, state
     // arg 1 — FUN_004400a0 forces the toss arc), then the master's own
-    // (r32, +1/frame, 16-frame) kill quad. The ledger counts every attach
-    // minus children that already died through the normal death path — it
-    // diverges from the live chain length exactly when some children died
-    // before the master.
-    const tailOrbs = childCount * 2;
+    // (r32, +1/frame, 16-frame) kill quad. The count reads the LEDGER
+    // (+0x3380), not the live chain: st1's midboss dies with 5 live Sub24s
+    // but ledger 46+, and the native wipe pays ledger×2 state-3 orbs on top
+    // of the per-child tier orbs (wine st1c f4122: 236 = 5×20 tier + 136
+    // ledger orbs; the port's old childCount×2 paid only 10 and shed ~1000
+    // draws, forking the RNG stream for the whole Wriggle fight).
+    const tailOrbs = (t8!.attachCount ?? 0) * 2;
     for (let i = 0; i < tailOrbs; i++) {
       const radius = this.rng.f() * 128;
       const angle = (this.rng.f() * 2 - 1) * Math.PI;
