@@ -34,16 +34,18 @@ native screenshot s1-f03900 via a multimodal subagent (orb rows moved
 from +5px off to aligned within reading precision). Also fixed the
 bullet-size tier misread (thresholds 8/16/32, not 16/48).
 
-**The next wall (anchored)**: the midboss Sub22→ins_135 Sub21 first
-volley runs one bullet-manager step short — its seven graze events are
-0-2 frames late with one permanently missing (net −16 draws). Adding
-ONE velocity step at creation aligns ALL seven exactly
-(tmp/probe-spawstep.mjs), but the constructor asm and the ECL-clock
-census reconciliation rule out the naive stories; the mechanism hides
-in bullet-pass counting/order or the runstate poll phase. This residual
-re-rolls the Wriggle fight and produces the f6348 contact (Sub25 parked
-rice, spawnF 6170). st2's f8061 contact (Mystia sub17 family) is still
-unexamined.
+**The next walls (pass 21, both anchored)**: (1) gx st1 — the sub21
+one-step residual survived three falsifications this round (round-robin
+advance-then-fetch, its exact variant, and the phase-entry double tick
+ALL break the stream at f1754): it is NOT a clock law; the fire-frame
+accounting is exact, so the missing step is bullet-pass-mechanical (see
+AGENTS §6). The f6348 contact is its downstream re-roll (Sub25 parked
+rice). (2) gx st2 — the f8061 contact is downstream of the f7869
+auto-fire volley regime: Mystia's ins_105/106 periodic emitter wobbles
+±1 frame (repaying) until the aim-tracking variable crosses zero at
+f7869, after which offsets stop repaying (−18 → +90 by f7950). Two laws
+to decode next round: the auto-fire timer order and the aim-tracking
+wrap. Probes for both walls are in tmp/probe-*.mjs.
 
 Goal: gx st1 = native No-Miss (0 unexpected hits over 11,460 frames).
 

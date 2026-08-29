@@ -291,19 +291,31 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   0x4b4300/0x4b42d4/0x4b42cc), not 16/48 → h>32→24.
   **gx st1 graze events f3731-class now 1-frame-late instead of 4-7;
   gx st2 f8057→f8061; st1 frontier f6350→f6348 (same wall, re-rolled).**
-- **THE next wall (pass 20, anchored): the sub21-context emission is
-  one bullet-manager step short** — the midboss Sub22→ins_135 Sub21
-  first volley's seven graze events (native f3731×2/3736/3754/3759/
-  3775/3781) all shift 0-2 frames late with one permanently missing
-  (net −16 draws). Adding ONE velocity step at creation (monkey-patch
-  tmp/probe-spawstep.mjs) aligns ALL seven exactly. But the constructor
-  asm (0x42f946-98b: position = template copy, velocity =
-  FUN_004286e0(angle, speed×DAT_017ce8e0), NO construction-time
-  integration) and the ECL-clock census reconciliation (eclT 284@f3620
-  exact) both rule out the naive stories — the missing step hides in
-  bullet-pass counting/order (or the runstate poll's intra-frame
-  phase). This residual rolls the Wriggle-fight fan angles and produces
-  the f6348 contact (Sub25 parked rice, spawnF 6170).
+- **THE next wall (pass 21, narrowed by three falsifications): the sub21
+  one-step residual is NOT a clock law** — three controlled experiments
+  (round-robin advance-then-fetch pending; advance-then-fetch exact;
+  phase-entry double tick) ALL break the stream at f1754: the wave-enemy
+  sub-context t=1 rows (sub8/9) must fire at creation+1 (tick-after-fetch),
+  while the Sub21 t=200 ring volley must fire one bullet-step early
+  (tick-before-fetch) — algebraically incompatible for any single
+  per-context clock, and the fire-frame accounting (creation f3426, volley
+  f3626) matches the census eclT and the constructor's no-integration asm.
+  The extra step must be BULLET-PASS-MECHANICAL (fresh volley bullets get
+  one extra manager step natively). Note: FUN_00431240's 0x1a880 offset =
+  160×0x2a4 points at the EFFECT-VM pool — the port's "BulletManager::
+  OnUpdate" label on it is suspect (its spawn-state constants were verified
+  empirically and stand). Probes: probe-spawstep (the +1-step alignment),
+  probe-pair2/3.
+- **THE st2 wall (pass 21, anchored): the f7869 auto-fire volley regime** —
+  gx st2's f8061 contact is downstream re-roll: the stream wobbles ±1
+  volley-frame (repaying) until f7869, where Mystia's ins_105/106 periodic
+  emitter (12 rice bullets/round, flags 0x2252 spawn-state ≈10 draws/
+  bullet) lands with aim var a1≈−0.008 (the aim-tracking variable wrapping
+  through zero) and the offsets stop repaying (−18 → +90 by f7950). Two
+  laws to decode: the auto-fire timer's advance/check order (the ±1
+  wobble source) and the aim-tracking variable's wrap/accumulation.
+  Probes: probe-st2wall2 (offset trajectory), probe-st2draw (per-frame
+  consumption), probe-st2trace (fire-event hook).
 - CLOSED pass 19: **the f3582 stream wall** — the native graze orb law
   (FUN_004930 tail, all.c:36844-36862): up to THREE time-orb drops per
   bullet graze — orb 1: stage gate + any live boss slot + gauge >= +8000

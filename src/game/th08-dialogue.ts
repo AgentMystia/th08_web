@@ -274,12 +274,13 @@ export class Th08DialogueMachine {
           // cannot produce. The edge requirement stalled every wait for its
           // full authored timeout and dragged the mid-stage timeline by
           // ~600 frames per line (2026-08-27 A/B).
-          // §7 approximation: the exe additionally paces confirms behind the
-          // GUI text-reveal VM (FUN_004663b0 typesets per character); the
-          // port has no reveal, so the arm is floored at 1.5 frames per
-          // character of the pending line to keep the per-line pacing near
-          // the native ~40-60 frames.
-          this.confirmThreshold = Math.max(this.confirmThreshold, Math.ceil((this.lines[0]?.length ?? 0) * 1.5));
+          // The old "1.5 frames per pending character" reveal floor is
+          // REMOVED (pass 22): the native pre-Wriggle dialogue (msg0: 17
+          // op4 waits) clears in 200 frames ≈ 11.8f/wait — the 6/8 confirm
+          // arms THEMSELVES, meaning the GUI text-reveal VM (FUN_004663b0)
+          // finishes within the arm and never gates the confirm. The floor
+          // (24f for a 16-char line) ran the same dialogue 507f and delayed
+          // every boss-fight entrance ~300 frames.
           const confirmed = (input & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
             && this.waitCounter >= this.confirmThreshold;
           if (this.waitCounter === 0 && duration > 0) {
