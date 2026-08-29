@@ -262,7 +262,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 20)
+## 6. Standing residuals (honest, 2026-08-30 pass 23)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -399,15 +399,34 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 - Pass-11 CLOSED: the st1 midboss "4.3px drift" — root was the unported
   op-75 rect clamp (see §3), NOT slow float drift; post-fix the midboss
   trajectory is census-exact f3351-3524.
-- Next-target queue: (1) **close the sub21 one-step wall** (now also the
-  source of the 12f boss-spawn drift f5566 vs f5578 and thus most of the
-  remaining 24f Wriggle entry gap) — the three pass-21 clock models are
-  falsified; the step is bullet-pass-mechanical; (2) the st2 f8252
-  contact (sub28 parked rice, spawnF 7928, hit at the bottom edge);
-  (3) the dialogue's residual ~13f (17-wait arm granularity/row pacing);
+- Next-target queue: (1) **the sub21 one-step wall, pass-23 narrowed**:
+  the native module table is fully resolved (12=bomb/effects, 13=effects
+  +0x59c familiar pool, 14=the ONLY bullet pass; enemy ECL at 11) — no
+  second bullet integration pass exists, and the port's et_ex handler
+  order matches native; the volley's birth tick and +34/+12 draw
+  attribution are settled (the fireflies fire their own stationary
+  sprite-3 bullets every ~5-6 inputs), so the remaining step deficit is
+  INSIDE the bullet pass mechanics or the graze geometry; (2) the st2
+  f8252 contact (sub28 parked rice, spawnF 7928, hit at the bottom
+  edge) / the f7869 auto-fire beat wall (pass-21 B anchors); (3) the
+  dialogue's residual ~13f (17-wait arm granularity/row pacing);
   (4) the MOVEMENT-PRECISION family — player micro-position f661+
   (wine-gated); (5) visual: fog law, boss name plate, ring-bullet
   render scale, HP-bar inset, timer tint (pass-21/22 acceptance list).
+- **Falsified pass 23 (audit trail)**: "op90-93 children run eclT −1"
+  (census row f3626 e[4]=1 read as the child's ECL clock; allocator
+  core leaves ctx.time at 0) — implemented on the th08Familiar path
+  only, formal gx st1 regressed f6013 → f2919 (the children's sub23
+  per-tick effect spawns shift effect-pool pressure → RNG re-roll),
+  reverted. The port's current "sync t0 advances + same-pass visit
+  advances" is the stream-aligned behavior; e[4] for freshly-spawned
+  children is NOT settled as the ECL clock (row may be mid-pass; the
+  counter's identity is unresolved). Also falsified this pass: any
+  second bullet movement pass (module table) and a 0x40/0x10
+  handler-order defect (the orders match). Probe-label law: port
+  scene.frame == input+1 during the pass; native census row f ≡ port
+  input f−1 ≡ port scene.frame f — historical row-vs-row graze
+  comparisons were correctly aligned.
 - **Pass-22 headline**: the dialogue reveal-floor removal (c22b8a1) put
   the boss-fight entries ~24f from native (was 182) and moved gx st2 to
   f8252. The old gx st1 f6348 was a phantom of the shifted timeline —
