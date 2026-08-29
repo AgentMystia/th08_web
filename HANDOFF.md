@@ -7,14 +7,28 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 26, commit 38c64dd — the wine bullet-telemetry round)
+## Convergence picture (2026-08-30 pass 27, commit 1bf6272 — the f4122 settle-fork round)
 
-| run | pass-25 | pass-26 | note |
+| run | pass-26 | pass-27 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f6021 | **f7499** | +1478; spell-gated fire lerp (asm 0x4229b7) — the whole bullet field is 0.01px-native-exact f3650-3660 |
-| udGx01 st2 | f10058 | **f9253** | legit re-roll of the exe-pinned gate; new wall = sub17 rice (spawnF 9025); port field empty by f8950 — bisect |
+| udGx01 st1 | f7499 | **f7413** | f4122 draw fork −828→−4 (two exe-pinned fixes); number is re-roll noise until the residual fork closes |
+| udGx01 st2 | f9253 | **f9253** | flat, zero regression |
 | udLy01 st1 | f3177 | f3177 | flat |
 | udLy01 st2 | f3471 | f3471 | flat |
+
+Pass-27 root-caused the whole st1 stream fork to the midboss death settle
+at f4122 (draws vs rng-curve: first permanent fork, −828 at the wipe
+frame). Two fixes landed: (1) the master-death tail pays the +0x3380
+attach-LEDGER ×2 as orbs (all.c:20533 — the port paid live-children ×2,
+10 vs native 136); (2) the wipe sweep leaves quad-zone-covered bullets to
+the armed zones (native splits 209 sweep pointStars + 63 quad time items;
+port pointStar count now exact). f5911 fan-aim SUPERSDED — the sub27 var
+chain decoded clean (var10016 = rand10082×0.04 + π/3-family), native's
+draw ≈ 0 vs port −2.29: pure stream-fork downstream. Remaining fork, in
+draw order: the boss-death ORBIT EMITTER (type-10 orbs 13/frame
+[min(budget,7)+6], ~442 total ≈ 1768 draws, spiral at enemy+0x2e0, asm
+0x4175f6 family, budget writer TBD), quad double-conversion (+216), ins_92
+ledger cadence 46-vs-68. Full detail: tmp/gx-findings.md pass 27.
 
 Pass-26 landed three exe-pinned fixes (see gx-findings §AD2-AD4): the
 addTimeOrbs parity (pv curve now native-exact), the pointStar/type-6
