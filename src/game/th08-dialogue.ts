@@ -264,24 +264,19 @@ export class Th08DialogueMachine {
             this.completeWait(events, duration, false, true);
             break;
           }
-          // Confirm is LEVEL-triggered on the held shot key once the wait has
-          // passed the armed threshold (gui+0x21830: 6 at load, 30 after a
-          // timeout, 8 after a confirm — re-armed below). The th8_udLy01
-          // fixture advances every boss dialogue with Z held continuously
-          // from before the box opens: the f5700-7300 input words are all
-          // odd (bit0 set, no 0x100 skip) and the native run clears ~8
-          // 500-frame op4 waits in ~300 frames, which a rising-edge rule
-          // cannot produce. The edge requirement stalled every wait for its
-          // full authored timeout and dragged the mid-stage timeline by
-          // ~600 frames per line (2026-08-27 A/B).
-          // The old "1.5 frames per pending character" reveal floor is
-          // REMOVED (pass 22): the native pre-Wriggle dialogue (msg0: 17
-          // op4 waits) clears in 200 frames ≈ 11.8f/wait — the 6/8 confirm
-          // arms THEMSELVES, meaning the GUI text-reveal VM (FUN_004663b0)
-          // finishes within the arm and never gates the confirm. The floor
-          // (24f for a 16-char line) ran the same dialogue 507f and delayed
-          // every boss-fight entrance ~300 frames.
+          // Confirm law (all.c:24781-24793, asm-pinned pass 23): the confirm
+          // fires on the SHOT-KEY RISING EDGE once the wait has passed the
+          // armed threshold (gui+0x21830: 6 at load, 8 after a confirm, 30
+          // after a timeout — re-armed in completeWait). 0x164d534 is the
+          // previous frame's input word (frame-boundary copies at all.c
+          // 40743/40804/40840), so a continuously held key never confirms —
+          // such waits walk to their authored timeout instead. The earlier
+          // level-triggered model confirmed mid-hold, which the st2 pre-boss
+          // dialogue (the replay taps the shot key) turned into 1-4 extra
+          // frames per wait: the Mystia entry landed 79 ticks late and the
+          // whole seed-lattice regime re-rolled (gx st2 f8252's contact).
           const confirmed = (input & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
+            && (rising & TH08_DIALOGUE_INPUT_BITS.confirm) !== 0
             && this.waitCounter >= this.confirmThreshold;
           if (this.waitCounter === 0 && duration > 0) {
             events.push({ type: 'wait-start', duration });
