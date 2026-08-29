@@ -825,6 +825,10 @@ export class StageScene implements GameHost {
       // across stages (T8RP stage-entry snapshots mirror these fields).
       // score also needs the runState mirror (addScore routes through it).
       this.runState.score = carry.score;
+      // run+0x30, the cumulative point-item counter: the extend-threshold
+      // loop compares against it and the time-orb award scales with it, so
+      // the carry must reach the run state, not just the HUD counter.
+      this.runState.pointItemsCollected = carry.pointItems;
       if (carry.clockTime != null) this.runState.clockTime = carry.clockTime;
       if (carry.youkaiGauge != null) this.runState.youkaiGauge = carry.youkaiGauge;
       if (carry.pointItemValue != null) this.runState.pointItemValue = carry.pointItemValue;
@@ -2185,6 +2189,12 @@ export class StageScene implements GameHost {
       const bonus = this.spellcard.bonus;
       this.addScore(bonus);
       this.runState.spellcardsCaptured++;
+      // TH08 spell end FUN_004161b0 capture arm (all.c:9546-9548): after the
+      // bonus/history bookkeeping the protected captured-cards counter
+      // (run+0x1c) increments and re-arms its checksum — 4 raw u16 draws on
+      // every capture, replay playback included (the draw sits OUTSIDE the
+      // FUN_00406c90 history gate). Failed cards skip the whole arm.
+      this.payTh08ProtectedChecksum();
       if (tally) tally.got++;
       // Duration 280 frames (0x117+1 @ all.c:18302-18304). Failure path
       // arms nothing — no banner, no score credit (all.c:6639-6692).
@@ -4727,6 +4737,7 @@ export class StageScene implements GameHost {
         // Native state 5 runs only its half-speed removal animation. It is
         // neither collidable nor cullable, but still counts as an occupied
         // fixed slot until the ANM removes it.
+        b.clearRunner ??= this.runtime?.createBulletClearRunner(b.sprite) ?? undefined;
         b.x = Math.fround(b.x + b.vx / 2);
         b.y = Math.fround(b.y + b.vy / 2);
         b.clearRunner?.update(this.slowRate);
@@ -4980,15 +4991,30 @@ export class StageScene implements GameHost {
     // Constructor promotion happens in FUN_00421e90. Every normal-state
     // manager tick performs exactly one further queue pass BEFORE executing
     // active behavior routines (FUN_004241c0 @ all.c:16120). TH08's 0x20000
-    // wait gate parks the queue here while the bullet's motion continues.
-    // The spawn-state ENDING tick runs this block too: the exe's case-2/3/4
-    // VM-finished path writes state=1 at 0x431106 then falls through into
-    // the complete case-1 body (0x431122 = FUN_0042ffc0, then the 0xdac
-    // et_ex dispatch) on the SAME tick.
-    if ((b.exWaitFrames ?? 0) > 0) {
-      b.exWaitFrames = (b.exWaitFrames ?? 0) - 1;
-    } else {
-      advanceBulletExBehavior(b, rate, this.th08BulletExHost);
+    // wait gate ORs into +0xdac; FUN_0042ffc0 still runs (and stalls on the
+    // next cond==0 slot) while the +0xdac handler ticks the timer and XOR-
+    // clears the bit when it elapses (all.c:23507-23514). Skipping the
+    // queue pass while the timer ran hid cond==1 commands that native
+    // would still promote. The spawn-state ENDING tick runs this block
+    // too: the exe's case-2/3/4 VM-finished path writes state=1 at
+    // 0x431106 then falls through into the complete case-1 body
+    // (0x431122 = FUN_0042ffc0, then the 0xdac et_ex dispatch) on the
+    // SAME tick. Spawn states 2/3/4 themselves never enter this block.
+    advanceBulletExBehavior(b, rate, this.th08BulletExHost);
+    if ((b.exFlags & 0x20000) !== 0) {
+      // Native handler order (all.c:23507-23514): FUN_0040e390 checks
+      // remaining <= 0 FIRST — the clear tick burns no decrement — and the
+      // walk earlier in that same tick still saw the bit set and stalled.
+      // The bit therefore lives exactly arg3+1 handler passes after the arm;
+      // decrement-then-check cleared it one pass early.
+      if ((b.exWaitFrames ?? 0) <= 0) {
+        b.exFlags ^= 0x20000;
+      } else {
+        b.exWaitFrames = (b.exWaitFrames ?? 0) - 1;
+      }
+    }
+    if (b.clearFadeFrames != null && !b.clearRunner) {
+      b.clearRunner = this.runtime?.createBulletClearRunner(b.sprite) ?? undefined;
     }
     if (b.exFlags & 1) {
       // speed-ramp (FUN_00423840): velocity = polar(angle, speed + 5·decay)
@@ -5686,6 +5712,13 @@ export class StageScene implements GameHost {
         // port two full rank levels below native, changing every rank-lerped
         // bullet speed and ins_106 auto-fire interval.
         this.adjustRank(r.rankDelta);
+        // FUN_00440e40's tail loop (all.c:31216-31221): every point-count
+        // threshold crossed grants a 1UP through FUN_00439b29 — a protected
+        // life/bomb write whose FUN_00406e50 re-arm draws 4 raw u16 — BEFORE
+        // the point collect's own tail checksum. gx st2 crosses 100 at its
+        // 43rd in-stage point item (entry 57), lives 4 -> 5 (T8RP st3 pins
+        // it); the port used to compute extendsGained and drop it.
+        for (let i = 0; i < r.extendsGained; i++) this.grantTh08Extend();
         break;
       }
       case 'pointSmall': case 'pointStar': {
@@ -5701,29 +5734,63 @@ export class StageScene implements GameHost {
       case 'powerSmall':
         {
           const before = p.power;
-          p.power = Math.min(128, p.power + 1);
-          if (before < 128 && p.power >= 128) this.enterTh08FullPower(it);
+          if (before < 128) {
+            p.power = Math.min(128, p.power + 1);
+            if (p.power >= 128) {
+              // The 127 -> 128 crossing sets the protected power value to
+              // its cap through FUN_00406fa0(0x80) (all.c:31150), whose
+              // FUN_00406e50 re-arm draws two ranged u32 = 4 raw u16 ON TOP
+              // of the FUN_00441850 add already paid in collectItem. This
+              // one-shot event was the gx st2 native-f696 +20-vs-16 gap that
+              // displaced the whole downstream RNG stream (the ±4 wobble
+              // field, the f1807 sub12 spawn-angle mirror, the f3019 razor).
+              this.payTh08ProtectedChecksum();
+              this.enterTh08FullPower(it);
+            }
+            // FUN_004181f0(10) inside the below-cap bracket: +10 raw score.
+            run.addScore(10);
+            this.score = run.score;
+          }
         }
         // FUN_00440cf0 awards one subrank even when power is already full.
         this.adjustRank(1);
         break;
       case 'powerBig': {
         const before = p.power;
-        p.power = Math.min(128, p.power + 8);
-        if (before < 128 && p.power >= 128) this.enterTh08FullPower(it);
+        if (before < 128) {
+          p.power = Math.min(128, p.power + 8);
+          if (p.power >= 128) {
+            // Same FUN_00406fa0(0x80) crossing checksum as powerSmall
+            // (FUN_00441170 @ all.c:31282).
+            this.payTh08ProtectedChecksum();
+            this.enterTh08FullPower(it);
+          }
+          // FUN_004181f0(10) @ all.c:31291.
+          run.addScore(10);
+          this.score = run.score;
+        }
         break;
       }
       case 'powerFull': {
+        // Collect case 4 (all.c:31014-31027): the conversion block only
+        // below the cap, but FUN_00406fa0(0x80) — and its 4-draw checksum
+        // re-arm — runs UNCONDITIONALLY, then FUN_004181f0(1000).
         const before = p.power;
         p.power = 128;
         if (before < 128) this.enterTh08FullPower(it);
+        this.payTh08ProtectedChecksum();
+        run.addScore(1000);
+        this.score = run.score;
         break;
       }
       case 'bomb':
         p.bombs = Math.min(8, p.bombs + 1);
         this.adjustRank(5);
         break;
-      case 'extend': p.lives = Math.min(8, p.lives + 1); break;
+      // Collect case 5 = FUN_00439b29, the same shared 1UP grant the
+      // point-count thresholds use (protected write + 4 draws + se_extend +
+      // rank; bomb fallback at full lives; nothing when both are full).
+      case 'extend': this.grantTh08Extend(); break;
       case 'time': case 'time2': {
         // Time orb (CollectTimeOrb, FUN_004412b0): score + orb counter + the
         // gauge ±111 gated on the 0x18b89d4 post-familiar-death lockout timer
@@ -5740,6 +5807,35 @@ export class StageScene implements GameHost {
       case 'unknown9': break;
       default: break;
     }
+  }
+
+  // One FUN_00406e50 protected-block checksum re-arm: two ranged u32 draws
+  // (FUN_00406ef0(100000) each) = four raw u16. Every protected-value write
+  // helper tails into it — FUN_00441850/FUN_00406fa0 (power), FUN_00439883
+  // (bombs), FUN_0043c641 (lives), FUN_00418220 (time orbs).
+  private payTh08ProtectedChecksum(): void {
+    this.rng.u32InRange(100000);
+    this.rng.u32InRange(100000);
+  }
+
+  // FUN_00439b29 @ all.c:27268 — the shared 1UP grant (green extend item AND
+  // the point-count extend thresholds). lives < 8: protected life add
+  // FUN_0043c641(1) (4-draw checksum re-arm) + se_extend + rank +200;
+  // lives full: the grant falls through to the bomb stock via FUN_00439883(1)
+  // (same 4 draws) while bombs < 8; both full: nothing, zero draws.
+  private grantTh08Extend(): void {
+    const p = this.playerObj;
+    if (p.lives < 8) {
+      this.payTh08ProtectedChecksum();
+      p.lives++;
+    } else if (p.bombs < 8) {
+      this.payTh08ProtectedChecksum();
+      p.bombs++;
+    } else {
+      return;
+    }
+    this.playSfx(28); // FUN_0045d550(0x1c, 0) = se_extend
+    this.adjustRank(200); // FUN_0043bfc3(200)
   }
 
   private enterTh08FullPower(collected: ItemEntity): void {
@@ -5780,12 +5876,14 @@ export class StageScene implements GameHost {
     // FUN_00418220); powerSmall/powerBig only below full power
     // (FUN_00441850 lives inside the power<0x80 bracket, all.c:31138 vs
     // the skipped full-power head); a bomb item only below stock 8
-    // (FUN_00439883 in case 3); an extend only when maxed lives convert
-    // it into a bomb (FUN_00439b29's else arm). pointStar, pointSmall,
-    // powerFull and unknown9 draw zero. Charging every pickup left two
-    // full-power stage-2 collects 8 draws ahead of native by f1237.
-    // The gates read the PRE-collect stock, matching the native head
-    // tests (collectItemTh08 below performs the mutations).
+    // (FUN_00439883 in case 3). pointStar, pointSmall and unknown9 draw
+    // zero. Charging every pickup left two full-power stage-2 collects 8
+    // draws ahead of native by f1237. The gates read the PRE-collect
+    // stock, matching the native head tests (collectItemTh08 below
+    // performs the mutations). The extend item's draws live inside
+    // grantTh08Extend (FUN_00439b29's two protected-write arms), and the
+    // full-power crossing / powerFull cases pay their extra FUN_00406fa0
+    // re-arm inside collectItemTh08.
     let paysIntegrityChecksum = false;
     switch (it.type) {
       case 'point': case 'time': case 'time2':
@@ -5796,9 +5894,6 @@ export class StageScene implements GameHost {
         break;
       case 'bomb':
         paysIntegrityChecksum = this.playerObj.bombs < 8;
-        break;
-      case 'extend':
-        paysIntegrityChecksum = this.playerObj.lives >= 8 && this.playerObj.bombs < 8;
         break;
     }
     if (paysIntegrityChecksum) {

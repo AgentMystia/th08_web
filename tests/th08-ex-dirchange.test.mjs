@@ -80,6 +80,45 @@ test('et_ex 0x100 SETs heading to f0 (absolute)', async () => {
   assert.equal(live.exFlags & 0x100, 0, '0x100 clears its own bit after maxTimes');
 });
 
+test('et_ex 0x20000 wait returns without fade-killing at construction', async () => {
+  // FUN_0042ffc0 (all.c:23057-23064): opcode 0x20000 ORs into +0xdac and
+  // returns; 0x40000 writes state 5. A `continue` after wait walked into
+  // fade-kill on the construction pass and leaked dead fixed-pool slots.
+  const scene = makeScene();
+  const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 192, y: 64, life: 1000 });
+  shooter.ecl.shootOffset = { x: 0, y: 0 };
+  scene.runtime.spawnBullets(scene, shooter, {
+    sprite: 3, offset: 7, count1: 1, count2: 1,
+    speed1: 0, speed2: 0.5, angle1: Math.PI / 2, angle2: 0,
+    flags: 0x60000, sfx: 0, aimMode: 3,
+    exSlots: [
+      { opcode: 0x20000, cond: 1, arg3: 5, arg4: 0, f0: 0, f1: 0 },
+      { opcode: 0x40000, cond: 0, arg3: 0, arg4: 0, f0: 0, f1: 0 }
+    ]
+  });
+  const bullet = scene.enemyBullets.at(-1);
+  assert.ok(bullet, 'spawned a wait+fade-kill bullet');
+  const id = bullet.id;
+  assert.ok(!bullet.dead, 'construction must not mark the bullet dead');
+  assert.equal(bullet.clearFadeFrames, undefined, 'construction must not enter state 5');
+  assert.equal(bullet.exFlags & 0x20000, 0x20000);
+  assert.equal(bullet.exWaitFrames, 5);
+  for (let i = 0; i < 6; i++) scene.update(idle());
+  let live = scene.enemyBullets.find((b) => b.id === id);
+  assert.ok(live, 'bullet survives the wait');
+  // arg=5: passes 1-5 decrement 5->0 with the bit still armed; pass 6's walk
+  // stalls on it and only the handler clears it — FUN_0040e390 checks
+  // remaining <= 0 BEFORE FUN_00418110 decrements, so the clear pass burns
+  // no decrement and the walk passes the slot on pass 7, not pass 6.
+  assert.equal(live.exFlags & 0x20000, 0, 'handler cleared the bit during pass 6');
+  assert.equal(live.clearFadeFrames, undefined, 'the clear pass itself runs no walk past the slot');
+  scene.update(idle());
+  live = scene.enemyBullets.find((b) => b.id === id);
+  assert.ok(live, 'state 5 still occupies the fixed slot');
+  assert.ok(live.clearFadeFrames != null, 'fade-kill writes state 5');
+  assert.ok(!live.dead, 'state 5 is not a construction-time dead leak');
+});
+
 test('state-2 spawn ending tick falls through into the et_ex dispatch', async () => {
   const spawned = makeScene();
   const bullet = fireBullet(spawned, { flags: 0x42, heading: 0 });

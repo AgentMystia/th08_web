@@ -121,15 +121,15 @@ test('Stage-2 native contact enters the 27-frame window and starts type-3 on the
     if (f === 677) {
       assert.equal(scene.runState.currentTimeOrbs, 23, 'first window tick debits 15 time orbs');
       assert.equal(scene.runState.youkaiGauge, 0, 'state 2 skips the normal gauge drift');
-      assert.equal(scene.rng.seed, 49454, 'successful debit regenerates the two-field checksum');
+      assert.equal(scene.rng.seed, 52865, 'successful debit regenerates the two-field checksum');
     }
     if (f === 678) {
       assert.equal(scene.runState.currentTimeOrbs, 8, 'second window tick debits 15 time orbs');
-      assert.equal(scene.rng.seed, 52865, 'second successful debit consumes another four u16 draws');
+      assert.equal(scene.rng.seed, 64385, 'second successful debit consumes another four u16 draws');
     }
     if (f === 679) {
       assert.equal(scene.runState.currentTimeOrbs, 0, 'underflowing debit clamps only the current counter');
-      assert.equal(scene.rng.seed, 52865, 'underflow clamp consumes no integrity RNG');
+      assert.equal(scene.rng.seed, 64385, 'underflow clamp consumes no integrity RNG');
     }
     if (f === 696) {
       const attacks = [...scene.bombEngine.activeSlots()];

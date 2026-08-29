@@ -88,13 +88,21 @@ export function advanceBulletExBehavior(
       bullet.graceFrames = Math.max(bullet.graceFrames ?? 0, slot.arg3 | 0);
       continue;
     }
-    // TH08 immediate queue commands (FUN_0042ffc0 cases, all.c:23050-23086):
-    // they never set an exFlags behavior bit and the walk continues inline.
+    // TH08 immediate queue commands (FUN_0042ffc0 cases, all.c:23050-23086).
+    // 0x4000 / 0x80000 never set an exFlags bit and the walk continues
+    // inline. 0x20000 and 0x40000 go through switchD_004300d6_caseD_2:
+    // increment (already done above) and RETURN.
     if (slot.opcode === 0x20000) {
-      // Wait gate: arm the bullet's command timer for arg3 frames; the +0xdac
-      // handler holds the queue there until it elapses (all.c:23507-23514).
+      // Wait gate (1.83671e-40, all.c:23057-23060): OR the opcode into
+      // +0xdac (param_1[0x36b]) and arm the command ZunTimer to arg3.
+      // Returning here is load-bearing: `continue` walked into the cond==0
+      // fade-kill on the same construction pass, marked the bullet dead
+      // before addEnemyBullet, and the manager's `if (b.dead) return`
+      // then leaked the slot forever (gx st1 Sub23: native ~79 live at
+      // f3525 vs port 173 speed-0 leftovers that later hit at f4013).
+      bullet.exFlags |= 0x20000;
       bullet.exWaitFrames = Math.max(bullet.exWaitFrames ?? 0, slot.arg3 | 0);
-      continue;
+      return;
     }
     if (slot.opcode === 0x4000) {
       // Prototype transform: swap the bullet's prototype block to arg3 and
@@ -107,8 +115,13 @@ export function advanceBulletExBehavior(
       continue;
     }
     if (slot.opcode === 0x40000) {
-      // Fade-kill (bullet state 5 at all.c:23061-23062).
-      bullet.dead = true;
+      // Fade-kill: native writes bullet state 5 at +0xdb8 (all.c:23061-23062).
+      // `dead = true` at construction leaked the fixed slot (updateBullets
+      // returns before the compact); state 5 occupies it for the fade ANM
+      // and is not collidable.
+      if (bullet.clearFadeFrames == null && !bullet.dead) {
+        bullet.clearFadeFrames = 12;
+      }
       return;
     }
     switch (slot.opcode) {
@@ -4112,9 +4125,17 @@ export class StageRuntime {
         return null;
       }
       case 128: {
-        // transform cloud effect: effect id 13 at the enemy position with
-        // r/g/b floats (FUN_00425430). Visual family not yet ported; the
-        // original draws no gameplay RNG here.
+        // ins_128 (exe case 0x7f, all.c:12712-12721): FUN_00425430(0xd)
+        // allocates one effect-13 VM in the 512-slot rolling pool (0 draws,
+        // interrupt-owned life) at the enemy's logical pos, color
+        // 0xff6060d0. Args 1-3 are the cloud's RGB scale floats at VM+0x2ec
+        // and arg 4 is the +0x53c4 scale cap — presentation only. The
+        // handle is stashed at enemy+0x5360[n++] and FUN_0042e010 follows
+        // the enemy until FUN_0042a820 (+0x352=1) on teardown. gx st1
+        // Sub15 (timeline t2935, the midboss) arms six of these at
+        // t0/10/20/30/40/50; by spawn+30 that is the f2965 4-slot occupancy
+        // gap that let extra fireflies allocate (+78 draws, never repaid).
+        game.spawnEffectParticles(13, e.x, e.y, 1, 0xff6060d0, undefined, e.id);
         return null;
       }
       case 129: {

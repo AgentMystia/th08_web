@@ -108,6 +108,7 @@ scene.mode = diagnostic || clearCheck ? 'test' : 'replay';
 scene.rank = stage.rank;
 scene.score = entryScore;
 scene.graze = stage.graze;
+scene.pointItems = stage.pointItems;
 scene.playerObj.lives = stage.lives;
 scene.playerObj.bombs = stage.bombs;
 scene.playerObj.power = stage.power;
@@ -118,7 +119,13 @@ if (scene.runState) {
   scene.runState.clockTime = stage.clockTime;
   scene.runState.pointItemExtends = stage.pointItemExtends;
   scene.runState.nextPointItemExtendThreshold = stage.nextPointItemExtendThreshold;
+  // run+0x30 (T8RP +0x04): the cumulative point-item count. The extend
+  // thresholds (gx st2: 57 entry, 100 crossed at the 43rd in-stage point)
+  // and the time-orb award ladder both read it.
+  scene.runState.pointItemsCollected = stage.pointItems;
 }
+// Re-anchor the clear-bonus deltas on the restored cumulative counters.
+scene.captureStageEntryTotals();
 
 // RNG budget accounting: every consumer bottoms out in u16(); the recorded
 // stage-2 seed is the original's total draw budget (mod 65536) from the

@@ -8,7 +8,7 @@ import { StageScene } from './game/stage-scene';
 import { Th08MenuFlow } from './game/th08-title-scene';
 import { Th08ReplayScene } from './game/th08-replay-scene';
 import { ReplayInputSource } from './core/replay-input';
-import type { Rpy } from './formats/rpy';
+import { Rpy } from './formats/rpy';
 import type { Th08TeamId } from './game/player';
 import { stageBgmTracks } from './game/bgm';
 import { stageSnapshot } from './game/snapshot';
@@ -23,6 +23,7 @@ interface TestHook {
   advance(n: number): void;
   setLives(n: number): void;
   setInvuln(frames: number): void;
+  playReplayUrl(url: string, stageNumber: number): Promise<void>;
   snapshot(): Record<string, unknown>;
   nightBlind(): { intensity: number; radius: number } | null;
   dialogue(): { active: boolean; clock: number; done: boolean } | null;
@@ -221,6 +222,7 @@ async function boot(): Promise<void> {
     s.rank = block.rank;
     s.score = entryScore;
     s.graze = block.graze;
+    s.pointItems = block.pointItems;
     s.playerObj.lives = block.lives;
     s.playerObj.bombs = block.bombs;
     s.playerObj.power = block.power;
@@ -231,7 +233,13 @@ async function boot(): Promise<void> {
       s.runState.clockTime = block.clockTime;
       s.runState.pointItemExtends = block.pointItemExtends;
       s.runState.nextPointItemExtendThreshold = block.nextPointItemExtendThreshold;
+      // run+0x30 (T8RP +0x04): cumulative point items — the extend
+      // thresholds and the time-orb award ladder read it (mirrors the
+      // verifier's restore).
+      s.runState.pointItemsCollected = block.pointItems;
     }
+    // Re-anchor the clear-bonus deltas on the restored cumulative counters.
+    s.captureStageEntryTotals();
     s.hiScore = Math.max(s.hiScore, sessionHiScore);
     // Replay runs never write the session hi-score (score.dat is untouched
     // by native replay playback).
@@ -514,6 +522,18 @@ async function boot(): Promise<void> {
           stage.playerObj.invulnFrames = frames;
           stage.playerObj.invulnFrac = 0;
         }
+      },
+      // Test-only: fetch a T8RP and switch the running scene onto that
+      // stage block (same restore path as the in-game replay picker).
+      playReplayUrl: async (url: string, stageNumber: number) => {
+        const buf = await fetch(url).then((r) => {
+          if (!r.ok) throw new Error(`replay fetch ${r.status} ${url}`);
+          return r.arrayBuffer();
+        });
+        const rpy = new Rpy(new Uint8Array(buf));
+        const idx = rpy.stages.findIndex((s) => s.stage === stageNumber);
+        if (idx < 0) throw new Error(`replay has no stage ${stageNumber}`);
+        startReplayStage(rpy, idx);
       },
       bgm: () => ({ active: audio.active, decoded: audio.decodedTracks }),
       canvasContextAttributes: () => renderer.contextAttributes(),

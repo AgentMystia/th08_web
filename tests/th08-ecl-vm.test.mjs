@@ -860,3 +860,25 @@ test('ins_67 folds a random upward exit away from the armed top margin', () => {
   assert.ok(enemy.x > 100, `expected rightward folded move, x=${enemy.x}`);
   assert.ok(enemy.y > 10, `top-margin fold must point down, y=${enemy.y}`);
 });
+
+test('ins_128 allocates a persistent effect-13 cloud owned by the enemy', () => {
+  // FUN_00425430(0xd) at all.c:12714: one rolling-pool VM, 0 draws, color
+  // 0xff6060d0, handle follows the enemy until teardown.
+  const runtime = makeRuntime([[
+    instruction(0, 128, [i32(6), f32(0.3), f32(0.7), f32(0.3), f32(128)]),
+    instruction(1, 1)
+  ]]);
+  const game = makeHost();
+  const calls = [];
+  game.spawnEffectParticles = (...args) => { calls.push(args); };
+  const enemy = runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 128, life: 100 });
+  // spawnEclEnemy runs the synchronous t0 core (FUN_0040f6c0), which is
+  // when native ins_128 allocates.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 13);
+  assert.equal(calls[0][1], enemy.x);
+  assert.equal(calls[0][2], enemy.y);
+  assert.equal(calls[0][3], 1);
+  assert.equal(calls[0][4], 0xff6060d0);
+  assert.equal(calls[0][6], enemy.id);
+});

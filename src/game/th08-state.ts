@@ -245,7 +245,9 @@ export class Th08RunState {
     let award: number;
     if (options.specialScoringMode) {
       award = 100;
-    } else if (this.pointItemsCollected < 2000) {
+    } else if (this.pointItemsCollectedInStage < 2000) {
+      // FUN_004412b0: the <2000 bracket tests the STAGE counter (run+0x2c)
+      // while the award scales with the cumulative counter (run+0x30).
       award = Math.max((this.pointItemsCollected >> 1) * 10, 100);
     } else {
       award = 10000;

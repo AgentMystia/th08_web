@@ -44,7 +44,10 @@ export interface EnemyBullet {
   // patterns park bullets outside the field before they sweep in.
   graceFrames?: number;
   // TH08 queue command 0x20000 (bullet+0xdac bit handler, all.c:23507): the
-  // queue parks for this many frames while the bullet keeps its motion.
+  // command ZunTimer armed by FUN_0042ffc0. The bit itself lives in exFlags
+  // (native +0xdac); this counter is the timer's remaining frames. Motion
+  // continues while it counts; FUN_0042ffc0 stalls on the next cond==0 slot
+  // until the handler XOR-clears 0x20000.
   exWaitFrames?: number;
   // Frames spent continuously off-screen (exe bullet+0xbfe): dir-change/
   // bounce bullets (mask 0xdc0) survive up to 128 before dying; others die
