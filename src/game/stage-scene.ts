@@ -5751,7 +5751,7 @@ export class StageScene implements GameHost {
         for (let i = 0; i < r.extendsGained; i++) this.grantTh08Extend();
         break;
       }
-      case 'pointSmall': case 'pointStar': {
+      case 'pointSmall': {
         const r = run.collectPointSmall({
           atOrAbovePoC: belowPoC,
           abovePoCRandom: pocDistance,
@@ -5759,6 +5759,25 @@ export class StageScene implements GameHost {
         });
         this.score = run.score;
         this.spawnScorePopup(r.award, it.x, it.y, 0xffffffff, true);
+        break;
+      }
+      case 'pointStar': {
+        // Item-collect case 6 (all.c:31029-31040, the bomb/death-quad
+        // conversion item): a FIXED graze-scaled award —
+        // (RUN+0xc / 40) * 10 + 300, the second graze copy the graze tier
+        // itself maintains (all.c:36822) — or flat 100 in special scoring
+        // mode (DAT_018b8974, the same gate as the time-orb award; always
+        // zero in main-game replay, like the time-orb call below). Popped
+        // raw and paid through addScore: no pv ladder, no PoC decay, no
+        // checksum (zero draws), no rank award. Routing it through
+        // collectPointSmall paid the pv ladder with the extreme-human
+        // doubling — st2 f707 credited 3124 where native paid ~40, the
+        // first persistent st2 score divergence.
+        let award = Math.trunc(this.graze / 40) * 10 + 300;
+        if (award < 1) award = 10;
+        run.addScore(award);
+        this.score = run.score;
+        this.spawnScorePopup(award, it.x, it.y, 0xffffffff, true);
         break;
       }
       case 'powerSmall':

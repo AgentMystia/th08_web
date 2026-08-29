@@ -199,14 +199,17 @@ test('a life-threshold phase jump frees all ins_135 sub-contexts', () => {
 
 // FUN_00422720's emission loop is `for (i < count1)` — count1 0 fires
 // NOTHING. Sub48's ins_30 decay of [10039] to 0 is the authored shutdown of
-// the Last Spell fans; the old Math.max(1, ...) clamp kept firing one-bullet
-// volleys forever.
-test('FIRE with count1=0 emits no bullets', () => {
+// the Last Spell fans (a SPELL context: all.c:16012 gates the whole
+// rank-adjust block on FUN_004178a0() == 0 (the spell-declare bit), so the
+// authored count stands while a spell is up); the old unconditional
+// Math.max(1, ...) clamp kept firing one-bullet volleys forever.
+test('FIRE with count1=0 emits no bullets during a spell', () => {
   const runtime = makeRuntime([
     // dword0 packs {u16 sprite=2, u16 offset}; count1 is dword 1
     [instruction(0, 96, [i32(2), i32(0), i32(1), f32(1.8), f32(0.5), f32(0), f32(0.18479957), i32(515)])]
   ]);
   const game = makeHost();
+  game.runtime = { spellActive: true };
   runtime.spawnEclEnemy(game, { subId: 0, x: 192, y: 96 });
   runTicks(runtime, game, 3);
   assert.equal(game.enemyBullets.length, 0);

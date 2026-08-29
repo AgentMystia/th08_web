@@ -2445,9 +2445,23 @@ export class StageRuntime {
     // of 0 (Sub48's ins_30 decay of [10039] is the authored shutdown of the
     // Last Spell fans) fires NOTHING. Flooring at 1 kept emitting one-bullet
     // volleys forever after the decay reached zero.
-    const count1 = Math.max(0, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
-    const count2 = Math.max(0, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
-    const rankSpeed = lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
+    // all.c:16012-16033: the WHOLE rank-adjust block — the count lerps
+    // from +0x2df4..+0x2dfa (clamped >= 1), the speed1 lerp from
+    // +0x2dec/+0x2df0 and speed2 with HALF the lerp — runs only while
+    // FUN_004178a0() == 0: the spell-declare bit (singleton 0x4ea670 bit 0,
+    // set by FUN_004152a0 — the same gate as the graze-orb drop) CLEAR.
+    // During any spell card the fire pays its authored counts and speeds
+    // FLAT (wine-native witness: sub24's midboss volley inside the spell
+    // fires speed exactly 3.0 on all 123 bullets where the ungated lerp
+    // paid 2.9625 — tmp/wine-out/st1.jsonl f3650).
+    const spellUp = ((game as { runtime?: { spellActive?: boolean } }).runtime?.spellActive) === true;
+    const count1 = spellUp
+      ? Math.max(0, count1raw)
+      : Math.max(1, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
+    const count2 = spellUp
+      ? Math.max(0, count2raw)
+      : Math.max(1, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
+    const rankSpeed = spellUp ? 0 : lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
     const props: BulletProps = {
       sprite,
       offset,
@@ -4569,9 +4583,23 @@ export class StageRuntime {
     // of 0 (Sub48's ins_30 decay of [10039] is the authored shutdown of the
     // Last Spell fans) fires NOTHING. Flooring at 1 kept emitting one-bullet
     // volleys forever after the decay reached zero.
-    const count1 = Math.max(0, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
-    const count2 = Math.max(0, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
-    const rankSpeed = lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
+    // all.c:16012-16033: the WHOLE rank-adjust block — the count lerps
+    // from +0x2df4..+0x2dfa (clamped >= 1), the speed1 lerp from
+    // +0x2dec/+0x2df0 and speed2 with HALF the lerp — runs only while
+    // FUN_004178a0() == 0: the spell-declare bit (singleton 0x4ea670 bit 0,
+    // set by FUN_004152a0 — the same gate as the graze-orb drop) CLEAR.
+    // During any spell card the fire pays its authored counts and speeds
+    // FLAT (wine-native witness: sub24's midboss volley inside the spell
+    // fires speed exactly 3.0 on all 123 bullets where the ungated lerp
+    // paid 2.9625 — tmp/wine-out/st1.jsonl f3650).
+    const spellUp = ((game as { runtime?: { spellActive?: boolean } }).runtime?.spellActive) === true;
+    const count1 = spellUp
+      ? Math.max(0, count1raw)
+      : Math.max(1, count1raw + lerpI(t.fireRankCount1Low, t.fireRankCount1High));
+    const count2 = spellUp
+      ? Math.max(0, count2raw)
+      : Math.max(1, count2raw + lerpI(t.fireRankCount2Low, t.fireRankCount2High));
+    const rankSpeed = spellUp ? 0 : lerpF(t.fireRankSpeedLow, t.fireRankSpeedHigh);
     const props: BulletProps = {
       sprite,
       offset,

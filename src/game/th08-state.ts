@@ -53,12 +53,14 @@ export class Th08RunState {
       this.currentTimeOrbs = 0;
       return;
     }
-    const oldTotalParity = this.totalTimeOrbs & 1;
+    // FUN_00418220 @ all.c:10245: the running total (+0x44) is advanced
+    // BEFORE the point value (+0x24) reads its parity, so a single orb pays
+    // +10 on ODD totals (native f630: pv 300010 on the FIRST collect).
     this.currentTimeOrbs += amount;
     this.totalTimeOrbs += amount;
     this.stageTimeOrbs += amount;
     if (amount > 0) {
-      this.pointItemValue += Math.trunc((amount + oldTotalParity) / 2) * 10;
+      this.pointItemValue += Math.trunc((amount + (this.totalTimeOrbs & 1)) / 2) * 10;
     }
   }
 

@@ -13,10 +13,12 @@ const { Th08RunState } = await import('../tests/.build/th08-state.mjs');
 test('time-orb parity drives the native night-value ladder', () => {
   const state = new Th08RunState(3);
   assert.equal(state.pointItemValue, 300000);
+  // FUN_00418220 advances the total BEFORE reading its parity (all.c:
+  // 10245): the FIRST orb already pays +10 (native f630 pv 300010).
   state.addTimeOrbs(1);
   assert.deepEqual(
     [state.currentTimeOrbs, state.totalTimeOrbs, state.pointItemValue],
-    [1, 1, 300000]
+    [1, 1, 300010]
   );
   state.addTimeOrbs(1);
   assert.deepEqual(
@@ -36,7 +38,7 @@ test('negative time orbs clamp current without underflowing total state', () => 
   state.addTimeOrbs(-6);
   assert.equal(state.currentTimeOrbs, 0);
   assert.equal(state.totalTimeOrbs, 5);
-  assert.equal(state.pointItemValue, 300020);
+  assert.equal(state.pointItemValue, 300030);
 });
 
 test('youkai gauge clamps and honors the native lock/copy behavior', () => {
@@ -109,6 +111,6 @@ test('small point and time-orb awards use native score divisions', () => {
   const time = state.collectTimeOrb({ timerCurrent: 0, playerRole: 1 });
   assert.deepEqual(
     [time.award, time.creditedScore, time.gaugeDelta, state.currentTimeOrbs, state.pointItemValue],
-    [100, 10, 111, 1, 300000]
+    [100, 10, 111, 1, 300010]
   );
 });
