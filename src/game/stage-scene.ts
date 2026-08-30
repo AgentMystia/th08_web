@@ -653,12 +653,22 @@ export class StageScene implements GameHost {
   // shot pass on the callback-start tick (Stage-2 f698: wave f696->f698).
   // Enemy-manager target caches (Th08.exe writes them through the absolute
   // globals 0x18b899c/0x18b89a8/0x18b89b4 in the per-enemy pass at
-  // 0x42d3d3-0x42d4df): the primary position cache prefers the LOWEST
-  // enemy (max y, first-slot tiebreak) and feeds the seeker tick
+  // 0x42d3d3-0x42d4df): the primary position cache is TWO-TIER — enemies
+  // with flags bit 1 (enemy+0x3324 bit 1) compete by NEAREST
+  // fabsf(f32(enemy.x - player.x)) (FUN_004031e0; strict <, first slot wins
+  // ties, and the first bit-1 candidate of the frame overwrites any fallback
+  // pick unconditionally @ LAB_0042d404), while bit-1-clear enemies only
+  // reach the max-y fallback (0x42d435-0x42d47b) when no bit-1 candidate has
+  // published yet this frame. The cache feeds the seeker tick
   // (FUN_00450320) and the human bomb's orb seek; the pointer-cache pick
   // (|x-player.x| < 64, upper-most/first) feeds the familiar's lunge anchor and
   // the needle shots' spawn aim (FUN_00450240 reads enemy+0x2d34/+0x2d38).
   private th08TargetPos: { x: number; y: number } | null = null;
+  // Tracks whether this frame's th08TargetPos came from the bit-1
+  // nearest-|Δx| tier (1) or the no-bit-1 max-y fallback (2). Reset with the
+  // cache at the head of updateEnemies (native: FUN_0044d420 clears
+  // player+0xe2ac0 in the player pass tail).
+  private th08TargetTier = 0;
   // Unlike the two position caches, DAT_018b89b4 is a persistent Enemy*
   // rather than a frame-local value. It is cleared by Ran's callback or
   // when the pointed pool slot is observed inactive; rebuilding it from
@@ -1869,8 +1879,27 @@ export class StageScene implements GameHost {
     // raw flags bits 4/5/11 all being clear. The invisible stage controller
     // and ethereal familiars must never become targets.
     if (((e.ecl.th08?.flags ?? 0) & (0x10 | 0x20 | 0x800)) !== 0) return;
-    if (!this.th08TargetPos || e.y > this.th08TargetPos.y) {
-      this.th08TargetPos = { x: e.x, y: e.y };
+    // Primary cache two-tier law (0x42d386-0x42d47d): bit-1 enemies take the
+    // nearest-|Δx| tier — the frame's first bit-1 candidate overwrites any
+    // fallback pick outright, later ones win only on a STRICTLY smaller
+    // fabsf(f32(x - player.x)) (first slot keeps ties); bit-1-clear enemies
+    // reach only the max-y fallback while the bit-1 tier is still empty.
+    // The native metric narrows the x difference to f32 before the fabs
+    // (FUN_004090d0's fstp [esp] component stores) — match that exactly.
+    if (((e.ecl.th08?.flags ?? 0) & 0x2) !== 0) {
+      if (this.th08TargetTier !== 1) {
+        this.th08TargetPos = { x: e.x, y: e.y };
+      } else {
+        const dxNew = Math.fround(Math.abs(Math.fround(e.x - this.playerObj.x)));
+        const dxOld = Math.fround(Math.abs(Math.fround(this.th08TargetPos!.x - this.playerObj.x)));
+        if (dxNew < dxOld) this.th08TargetPos = { x: e.x, y: e.y };
+      }
+      this.th08TargetTier = 1;
+    } else if (this.th08TargetTier !== 1) {
+      if (!this.th08TargetPos || e.y > this.th08TargetPos.y) {
+        this.th08TargetPos = { x: e.x, y: e.y };
+      }
+      this.th08TargetTier = 2;
     }
     // DAT_018b89b4 (the Border Team option-lunge / focused-shot target)
     // uses abs(enemy.x - player.x) < 64, not distance from the playfield
@@ -4624,6 +4653,7 @@ export class StageScene implements GameHost {
     // DAT_018b89b4 is different: it is a persistent Enemy* cleared by Ran's
     // callback or by the pointed enemy's inactive-slot branch.
     this.th08TargetPos = null;
+    this.th08TargetTier = 0;
     this.playerObj.th08LungeTarget = null;
     // FUN_0041ed50 processes authored timeline entries before scanning the
     // native 480-slot enemy pool (all.c:14016-14039). Timeline spawns are
