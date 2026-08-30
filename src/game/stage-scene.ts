@@ -87,6 +87,20 @@ const TH08_ITEM_TYPE_BY_ID: readonly ItemType[] = [
 // adding the current collision call's capped raw damage.
 const TH08_SHOT_TIME_ORB_THRESHOLD = 40;
 
+// FUN_0044a470/FUN_0044a230 (and FUN_00451ce0 for player shots): every probe
+// edge is one extended pos±half[±margin] chain narrowed by a single fstps.
+// Exported for the knife-edge regression test.
+export function th08ProbeEdges(
+  x: number, y: number, w: number, h: number, margin: number
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  return {
+    minX: Math.fround(Math.fround(x) - Math.fround(w) / 2 - margin),
+    minY: Math.fround(Math.fround(y) - Math.fround(h) / 2 - margin),
+    maxX: Math.fround(Math.fround(x) + Math.fround(w) / 2 + margin),
+    maxY: Math.fround(Math.fround(y) + Math.fround(h) / 2 + margin)
+  };
+}
+
 // FUN_00451670's nonzero-angle rectangle branch rotates the target into the
 // attack record's local space, then performs the same inclusive half-extent
 // comparisons as its axis-aligned fast path. `width`/`height` are full sizes
@@ -4076,10 +4090,15 @@ export class StageScene implements GameHost {
       if (b.dead) continue;
       if (b.driftHarmless) continue;
       if (b.state !== 'fired') continue;
-      const bulletMinX = Math.fround(b.x) - Math.fround(b.hitboxW) * 0.5;
-      const bulletMinY = Math.fround(b.y) - Math.fround(b.hitboxH) * 0.5;
-      const bulletMaxX = Math.fround(b.x) + Math.fround(b.hitboxW) * 0.5;
-      const bulletMaxY = Math.fround(b.y) + Math.fround(b.hitboxH) * 0.5;
+      // FUN_00451ce0 stores EVERY box edge as f32 (single fstps after the
+      // extended pos±half*0.5f chain) before FUN_00451670's inclusive
+      // compares read them back. Comparing unrounded f64 bullet edges lets
+      // a knife-edge overlap flip when the exact edge crosses an f32 binade
+      // boundary (the enemy edges below already narrow).
+      const bulletMinX = Math.fround(Math.fround(b.x) - Math.fround(b.hitboxW) / 2);
+      const bulletMinY = Math.fround(Math.fround(b.y) - Math.fround(b.hitboxH) / 2);
+      const bulletMaxX = Math.fround(Math.fround(b.x) + Math.fround(b.hitboxW) / 2);
+      const bulletMaxY = Math.fround(Math.fround(b.y) + Math.fround(b.hitboxH) / 2);
       if (bulletMinY <= enemyMaxY && bulletMinX <= enemyMaxX &&
           enemyMinY <= bulletMaxY && enemyMinX <= bulletMaxX) {
         // FUN_00451670 checks the PERSISTENT accumulator before adding any
@@ -4140,6 +4159,19 @@ export class StageScene implements GameHost {
     this.th08QuadConvertType = 6;
     const dx = Math.abs(b.x - p.x);
     const dy = Math.abs(b.y - p.y);
+    // FUN_0044a470 (graze, 0x44a4b4-0x44a519) and FUN_0044a230 (killbox)
+    // each store the BULLET's four edges as f32 (single fstps after the
+    // extended hit±hit/2[±20] chain) and compare them against the player's
+    // stored AABB at +0x3a4/+0x38c. A center-distance test on unrounded f64
+    // values rounds at different places than those edge stores.
+    const g = th08ProbeEdges(b.x, b.y, b.grazeW, b.grazeH, 20);
+    const k = th08ProbeEdges(b.x, b.y, b.grazeW, b.grazeH, 0);
+    const gHalf = Math.fround(p.grazeboxHalf);
+    const hHalf = Math.fround(p.hitboxHalf);
+    const pGMinX = Math.fround(p.x - gHalf), pGMaxX = Math.fround(p.x + gHalf);
+    const pGMinY = Math.fround(p.y - gHalf), pGMaxY = Math.fround(p.y + gHalf);
+    const pKMinX = Math.fround(p.x - hHalf), pKMaxX = Math.fround(p.x + hHalf);
+    const pKMinY = Math.fround(p.y - hHalf), pKMaxY = Math.fround(p.y + hHalf);
     if (!p.alive) {
       // Native Player.cpp:1032 CalcKillboxCollision: playerState != ALIVE
       // (deathbomb window, death squish, or respawn materialize) returns 1 —
@@ -4151,17 +4183,16 @@ export class StageScene implements GameHost {
       // onPlayerContact here inflated Mt01 playerHits 18 -> 58 in the
       // reverted first attempt at this fix.
       if (!b.grazed && b.age > 15) return;
-      if (dx > b.grazeW / 2 + p.hitboxHalf || dy > b.grazeH / 2 + p.hitboxHalf) return;
+      if (!(pKMinX <= k.maxX && pKMaxX >= k.minX && pKMinY <= k.maxY && pKMaxY >= k.minY)) return;
       this.removeEnemyBullet(b);
       return;
     }
     if (!b.grazed && b.age > 15 &&
-        dx <= b.grazeW / 2 + p.grazeboxHalf + 20 &&
-        dy <= b.grazeH / 2 + p.grazeboxHalf + 20) {
+        pGMinX <= g.maxX && pGMaxX >= g.minX && pGMinY <= g.maxY && pGMaxY >= g.minY) {
       b.grazed = true;
       this.onGrazeAward(b.x, b.y);
     }
-    if (dx > b.grazeW / 2 + p.hitboxHalf || dy > b.grazeH / 2 + p.hitboxHalf) return;
+    if (!(pKMinX <= k.maxX && pKMaxX >= k.minX && pKMinY <= k.maxY && pKMaxY >= k.minY)) return;
     this.onPlayerContact?.('bullet');
     // FUN_0043b200 result 1 consumes the touching bullet while the player is
     // invulnerable, bombing, or already in the deathbomb state.

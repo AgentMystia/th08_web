@@ -180,15 +180,38 @@ supersedes them. Six browser-only checks may skip outside the browser gate.
 
 ## 6. Current state and frontiers (pass 37)
 
-The convergence goal is not complete. Latest source state is pass-37 commit
-`1e21d45`.
+The convergence goal is not complete. Latest source state is pass-38 (probe
+edge f32 narrowing + knife-edge regression).
 
 Latest complete source verification:
-- check/build/test: PASS, 233/233.
-- Formal: gx st1 f7422 (cascade reroll from the two-tier target law); gx st2
-  f6475; ly st1 f3237; ly st2 f3471.
-- gx st1 clear-check now clears at replay frame 11414/11460 (inside the
-  recorded stream; was 11891); its end state remains a downstream cascade.
+- check/build/test: PASS, 235/235.
+- Formal: gx st1 f7422; gx st2 f6475; ly st1 f3237; ly st2 f3471 (all flat
+  through the pass-38 edge fixes).
+- gx st1 clear-check clears at replay frame 11414/11460 (unchanged).
+
+Pass 38 (full detail in HANDOFF.md / tmp/gx-findings.md §pass 38):
+- All three probe families (graze FUN_0044a470, killbox FUN_0044a230,
+  player-shot AABB FUN_00451ce0) narrow every BULLET edge to f32 via single
+  fstps stores before their inclusive compares; the port now matches
+  (exported th08ProbeEdges + brute-forced knife-edge regression). Neutral on
+  current frontiers, binary-exact.
+- f4228 re-framed: the +4 draw fork is a ±4 OSCILLATION that self-heals by
+  f4719 — only that window runs on shifted values. The missing 4-draw event
+  is NOT a graze (runstate blob+0x4 flat through the window), NOT an ECL
+  rand read (sub5/sub14 clean, timeline empty there), NOT a shifted port
+  shot (pool geometry exhausted). Shot pipeline audited op-for-op; Border
+  Team uses SHT types 0/1 only, so FUN_00451670's type-3/4/5/6 laws are
+  provably N/A.
+- Enemy position topology pinned: +0x2d34 script pos (ins_63 writes;
+  integrator adds rate×per-axis velocity, bit18 x-reverse); +0x2d40 base
+  (attach children = parent script pos); live +0x2d88 = sum; census reads
+  +0x2d88 at 0.1px print precision — sub-0.1px agreement is UNVERIFIED, and
+  st2 f5791's 0.48px graze margin lives in exactly that blind zone.
+- st2 f5791: sub20's stationary-bullet FIRE is fully deterministic (angle =
+  var 10020, zero RNG) — count/checksum-blind; the root is the fairy's
+  position at fire time or an ECL-clock fire-phase shift
+  (movement-precision family, same root as f5853's 127-frame ex-accel
+  drift).
 
 Pass-35 closed the st2 f4909 fork: the spawn-state quad latch (+0xdbe) is a
 boolean and the VM-end payment reads the LIVE global DAT_018b8988
@@ -223,9 +246,11 @@ Current st1 frontier:
   slots 25/26 one frame early. Player positions (f4100-4265, 0.005px), target
   cache contents, spawn positions, fire phase, enemy boxes are all verified
   exact; no port never-settling shot comes within 20px of the fairy at
-  f4228. The extra settle implies a trajectory difference invisible to every
-  current oracle — native shot-pool telemetry remains the missing evidence
-  (Wine is closed).
+  f4228. Pass 38 further excluded grazes, ECL rand reads, and every
+  shift/identity hypothesis over the port pool; the missing event is a 13th
+  native contact with a genuinely different trajectory, or an oracle-blind
+  subsystem's 2×u32 effect init. Downstream severity is bounded: the stream
+  self-heals by f4719 (±4 oscillation window only).
 
 Current st2 frontier chain (traced f6330 -> f5865 -> f5791):
 - f6330 (+12) is downstream of the Mystia f5865 phase-transition ins_67 move

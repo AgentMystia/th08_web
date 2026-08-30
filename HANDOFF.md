@@ -7,7 +7,75 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 37 — homing-law x87 fix + two-tier target cache; f4228 algebra)
+## Convergence picture (2026-08-31 pass 38 — probe-edge f32 narrowing; f4228 is a self-healing ±4 window; full shot-pipeline audit)
+
+Formal: all four frontiers FLAT (gx st1 f7422 / gx st2 f6475 / ly st1 f3237 /
+ly st2 f3471); 235 tests green; gx st1 clear-check 11414 unchanged. Commits
+this pass (source): FUN_0044a470/0x44a230/0x451ce0 edge narrowing +
+tests/th08-probe-edges.test.mjs.
+
+- **Every probe builds f32 edges**: FUN_0044a470 (graze 0x44a4b4-0x44a519),
+  FUN_0044a230 (killbox) and FUN_00451ce0 (player-shot AABB) each store the
+  BULLET's four edges via one extended pos±half[±20] chain + single fstps and
+  compare against the player's stored AABBs (+0x3a4 graze / +0x38c hitbox).
+  The port compared unrounded f64 center distances; now narrowed (exported
+  `th08ProbeEdges`, knife-edge regression brute-forced fixtures). Behavior-
+  neutral on all current frontiers (expected: knife-edge rarity) but
+  binary-exact.
+- **f4228 re-framed: the +4 is a ±4 OSCILLATION that SELF-HEALS by f4719**
+  (tmp/fork-check.mjs cumulative-offset compare, base offset 92 = 90 pre +
+  2 stage draws). Drift transitions: +4 @f4228 → 0 @f4387 → +4 @f4389 → 8
+  @f4409 → 0 @f4422 → … → clean from f4719, then a NEW +4 @f4721 (native
+  curve coverage ends ~f4725). Only the f4228-4719 window runs on shifted
+  values; the stream re-aligns by itself. The missing 4-draw event at f4228
+  itself is still open, with these avenues now CLOSED by evidence: NOT a
+  graze (runstate blob+0x4 flat 90 through f4210-4246), NOT an ECL rand read
+  (sub5/sub14 scripts have zero rand-var reads; timeline has no events
+  t4180-4260), NOT a shifted port shot (window algebra + full pool geometry:
+  every later settler and never-settler is accounted against the 4/6/3/0
+  counts). Remaining identity: a 13th shot contact with a genuinely different
+  native trajectory, or a subsystem without an oracle paying a 2×u32 effect
+  init at that stream position.
+- **Shot pipeline fully audited op-for-op** (all confirmed port-faithful):
+  seek tick FUN_00450320 (gates: cache.x > −100 @0x4b4394, age<40,
+  timer current≠prev — no-ops at rate 1; FDIVRP 0x4503e5 = hypot/(speed/4),
+  Ghidra-cross-checked), fire allocation FUN_00450f60 (phase%delay gate,
+  callbacks from SHT +0x28..+0x34), common spawn FUN_0044fb70 (type = SHT
+  rec+0x22, hitbox +0xc/+0x10, damage +0x1c, sfx +0x24, timer init
+  {0,0,-999}), lunge aim FUN_00450240 (enemy PTR cache player+0xe2abc, aims
+  at +0x2d34/+0x2d38 — for free enemies ≡ live +0x2d88, so no divergence;
+  angle = FUN_0043edb0(atan2(dx,dy), rec.angle+π/2), FUN_0043edb0(a,b) =
+  wrapToPi(a+b); speed ×1.5 through FUN_004286e0 = fsincos → out+0=sin·s,
+  out+4=cos·s, angle-from-down convention — the port's (cos,sin)+standard
+  angle is equivalent).
+- **FUN_00451670 type laws decoded and provably N/A for Border Team**: scan
+  filter state==1 OR type==3 (settled type-3 re-damages every overlap); type
+  4/5 collide only on timer.current%2==0 (FUN_0040d410(timer,2)); types
+  4/5/6 skip the settle tail (no effect-5/state-2/vel÷8); damage clamp 50
+  per call; settle = sfx(FUN_004069f0, rec+0x24+0xa) + effect-5
+  (FUN_00425430(0x4ece60,5,pos,1,-1)) + posvec+8=0.1 + vel/8 (type≠3).
+  ply00a/ply00as dumped: Border uses ONLY types 0/1 across all 6 levels.
+  Five init-callback variants exist (0x44ffa0 aims at pos-cache e2ab0/e2ab4,
+  0x450080 uses angle e2b0c, 0x450110 player+0xcd0, 0x4501a0→FUN_0043ed80,
+  0x450240 lunge); Border uses indices 0/1 only.
+- **Enemy position topology pinned**: +0x2d34 ECL script pos (ins_63 writes;
+  integrator FUN_0042deb0 adds rate×(+0x2d4c/50/54) with bit18 x-reverse) →
+  +0x2d40 base (attach children = parent script pos) → live +0x2d88 =
+  0x2d34+0x2d40 (FUN_00409080 = vec-add). Census reads +0x2d88 (0.1px print
+  precision — sub-0.1px agreement is UNVERIFIED). Tick order: ECL VM →
+  clamp(FUN_0042c180) → integrate → clamp → attach sync → live update →
+  FUN_00451670 collision block → cache publication.
+- **st2 f5791 narrowed**: sub20 firefly FIRE angle = var 10020 — fully
+  deterministic, ZERO RNG per fire ⇒ the stationary-bullet lattice is
+  count/checksum-invisible. Combined with the graze law being confirmed
+  exact, native's spare must come from the fairy's position AT FIRE TIME
+  (census-blind below 0.1px vs a 0.48px graze margin) or an ECL-clock
+  fire-phase shift — both movement-precision family.
+- New tooling: tmp/probe-shotpool-f4228.mjs (per-frame shot pool, target
+  cache, lunge enemy, settles), tmp/fork-check.mjs (cumulative-offset fork
+  finder; shows oscillation/self-heal structure the delta probes hid).
+
+
 
 Formal: gx st2 f6475 / ly st1 f3237 / ly st2 f3471 unchanged; gx st1 rerolls
 f7518 → f7422 inside the post-f4228 cascade; 233 tests green; gates green;
