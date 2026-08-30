@@ -118,3 +118,78 @@ test('spell capture checksum follows the scored sweep, not spell teardown', () =
   assert.deepEqual(events, ['item:time', 'checksum']);
   assert.equal(scene.runState.spellcardsCaptured, 1);
 });
+
+// player+0xe2a90 (DAT_018b8988) law (all.c:23595-23602 + the FUN_0044a230 /
+// FUN_0044a470 entry stores): the spawn-state quad latch (+0xdbe) is a plain
+// boolean and the transition-VM-end payment reads the LIVE global, which
+// every normal bullet's hit/graze probe resets to 6. A bullet latched under
+// a quad that expired before its VM ends therefore converts to a pointStar
+// (zero toss draws), not the zone's time orb — Stage-2 gx f4909 pays exactly
+// the eight volley bullets whose ending-tick probe still touches the f4897
+// master quad (native 150 draws), not all 88 latched (old port: 470).
+test('deferred spawn-state quad payment reads the live conversion global', () => {
+  const scene = makeScene();
+  scene.mode = 'test';
+  scene.playerObj.invulnFrames = 9999;
+  const idle = () => ({ held: new Set(), pressed: new Set() });
+  const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 192, y: 64, life: 1000 });
+  shooter.ecl.shootOffset = { x: 0, y: 0 };
+  scene.runtime.spawnBullets(scene, shooter, {
+    sprite: 2, offset: 2, count1: 1, count2: 1,
+    speed1: 0, speed2: 0, angle1: Math.PI / 2, angle2: 0,
+    flags: 0x2, sfx: 0, aimMode: 3, exSlots: []
+  });
+  const latched = scene.enemyBullets.at(-1);
+  assert.ok(latched, 'fired the spawn-state bullet');
+  assert.ok((latched.spawnDuration ?? 0) > 0, 'flags bit1 opens spawn state 2');
+  // A type-7 quad over the spawn point that expires long before the VM ends.
+  scene.armTh08DeathClearZone(192, 64, 32, 0, 2, 7);
+  // A normal-state bullet far away: its per-tick probes keep resetting the
+  // conversion global to 6 after the zone expires.
+  const far = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 192, y: 300, life: 1000 });
+  far.ecl.shootOffset = { x: 0, y: 0 };
+  scene.runtime.spawnBullets(scene, far, {
+    sprite: 2, offset: 2, count1: 1, count2: 1,
+    speed1: 0, speed2: 0, angle1: 0, angle2: 0,
+    flags: 0, sfx: 0, aimMode: 3, exSlots: []
+  });
+  const normal = scene.enemyBullets.at(-1);
+  assert.equal(normal.spawnDuration ?? 0, 0, 'flags without bits 2/4/8 start in state 1');
+
+  for (let i = 0; i < 12; i++) scene.update(idle());
+
+  assert.deepEqual(
+    scene.items.map((item) => item.type),
+    ['pointStar'],
+    'expired quad + reset global pays pointStar, not the latched time orb'
+  );
+});
+
+test('a quad still overlapped on the ending tick pays its own param6 twice', () => {
+  // Same law, opposite branch: the ending-tick probe still contacts the live
+  // quad, so the deferred payment reads the quad's freshly-published param6,
+  // and the promoted bullet's normal-path probe contacts it again for the
+  // second payment (the f736 double-settlement structure).
+  const scene = makeScene();
+  scene.mode = 'test';
+  scene.playerObj.invulnFrames = 9999;
+  const idle = () => ({ held: new Set(), pressed: new Set() });
+  const shooter = scene.runtime.spawnEclEnemy(scene, { subId: 0, x: 192, y: 64, life: 1000 });
+  shooter.ecl.shootOffset = { x: 0, y: 0 };
+  scene.runtime.spawnBullets(scene, shooter, {
+    sprite: 2, offset: 2, count1: 1, count2: 1,
+    speed1: 0, speed2: 0, angle1: Math.PI / 2, angle2: 0,
+    flags: 0x2, sfx: 0, aimMode: 3, exSlots: []
+  });
+  const latched = scene.enemyBullets.at(-1);
+  assert.ok((latched?.spawnDuration ?? 0) > 0, 'flags bit1 opens spawn state 2');
+  scene.armTh08DeathClearZone(192, 64, 32, 0, 30, 7);
+
+  for (let i = 0; i < 12; i++) scene.update(idle());
+
+  assert.deepEqual(
+    scene.items.map((item) => item.type),
+    ['time', 'time'],
+    'live quad pays its time orb at the VM end and again on the normal-path contact'
+  );
+});

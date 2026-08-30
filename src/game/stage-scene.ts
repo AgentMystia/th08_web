@@ -626,6 +626,21 @@ export class StageScene implements GameHost {
   }[] = Array.from({ length: 16 }, () => ({
     x: 0, y: 0, radius: 0, growth: 0, framesLeft: 0, convertType: -1
   }));
+  // player+0xe2a90 — the fixed global DAT_018b8988 (the player struct is the
+  // 0xe2b30-byte static at 0x17d5ef8, zeroed by FUN_0044c230): the quad
+  // probe's LAST-CONTACT conversion type. FUN_00449ff0 writes the hit quad's
+  // param6 here on every contact (all.c:36505); the player hit/graze probes
+  // FUN_0044a230/FUN_0044a470/FUN_0044a360 reset it to 6 at entry. The
+  // spawn-state latch (+0xdbe) is a plain boolean: the transition-VM-end
+  // conversion pays THIS live global, not the latched quad's type
+  // (all.c:23595-23602). A bullet latched under a quad that expired before
+  // its VM ends therefore pays whatever the latest probes left — usually 6
+  // (pointStar, state 1, zero toss-velocity draws) instead of the zone's 7
+  // (time orb, 4 draws). Stage-2 gx f4909: the native pays only the handful
+  // of f4900-volley bullets whose ending-tick probe still touches the
+  // f4897 master quad (plus one stale carry each); the latched-type port
+  // paid all 88 (native 150 draws vs port 470).
+  private th08QuadConvertType = 0;
   // The active bomb form's decoded state machine (12 forms, player-bombs.ts).
   private th08Bomb: Th08BorderBomb | null = null;
   // FUN_0044c650 invokes the selected callback in the trigger player pass.
@@ -3465,22 +3480,26 @@ export class StageScene implements GameHost {
       )) return this.beginBombClearFade(b);
     }
     // Th08.exe FUN_00449ff0's pool probe (player+0xbb834): the familiar
-    // master-death quads. Same contact shape as the bomb regions above, but
-    // the kill enters state 5 directly — no time-orb award (DAT_018b8988 is
-    // -1 outside bomb/spell context, all.c:23535-23552). Spawn-state bullets
-    // never reach this probe: updateBullets returns them into the deferred
-    // quadKillType latch (below), which pays the conversion on the
-    // transition-VM's ending tick exactly as the exe does (all.c:23589-23644).
+    // master-death quads, reached through FUN_0044a470 (graze) / FUN_0044a230
+    // (hit) — both reset player+0xe2a90 (DAT_018b8988) to 6 at ENTRY, then a
+    // pool contact republishes the quad's param6 and the state-5 entry pays
+    // that id (all.c:23531-23552). Spawn-state bullets never reach this
+    // probe: updateBullets returns them into the deferred quadKillType latch
+    // (below), which pays the live global on the transition-VM's ending tick
+    // exactly as the exe does (all.c:23589-23644).
+    this.th08QuadConvertType = 6;
     for (const z of this.th08DeathClearZones) {
       if (z.framesLeft <= 0) continue;
       const dx = b.x - z.x;
       const dy = b.y - z.y;
       if (dx * dx + dy * dy < z.radius * z.radius) {
-        // Bullet->item conversion on the quad kill (all.c:23597-23651,
-        // DAT_018b8988 = the quad's param6): 9 pays TWO type-7 items, any
-        // other type > -1 pays one item of exactly that type (state arg 1;
+        // Bullet->item conversion on the quad kill: the probe has just
+        // published this quad's param6 to player+0xe2a90, and the payment
+        // reads that live global: 9 pays TWO type-7 items, any other id
+        // > -1 pays one item of exactly that type (state arg 1;
         // FUN_004400a0 still forces time items to their toss-arc state).
-        this.th08PayQuadConversion(z.convertType, b.x, b.y);
+        this.th08QuadConvertType = z.convertType;
+        this.th08PayQuadConversion(this.th08QuadConvertType, b.x, b.y);
         return this.beginBulletClearFade(b);
       }
     }
@@ -4086,6 +4105,10 @@ export class StageScene implements GameHost {
   private checkEnemyBulletCollision(b: EnemyBullet): void {
     const p = this.playerObj;
     if (b.dead || this.gameOver) return;
+    // FUN_0044a470/FUN_0044a230 both reset player+0xe2a90 (DAT_018b8988) to 6
+    // at entry; a surviving bullet therefore leaves the quad conversion
+    // global at 6 for the next bullet's deferred payment.
+    this.th08QuadConvertType = 6;
     const dx = Math.abs(b.x - p.x);
     const dy = Math.abs(b.y - p.y);
     if (!p.alive) {
@@ -4973,6 +4996,9 @@ export class StageScene implements GameHost {
           const dx = probeX - r.x;
           const dy = probeY - r.y;
           if (dx * dx + dy * dy < r.radius * r.radius) {
+            // FUN_00449ff0 publishes the contacted quad's param6 to
+            // player+0xe2a90 on every probe, latched or not.
+            this.th08QuadConvertType = 6;
             b.quadKillType = 6;
             quadLatched = true;
             break;
@@ -4982,6 +5008,7 @@ export class StageScene implements GameHost {
           if (box.framesLeft > 0 && orientedBoxHitsPoint(
             probeX, probeY, box.x, box.y, box.width, box.height, box.angle
           )) {
+            this.th08QuadConvertType = 6;
             b.quadKillType = 6;
             quadLatched = true;
             break;
@@ -4998,6 +5025,7 @@ export class StageScene implements GameHost {
             // bullets inside both a child type-9 and master type-7 zone;
             // native retains the earlier type 9 (four orbs per bullet over
             // deferred + normal settlement), while last-hit-wins lost six.
+            this.th08QuadConvertType = z.convertType;
             b.quadKillType = z.convertType;
             break;
           }
@@ -5017,11 +5045,15 @@ export class StageScene implements GameHost {
         // the normal collision block below pays and kills it a second time.
         // Stage-2 f736 is the clean witness: two state-2 bullets become four
         // type-6 items. Do not start the clear runner in this deferred arm.
-        const t = b.quadKillType;
+        //
+        // The latch (+0xdbe) is a plain boolean; the payment reads the LIVE
+        // player+0xe2a90 global (DAT_018b8988), re-published by this tick's
+        // own probe when the quad still overlaps and otherwise left at
+        // whatever the latest hit/graze probes reset (all.c:23595-23602).
         b.quadKillType = null;
         const itemX = motion.transitionX ?? b.x;
         const itemY = motion.transitionY ?? b.y;
-        this.th08PayQuadConversion(t, itemX, itemY);
+        this.th08PayQuadConversion(this.th08QuadConvertType, itemX, itemY);
       }
       // op-79 0x2000 grace ticks in normal state (exe FUN_004241c0
       // all.c:16144-16146), immediately before the full-speed position add.
