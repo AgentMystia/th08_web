@@ -259,14 +259,14 @@ resolve through file-order enumeration).
 
 ## 5. Tests
 
-`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (226). Key surfaces:
+`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (227). Key surfaces:
 et_ex dir semantics, sub-context CALL channel, boss audits/presentation,
 item/damage economy, familiar cadence, pacing hard checkpoints (native
 gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 29)
+## 6. Standing residuals (honest, 2026-08-30 pass 30)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,7 +379,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 29): **gx st1 f7411**, **gx st2
+- Formal baselines (pass 30): **gx st1 f7520**, **gx st2
   f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-27
   closed the first half of the st1 f4122 settle fork: master-tail orbs read
   the +0x3380 LEDGER ×2 (all.c:20533; was live-children ×2) and the wipe
@@ -388,14 +388,15 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   FUN_004161b0/00416b90 captured-card tail: native budget formula, 9-tick
   warm-up, opposite 128px type-10 bursts, partial debit and the reconstructed
   1/16 player easing; f4132 positions are wine-exact. Pass-29 closed the
-  scored-sweep half of f4123: FUN_00430aa0 pays one raw zone conversion item
-  per bullet (asm 0x430b14-0x430b5c) and writes state 5; the state-1 type9
-  double-payment is a different arm. The f4123 frame draw excess +220 became
-  -16 (cumulative -20); 59 of native 63 new type7 slots are now one-to-one.
-  Remaining: five type7 allocations / 20 draws plus pointStar 214-vs-209,
-  the asm 442-budget/14-debit cadence that yields 416 calls while wine
-  observes 442 items (clock writer unresolved), the presentation actor
-  transform (§7), and the ins_92 ledger cadence — until those land, gx st1
+  scored-sweep half of f4123, then pass-30 closed the whole settle family:
+  all.c:21661 suppresses the shared wipe while the spell singleton is up, and
+  asm 0x42f396 initializes the manager sweep table to item id 6. The port now
+  matches native f4122 exactly (1832 draws / 254 items) and f4123 exactly
+  (256 draws / 526 items, 209 pointStars + 63 zone time orbs); the wine draw
+  curve stays zero through f4163. The next permanent fork is f4164 (-48):
+  the asm 442-budget/14-debit cadence yields 416 calls while wine observes
+  442 items (clock writer unresolved). Other queue entries: the presentation
+  actor transform (§7) and the ins_92 ledger cadence — until those land, gx st1
   frontier numbers
   are re-roll noise on a still-forked stream. The f5911 fan-aim story is
   SUPERSEDED: the var chain is fully decoded (var10016 = rand10082×0.04 +
@@ -437,23 +438,16 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 29): (1) **f4122/f4123 five-orb residual**: port
-  f4122 time235 vs native236 and native f4123's four non-sweep type7 additions
-  (slots1451/1575/1583/1586), with pointStar214-vs209; total allocations now
-  match at508, so classify the remaining per-lane transition/ledger payments.
-  (2) **orbit emitter call-count contradiction**: asm budget442
-  with 14 debit/full tick yields 416 calls, wine observes 442 type-10 items;
-  decode the presentation clock/writer and effect-39 actor transform. (3)
-  ins_92 ledger cadence 46-vs-68 (22 missing attaches → 44 tail orbs). (1b)
-  **st2 bisection**: port field
-  empty (enemies not firing) by f8950 vs native 511 — wine-window bisect
-  st2 from f3500 (first spell segment); st2's own settle sweeps share the
-  pass-27 fix family. (2) the st2 f9253 contact (sub17 rice, spawnF
-  9025, bottom edge) — downstream of (1b); (3) the
-  dialogue's residual ~13f (17-wait arm granularity/row pacing);
-  (4) the MOVEMENT-PRECISION family — player micro-position f661+
-  (wine-gated); (5) visual: fog law, boss name plate, ring-bullet
-  render scale, HP-bar inset, timer tint (pass-21/22 acceptance list).
+- Next-target queue (pass 30): (1) **the orbit emitter 442-vs-416 call
+  contradiction** is now the first permanent st1 fork at f4164 (-48): the
+  stream is clean through f4163, so decode the native budget/presentation
+  clock/debit writer rather than hardcoding 442. (2) **st2 bisection**: port
+  field empty (enemies not firing) by f8950 vs native 511 — wine-window bisect
+  st2 from f3500 (first spell segment). (3) the st2 f9253 contact (sub17 rice,
+  spawnF 9025, bottom edge) — downstream of (2); (4) ins_92 ledger cadence
+  46-vs-68; (5) dialogue residual ~13f; (6) MOVEMENT-PRECISION family —
+  player micro-position f661+ (wine-gated); (7) visual: fog law, boss name
+  plate, ring-bullet render scale, HP-bar inset, timer tint.
 - **Falsified pass 23 (audit trail)**: "op90-93 children run eclT −1"
   (census row f3626 e[4]=1 read as the child's ECL clock; allocator
   core leaves ctx.time at 0) — implemented on the th08Familiar path

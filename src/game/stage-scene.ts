@@ -709,7 +709,10 @@ export class StageScene implements GameHost {
   private popupsSmall: ScorePopup[] = Array.from({ length: 3 }, makeScorePopup);
   private popupCursorLarge = 0;
   private popupCursorSmall = 0;
-  private readonly cancelItemType: ItemType = 'time';
+  // FUN_0042f360 initializes the TH08 bullet manager's conversion table to
+  // native item id 6 (pointStar, asm 0x42f396). Zone contacts override it with
+  // the quad's raw id; only this table path decides the non-zone sweep item.
+  private readonly cancelItemType: ItemType = 'pointStar';
   constructor(
     private assets: GameAssets,
     private audio: AudioBus,
@@ -2413,6 +2416,13 @@ export class StageScene implements GameHost {
   // Zero RNG on this path: FUN_004400a0 is the item allocator and
   // FUN_00403200 a plain field store, so seed oracles are untouched.
   th08DeathWipeBonus(dead: Enemy): void {
+    // FUN_0041ed50's wipe tail is additionally gated on the spell singleton
+    // (all.c:21661: flags bit1 && FUN_004178a0()==0). A captured/active spell
+    // therefore leaves the whole field for the retained death callback; its
+    // op123 end-spell handler runs FUN_004161b0 -> FUN_00430aa0 on a later
+    // enemy tick. Wiping only the non-zone bullets here made 209 pointStars
+    // one manager pass early and starved the later sweep's zone half.
+    if (this.runtime?.spellActive) return;
     const t = dead.ecl.th08;
     // The tail gate (all.c:21659) reads the +0x3324 word: bit1 is the
     // boss-slot REGISTRATION flag written by ins_127 (all.c:12700), not
