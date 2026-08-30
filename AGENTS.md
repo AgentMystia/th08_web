@@ -205,13 +205,19 @@ Current st1 frontier:
   nearby shots to collide is falsified; the native shot-pool identity/call
   site remains open (Wine is closed).
 
-Current st2 frontier (f6330, +12):
-- Scene is the lone boss (hp ~1476->1408) drifting (192,128)->(248,108) with a
-  4-frame fire cadence; native volley sizes vary per shot (104/122/116/...)
-  while the port is nearly constant 104, and an irregular 12-draw event family
-  is phase-offset by about a frame. First permanent count fork f6330.
-- This is the pass-23 auto-fire timer primitive order + aim-tracking wrap
-  family (FUN_00406610/660/40, b8e0, e390).
+Current st2 frontier chain (traced f6330 -> f5865 -> f5791):
+- f6330 (+12) is downstream of the Mystia f5865 phase-transition ins_67 move
+  angle fork: the port enters f5865 four draws AHEAD of native, so the random
+  inward-move reads the wrong stream slot (port 0.9095 -> 0.643 rad, native
+  0.681 -> 0.284 rad); force-feeding the native angle aligns the trajectory
+  for ~100 frames. The +4 lead is the f5791 extra graze: the port grazes the
+  stationary speed-0 bullet (slot1149, spawned by the slot-4 sub20 fairy at
+  (219.4,435.9)) at f5791 while native never grazes it despite matched player
+  /fairy/bullet-spawn positions and a confirmed graze law (margin 20, graze
+  half 2.8). Why native spares it is open (bullet survival / sub-pixel reach);
+  native bullet-pool evidence needed (Wine is closed).
+- f5853 has a separate one-frame-late graze (bullet 1014). All remaining walls
+  are the movement-precision / graze-timing family.
 
 Historical audit and full pass detail: `HANDOFF.md`, `tmp/gx-findings.md`, and
 git history.
