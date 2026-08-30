@@ -44,6 +44,12 @@ gx st1 clear-check clears at 11414/11460 (inside the recorded stream; was
   settle therefore implies a trajectory difference invisible to every current
   oracle — native shot-pool telemetry remains the missing evidence (Wine
   closed by user rule).
+- **st2 f2128 resolved as inert**: the census-visible one-frame difference is
+  the attach child (sub12) of the dying sub11 fairy — the parent dies on
+  f2128 in both, the port frees the swept child the same frame while native
+  removes it at its own next manager pass (f2129). Per-frame draws are equal
+  f2120-2138, slot-1 reuse at f2136 matches, no collision/fire/RNG contact:
+  a census-only cosmetic node, not a fork.
 
 
 ## Convergence picture (2026-08-30 pass 35 — the DAT_018b8988 live-global round)
