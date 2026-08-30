@@ -70,6 +70,16 @@ test('bottom cull is strict — y exactly 464 survives one more frame', () => {
   assert.equal(it.dead, true, 'strictly past the line the next frame frees it');
 });
 
+test('state-1 homing skips the ordinary bottom-cull block', () => {
+  const scene = makeScene();
+  const it = inject(scene, { x: 100, y: 465, state: 1 });
+  scene.update(idle());
+  assert.equal(it.state, 1, 'the crest latch remains homing');
+  assert.equal(it.dead ?? false, false,
+    '0x4408db jumps to collision at 0x4409f2, bypassing 0x44095b');
+  assert.ok(it.y < 465, 'the same tick integrates the authored homing vector');
+});
+
 test('state-3 toss: 0.05*global gravity, one integration, 0.03*moveRate tail', () => {
   const scene = makeScene();
   const it = inject(scene, { x: 32, y: 300, state: 3, vy: f(-0.2) });

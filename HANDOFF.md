@@ -7,11 +7,11 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 32 — the op123 checksum-order round)
+## Convergence picture (2026-08-30 pass 33 — the homing-item cull round)
 
-| run | pass-31 | pass-32 | note |
+| run | pass-32 | pass-33 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f7521 | **f7521** | op123 checksum order fixed; contact unchanged downstream |
+| udGx01 st1 | f7521 | **f7518** | state-1 homing cull fixed; contact is a downstream re-roll |
 | udGx01 st2 | f9253 | f9253 | flat |
 | udLy01 st1 | f3177 | f3177 | flat |
 | udLy01 st2 | f3471 | f3471 | flat |
@@ -23,6 +23,18 @@ bullet-manager sweep table to native item id 6 (pointStar). Combined with
 pass-29's one-payment FUN_00430aa0 law, the port matches native exactly at
 f4122 (1832 draws / 254 items) and f4123 (256 draws / 526 items; 209
 pointStars + 63 zone time orbs).
+
+Pass-33 fixed the first post-f4123 item-collect fork. Native slot2024 crests at
+f4195, becomes homing state 1, and at f4196 is y=465.312 — strictly past the
+ordinary 464 cull line — yet keeps returning until native collects it at f4218.
+FUN_00440500's state-1 arm computes/integrates the player vector at
+0x440886-0x4408d6 and jumps directly to collision at 0x4409f2, bypassing the
+0x44095b cull/unlink block. The port had applied that cull to homing items,
+losing one 4-draw collect at f4218 and eventually -172 draws by f4257. After
+the gate, f4214-4222 item removals/collects match slot-for-slot. The first
+remaining count fork is f4228: native pays 60 draws versus port 56; item
+collects are already exact and port has three effect-5 impacts, so one
+4-draw impact-family event is still missing. Tests are 229 green.
 
 Pass-32 corrected a hidden equal-count value fork at f4123. Native
 FUN_004161b0 runs FUN_00430aa0 first, then the non-boss sweep and score bank

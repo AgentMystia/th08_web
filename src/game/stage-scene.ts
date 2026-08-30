@@ -5833,7 +5833,13 @@ export class StageScene implements GameHost {
         // `arcadeRegionSize.y + 16.0f < y`, the 448+16 boundary. Terminal
         // velocity is exactly 3.0 and drops start near integer y, so the
         // equality case is reachable: a >= kill executes one frame early.
-        if (it.y > 464) {
+          // FUN_00440500's state-1 homing branch computes the player vector,
+          // writes the new velocity and integrates at 0x4408c7-0x4408d6, then
+          // jumps DIRECTLY to the collect test at 0x4409f2. The 0x44095b
+          // bottom-cull/rank block belongs to the ordinary fall path only;
+          // a homing orb may therefore cross y=464 while already returning to
+          // the player (gx st1 slot2024: native y=465.312 at f4196 survives).
+          if (it.state !== 1 && it.y > 464) {
           it.dead = true;
           // FUN_00430c10 @ 0x4310ae-0x4310ba: every ordinary item that
           // leaves the bottom subtracts three rank points, regardless of

@@ -169,8 +169,9 @@ player grab AABB (init all.c:38182: +0x3f0 = SHT@0x18/2) — both halves
 itemRadius/2 (Border 24.0, ply00a.sht @24), inclusive, z ignored; gate =
 player state ∈ {0,3,4} (FUN_0044a5a0). PoC arm: player above line AND
 (power ≥ 128 [0x4b5b30 is a DOUBLE 128.0, fild+fcomp QWORD] OR player+3
-raw-focus ≠ 0 OR mode 1/6). Cull: strictly beyond camera+16 (equality
-frame survives + gravity), rank −3. Gravity 0.03×moveRate (0x4b44c0),
+raw-focus ≠ 0 OR mode 1/6). Cull (ordinary fall only): strictly beyond camera+16 (equality
+frame survives + gravity), rank −3; state-1 homing integrates then jumps
+directly to collision and bypasses cull (0x4408db→0x4409f2). Gravity 0.03×moveRate (0x4b44c0),
 terminal vy 3.0 (0x4b42dc), rise clamp −2.2 (0x4b5b2c). State 3 vs 5 are
 TWO laws: 3 = 0.05×global + single moveRate integration + 0.03 tail +
 no-collect while state==3; 5 = integrate BEFORE the crest test, non-crest
@@ -266,7 +267,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 32)
+## 6. Standing residuals (honest, 2026-08-30 pass 33)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,8 +380,13 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 32): **gx st1 f7521**, **gx st2
-  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-32
+- Formal baselines (pass 33): **gx st1 f7518**, **gx st2
+  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-33
+  closed the state-1 item cull misread: FUN_00440500 homing integrates at
+  0x4408c7-0x4408d6 then jumps to collision 0x4409f2, bypassing the ordinary
+  0x44095b bottom cull; native slot2024 survives y=465.312 at f4196 and
+  collects at f4218. f4214-4222 item removals/collects are now slot-exact.
+  Pass-32
   closed the hidden f4123 equal-count value fork: native op123/FUN_004161b0
   runs the scored sweep, non-boss sweep and score bank before the capture
   counter/checksum (0x41620f-0x41624a precede 0x416790-0x4167b0); the port had
@@ -407,7 +413,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   was a truncated f4132-4165 window), and the wine draw-count curve stayed
   zero through f5104. Pass-32 later proved that equal draw counts had hidden
   the f4123 toss-value/order fork (now CLOSED); the then-reported f5105 fork
-  is downstream of the remaining f4257 value fork. Remaining
+  is downstream of the pass-33-closed homing fork and remaining f4228 impact fork. Remaining
   queue entries: the presentation actor transform (§7) and the ins_92 ledger
   cadence — until those land, gx st1
   frontier numbers
@@ -451,13 +457,12 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 32): (1) **st1 f4257 item-value fork** is the first
-  remaining native/port random-value divergence: native slot308 initial toss
-  (-0.31199,-2.14671) vs port (-0.01911,-2.09981), with both sides paying the
-  same 144 draws that frame; the native pair occurs float-exact in the port
-  f4265 raw lane (+172 u16 from the port f4257 item draw), so decompose the
-  140 effect draws + one item toss and compare FUN_0042bea0's common-death
-  order before changing semantics. (2) **st2 bisection**: port field empty by
+- Next-target queue (pass 33): (1) **st1 f4228 -4** is the first permanent
+  post-f4123 count fork after the homing fix: native pays 60 draws vs port 56.
+  The 11 item collects are slot-exact and port pays three effect-5 impacts,
+  so decode the missing fourth 4-draw impact event in FUN_0043a980/FUN_00425d70
+  (enemy slot1 HP/position/ECL clock are exact f4224-4234). f4257's shifted
+  toss is downstream. (2) **st2 bisection**: port field empty by
   f8950 vs native 511 — wine-window bisect st2 from f3500. (3) the st2 f9253
   contact (sub17 rice, spawnF 9025) — downstream of (2); (4) ins_92 ledger
   cadence 46-vs-68; (5) dialogue residual ~13f; (6) MOVEMENT-PRECISION family
