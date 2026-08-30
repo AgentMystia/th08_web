@@ -25,7 +25,7 @@ function arm(scene, flags = 0) {
 test('normal card orbit budget uses the native late-card interpolation', () => {
   const scene = makeScene();
   const emitter = arm(scene);
-  assert.equal(emitter.budget, 442);
+  assert.equal(emitter.budget, 729);
   assert.equal(emitter.timer, 19);
   assert.equal(emitter.warmup, 9);
 });
@@ -52,5 +52,5 @@ test('orbit emitter waits ten actor ticks, then pays 7+6 type-10 orbs', () => {
   assert.equal(emitter.timer, 29);
   assert.equal(spawns.length, 13);
   assert.ok(spawns.every(({ type, state }) => type === 'time' && state === 5));
-  assert.equal(emitter.budget, 428);
+  assert.equal(emitter.budget, 715);
 });

@@ -266,7 +266,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 30)
+## 6. Standing residuals (honest, 2026-08-30 pass 31)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,7 +379,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 30): **gx st1 f7520**, **gx st2
+- Formal baselines (pass 31): **gx st1 f7521**, **gx st2
   f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-27
   closed the first half of the st1 f4122 settle fork: master-tail orbs read
   the +0x3380 LEDGER ×2 (all.c:20533; was live-children ×2) and the wipe
@@ -393,10 +393,13 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   asm 0x42f396 initializes the manager sweep table to item id 6. The port now
   matches native f4122 exactly (1832 draws / 254 items) and f4123 exactly
   (256 draws / 526 items, 209 pointStars + 63 zone time orbs); the wine draw
-  curve stays zero through f4163. The next permanent fork is f4164 (-48):
-  the asm 442-budget/14-debit cadence yields 416 calls while wine observes
-  442 items (clock writer unresolved). Other queue entries: the presentation
-  actor transform (§7) and the ins_92 ledger cadence — until those land, gx st1
+  curve is now exact through the pass-31 orbit fix: FUN_004161b0 reads the manager's
+  REMAINING-time timer (+0x108), not elapsed, so the gx budget is 729. The
+  full native tail is 52×13 + (1+6)=683 orbs through f4184 (the old "442"
+  was a truncated f4132-4165 window), and the wine draw curve stays zero
+  through f5104. The next permanent st1 fork is f5105 (-96). Remaining
+  queue entries: the presentation actor transform (§7) and the ins_92 ledger
+  cadence — until those land, gx st1
   frontier numbers
   are re-roll noise on a still-forked stream. The f5911 fan-aim story is
   SUPERSEDED: the var chain is fully decoded (var10016 = rand10082×0.04 +
@@ -438,16 +441,15 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 30): (1) **the orbit emitter 442-vs-416 call
-  contradiction** is now the first permanent st1 fork at f4164 (-48): the
-  stream is clean through f4163, so decode the native budget/presentation
-  clock/debit writer rather than hardcoding 442. (2) **st2 bisection**: port
-  field empty (enemies not firing) by f8950 vs native 511 — wine-window bisect
-  st2 from f3500 (first spell segment). (3) the st2 f9253 contact (sub17 rice,
-  spawnF 9025, bottom edge) — downstream of (2); (4) ins_92 ledger cadence
-  46-vs-68; (5) dialogue residual ~13f; (6) MOVEMENT-PRECISION family —
-  player micro-position f661+ (wine-gated); (7) visual: fog law, boss name
-  plate, ring-bullet render scale, HP-bar inset, timer tint.
+- Next-target queue (pass 31): (1) **st1 f5105 -96** is the first permanent
+  post-settle/post-orbit fork (native delta288 vs port192); decompose it by
+  lane/enemy/bullet event before touching semantics. (2) **st2 bisection**:
+  port field empty (enemies not firing) by f8950 vs native 511 — wine-window
+  bisect st2 from f3500. (3) the st2 f9253 contact (sub17 rice, spawnF 9025)
+  — downstream of (2); (4) ins_92 ledger cadence 46-vs-68; (5) dialogue
+  residual ~13f; (6) MOVEMENT-PRECISION family — player micro-position f661+
+  (wine-gated); (7) visual: fog law, boss name plate, ring-bullet render
+  scale, HP-bar inset, timer tint.
 - **Falsified pass 23 (audit trail)**: "op90-93 children run eclT −1"
   (census row f3626 e[4]=1 read as the child's ECL clock; allocator
   core leaves ctx.time at 0) — implemented on the th08Familiar path

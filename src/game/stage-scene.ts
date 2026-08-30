@@ -2255,15 +2255,18 @@ export class StageScene implements GameHost {
       budget = 700;
     } else {
       const lateGate = timeLimit - Math.trunc(timeLimit / 7);
-      // The presentation manager's clock is ten frames ahead of the bonus
-      // clock on the captured gx st1 witness (native formula input 797,
-      // spell elapsed 787). §7: that clock head start is not yet isolated
-      // to its writer; do not silently fold it into the bonus model.
-      const elapsed = Math.trunc(sc.elapsed + sc.elapsedFrac) + 10;
-      if (elapsed >= lateGate) budget = 1000;
-      else if (elapsed < 180) budget = 100;
+      // asm 0x4162ae-0x416338 reads TWO ZunTimers: manager+0x114 holds the
+      // authored limit and +0x108 is the remaining-time countdown. The budget
+      // interpolates on REMAINING time, not on the bonus clock. For the gx
+      // witness (limit 2100, elapsed 787) that reads 1313 -> budget 729.
+      const countdown = timeLimit - Math.max(
+        0,
+        Math.trunc(sc.elapsed + sc.elapsedFrac)
+      );
+      if (countdown >= lateGate) budget = 1000;
+      else if (countdown < 180) budget = 100;
       else {
-        budget = 100 + Math.trunc(((elapsed - 180) * 900) / (lateGate - 180));
+        budget = 100 + Math.trunc(((countdown - 180) * 900) / (lateGate - 180));
       }
     }
     // §7: the binary transfers the live effect-39 actor (whose presentation

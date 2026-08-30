@@ -7,11 +7,11 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 28 — the boss-death orbit-emitter round)
+## Convergence picture (2026-08-30 pass 31 — the closed orbit-tail round)
 
-| run | pass-29 | pass-30 | note |
+| run | pass-30 | pass-31 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f7411 | **f7520** | f4122/f4123 settle curves are exact; f4164 orbit fork is next |
+| udGx01 st1 | f7520 | **f7521** | orbit tail exact; stream is draw-true through f5104 |
 | udGx01 st2 | f9253 | f9253 | flat, zero regression |
 | udLy01 st1 | f3177 | f3177 | flat |
 | udLy01 st2 | f3471 | f3471 | flat |
@@ -20,24 +20,29 @@ Pass-30 closed the remaining settle timing/table laws. all.c:21661 gates
 FUN_0041ed50's wipe on FUN_004178a0()==0, so an active/captured spell leaves
 the whole field for the later op123 handler; asm 0x42f396 initializes the
 bullet-manager sweep table to native item id 6 (pointStar). Combined with
-pass-29's one-payment FUN_00430aa0 law, the port now matches native exactly
-at f4122 (1832 draws / 254 items) and f4123 (256 draws / 526 items; 209
-pointStars + 63 zone time orbs), and the wine st1c draw curve stays zero
-through f4163. The first permanent divergence is now f4164 (-48): the orbit
-emitter's asm-derived 416 calls stop while native continues toward its
-observed 442-item tail. Gates: check/build/test 227 green; all four formal
-verifiers run; gx st1 clear-check clears at replay frame 11210 (remaining
-end-state diffs are orbit cascade).
+pass-29's one-payment FUN_00430aa0 law, the port matches native exactly at
+f4122 (1832 draws / 254 items) and f4123 (256 draws / 526 items; 209
+pointStars + 63 zone time orbs).
 
-Pass-28 implemented the captured-card tail from FUN_004161b0/00416b90:
+Pass-31 closed the orbit tail. asm 0x4162ae-0x416338 reads manager+0x108's
+REMAINING-time timer, so the gx budget is 729 (not 442); the full native
+cadence is 52×13 plus a final 1+6 = 683 orbs through f4184. The truncated
+f4132-4165 window had created the false 442-vs-416 contradiction. After the
+fix the f4132-4184 lane and following draw/item frames are exact, and the
+wine st1c draw curve stays zero through f5104. The first permanent fork is
+now f5105 (-96). Gates: check/build/test 227 green; all four formal
+verifiers run; gx st1 clear-check clears at replay frame 11464 (remaining
+end-state diffs are downstream cascade).
+
+Historical pass-28 implemented the captured-card tail from FUN_004161b0/00416b90 (its 442-budget reading is superseded by pass 31):
 the native budget formula (gx st1 = 442), nine-tick warm-up, opposite
 128px type-10 bursts, native partial debit, and the reconstructed 1/16
 player easing. The f4132 burst centers/positions are float-exact against
 wine after inverting the first item tick. Honest §7 residuals: the native
 presentation clock's +10-frame lead, the effect-39 actor transform, and
-the branch mapping for easing. A new contradiction remains: asm budget442
-with 14 debited per full tick yields 416 calls, while wine observes 442
-type-10 items; the port follows asm and does not fake the count. Full
+the branch mapping for easing. At that time the truncated f4132-4165 window suggested a 442-vs-416
+contradiction; pass 31 resolved it as a remaining-timer misread and a
+683-item full tail. Full
 detail: tmp/gx-findings.md pass 28.
 
 Pass-27 root-caused the whole st1 stream fork to the midboss death settle
