@@ -80,3 +80,41 @@ test('an active spell suppresses the shared death wipe until spell end', () => {
     'FUN_00430aa0 uses the manager table (id 6) after the spell singleton clears'
   );
 });
+
+test('spell capture checksum follows the scored sweep, not spell teardown', () => {
+  const scene = makeScene();
+  scene.startBossSpell(99, 12345, 100, 'order-test');
+  scene.armTh08DeathClearZone(192, 224, 32, 0, 2, 7);
+  injectBullet(scene, 0, 192, 224);
+
+  const events = [];
+  let draws = 0;
+  const originalDraw = scene.rng.u16.bind(scene.rng);
+  scene.rng.u16 = () => {
+    draws++;
+    return originalDraw();
+  };
+  const originalChecksum = scene.payTh08ProtectedChecksum.bind(scene);
+  scene.payTh08ProtectedChecksum = () => {
+    events.push('checksum');
+    originalChecksum();
+  };
+  const originalSpawn = scene.spawnItem.bind(scene);
+  scene.spawnItem = (type, x, y, options) => {
+    events.push(`item:${type}`);
+    return originalSpawn(type, x, y, options);
+  };
+
+  scene.endBossSpell();
+  assert.equal(draws, 0, 'teardown itself is draw-free');
+  assert.equal(scene.runState.spellcardsCaptured, 0, 'capture tail is pending');
+
+  scene.sweepBulletsToItems();
+  assert.equal(draws, 4, 'the zone type-7 conversion pays its toss pair first');
+  assert.deepEqual(events, ['item:time']);
+
+  scene.settleTh08CapturedSpell();
+  assert.equal(draws, 8, 'FUN_00406e50 pays its four-u16 checksum after the sweep');
+  assert.deepEqual(events, ['item:time', 'checksum']);
+  assert.equal(scene.runState.spellcardsCaptured, 1);
+});

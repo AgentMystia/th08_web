@@ -323,6 +323,10 @@ export interface GameHost {
   // Returns whether the TH08 phase-end field sweep applies. Timeouts fade
   // the field without the scored sweep.
   endBossSpell?(opts?: { fromBossDeath?: boolean }): boolean;
+  // TH08 FUN_004161b0 runs the field sweep/enemy sweep/score bank first;
+  // op123 calls this only after those tails so the captured-card checksum
+  // cannot precede the scored sweep's item RNG.
+  settleTh08CapturedSpell?(): void;
   voidSpellCapture?(): void;
   setBossPresent?(present: boolean, enemy: Enemy | null): void;
   setBossLifeCount?(count: number): void;

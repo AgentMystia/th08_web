@@ -266,7 +266,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 31)
+## 6. Standing residuals (honest, 2026-08-30 pass 32)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,8 +379,16 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 31): **gx st1 f7521**, **gx st2
-  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-27
+- Formal baselines (pass 32): **gx st1 f7521**, **gx st2
+  f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-32
+  closed the hidden f4123 equal-count value fork: native op123/FUN_004161b0
+  runs the scored sweep, non-boss sweep and score bank before the capture
+  counter/checksum (0x41620f-0x41624a precede 0x416790-0x4167b0); the port had
+  paid checksum first, shifting all 63 f4123 time-toss pairs at unchanged
+  256-draw total. The 272-item allocation sequence and all 63 toss velocities
+  are now exact. LESSON: a per-frame draw-delta curve is not an RNG-value
+  oracle; compare native item/bullet random outputs before declaring a stream
+  clean. Pass-27
   closed the first half of the st1 f4122 settle fork: master-tail orbs read
   the +0x3380 LEDGER ×2 (all.c:20533; was live-children ×2) and the wipe
   sweep leaves quad-zone-covered bullets to the zone path (pointStar count
@@ -393,11 +401,13 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   asm 0x42f396 initializes the manager sweep table to item id 6. The port now
   matches native f4122 exactly (1832 draws / 254 items) and f4123 exactly
   (256 draws / 526 items, 209 pointStars + 63 zone time orbs); the wine draw
-  curve is now exact through the pass-31 orbit fix: FUN_004161b0 reads the manager's
+  count curve is now exact through the pass-31 orbit fix: FUN_004161b0 reads the manager's
   REMAINING-time timer (+0x108), not elapsed, so the gx budget is 729. The
   full native tail is 52×13 + (1+6)=683 orbs through f4184 (the old "442"
-  was a truncated f4132-4165 window), and the wine draw curve stays zero
-  through f5104. The next permanent st1 fork is f5105 (-96). Remaining
+  was a truncated f4132-4165 window), and the wine draw-count curve stayed
+  zero through f5104. Pass-32 later proved that equal draw counts had hidden
+  the f4123 toss-value/order fork (now CLOSED); the then-reported f5105 fork
+  is downstream of the remaining f4257 value fork. Remaining
   queue entries: the presentation actor transform (§7) and the ins_92 ledger
   cadence — until those land, gx st1
   frontier numbers
@@ -441,15 +451,18 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 31): (1) **st1 f5105 -96** is the first permanent
-  post-settle/post-orbit fork (native delta288 vs port192); decompose it by
-  lane/enemy/bullet event before touching semantics. (2) **st2 bisection**:
-  port field empty (enemies not firing) by f8950 vs native 511 — wine-window
-  bisect st2 from f3500. (3) the st2 f9253 contact (sub17 rice, spawnF 9025)
-  — downstream of (2); (4) ins_92 ledger cadence 46-vs-68; (5) dialogue
-  residual ~13f; (6) MOVEMENT-PRECISION family — player micro-position f661+
-  (wine-gated); (7) visual: fog law, boss name plate, ring-bullet render
-  scale, HP-bar inset, timer tint.
+- Next-target queue (pass 32): (1) **st1 f4257 item-value fork** is the first
+  remaining native/port random-value divergence: native slot308 initial toss
+  (-0.31199,-2.14671) vs port (-0.01911,-2.09981), with both sides paying the
+  same 144 draws that frame; the native pair occurs float-exact in the port
+  f4265 raw lane (+172 u16 from the port f4257 item draw), so decompose the
+  140 effect draws + one item toss and compare FUN_0042bea0's common-death
+  order before changing semantics. (2) **st2 bisection**: port field empty by
+  f8950 vs native 511 — wine-window bisect st2 from f3500. (3) the st2 f9253
+  contact (sub17 rice, spawnF 9025) — downstream of (2); (4) ins_92 ledger
+  cadence 46-vs-68; (5) dialogue residual ~13f; (6) MOVEMENT-PRECISION family
+  — player micro-position f661+ (wine-gated); (7) visual: fog law, boss name
+  plate, ring-bullet render scale, HP-bar inset, timer tint.
 - **Falsified pass 23 (audit trail)**: "op90-93 children run eclT −1"
   (census row f3626 e[4]=1 read as the child's ECL clock; allocator
   core leaves ctx.time at 0) — implemented on the th08Familiar path

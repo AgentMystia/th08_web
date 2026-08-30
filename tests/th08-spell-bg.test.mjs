@@ -161,5 +161,6 @@ test('spell history excludes the live attempt and commits at spell end', () => {
   scene.startBossSpell(7, 100000, 1000, 'test');
   assert.deepEqual(scene.spellHistory.get(7), { seen: 0, got: 0 });
   scene.endBossSpell();
+  scene.settleTh08CapturedSpell();
   assert.deepEqual(scene.spellHistory.get(7), { seen: 1, got: 1 });
 });

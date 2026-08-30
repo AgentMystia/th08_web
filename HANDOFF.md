@@ -7,12 +7,12 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 31 — the closed orbit-tail round)
+## Convergence picture (2026-08-30 pass 32 — the op123 checksum-order round)
 
-| run | pass-30 | pass-31 | note |
+| run | pass-31 | pass-32 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f7520 | **f7521** | orbit tail exact; stream is draw-true through f5104 |
-| udGx01 st2 | f9253 | f9253 | flat, zero regression |
+| udGx01 st1 | f7521 | **f7521** | op123 checksum order fixed; contact unchanged downstream |
+| udGx01 st2 | f9253 | f9253 | flat |
 | udLy01 st1 | f3177 | f3177 | flat |
 | udLy01 st2 | f3471 | f3471 | flat |
 
@@ -24,13 +24,29 @@ pass-29's one-payment FUN_00430aa0 law, the port matches native exactly at
 f4122 (1832 draws / 254 items) and f4123 (256 draws / 526 items; 209
 pointStars + 63 zone time orbs).
 
-Pass-31 closed the orbit tail. asm 0x4162ae-0x416338 reads manager+0x108's
+Pass-32 corrected a hidden equal-count value fork at f4123. Native
+FUN_004161b0 runs FUN_00430aa0 first, then the non-boss sweep and score bank
+(asm 0x41620f-0x41624a); its captured-card counter/checksum runs only later
+(0x416790-0x4167b0). The port had paid the four-u16 capture checksum before
+the scored sweep, shifting every one of f4123's 63 zone-time toss pairs while
+leaving the 256-draw frame total unchanged. op123 now settles the captured
+card only after the field/enemy/score tails. f4123 item order and all 63 toss
+velocities are exact; tests are 228 green. This supersedes the pass-31 claim
+that the first post-settle fork was f5105: a draw-count curve alone is not an
+RNG-value oracle. The first remaining item-value fork is f4257 slot308
+(native toss -0.31199/-2.14671, port -0.01911/-2.09981; both frames pay 144
+draws). Clear-check clears at replay frame 11502 with end-state diffs still
+downstream.
+
+Pass-31 (historical; its frontier reading is superseded by pass 32) closed
+the orbit tail. asm 0x4162ae-0x416338 reads manager+0x108's
 REMAINING-time timer, so the gx budget is 729 (not 442); the full native
 cadence is 52×13 plus a final 1+6 = 683 orbs through f4184. The truncated
 f4132-4165 window had created the false 442-vs-416 contradiction. After the
 fix the f4132-4184 lane and following draw/item frames are exact, and the
-wine st1c draw curve stays zero through f5104. The first permanent fork is
-now f5105 (-96). Gates: check/build/test 227 green; all four formal
+wine st1c draw-count curve stays zero through f5104; pass 32 later showed
+that this did not prove random-value equality. Gates: check/build/test 227
+green; all four formal
 verifiers run; gx st1 clear-check clears at replay frame 11464 (remaining
 end-state diffs are downstream cascade).
 

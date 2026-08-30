@@ -493,6 +493,16 @@ export class StageScene implements GameHost {
     declAge: number;
     timeLimitFrames: number;
   } | null = null;
+  // FUN_004161b0's captured-card tail is deliberately split from spell
+  // teardown. The exe sweeps bullets/enemies and banks that total before it
+  // enters the capture history/counter/checksum block (asm 0x41620f-0x41624a
+  // precedes 0x41625c-0x4167b0), while op123's host-side teardown used to pay
+  // the checksum before the sweep. The deferred object is consumed by
+  // settleTh08CapturedSpell() after the field/enemy tails.
+  private pendingTh08SpellCapture: {
+    spellcard: NonNullable<StageScene['spellcard']>;
+    tally: { seen: number; got: number } | undefined;
+  } | null = null;
   // FUN_00416b90's captured-card tail: the declaration-ring actor is
   // transferred to this emitter at FUN_004161b0, then emits type-10 orbs in
   // two opposite 128px bursts while easing toward the player.
@@ -2203,27 +2213,13 @@ export class StageScene implements GameHost {
     const hadActiveSpell = this.spellcard !== null;
     const tally = this.spellcard ? this.spellHistory.get(this.spellcard.id) : undefined;
     if (tally) tally.seen++;
-    if (this.spellcard?.capturing) {
-      // Th07.exe FUN_0040f340 @ 0x40f340: award = decayed base + graze
-      // additions; the banner shows the full value while the score field
-      // gains value/10 (same 10:1 display convention as point items —
-      // score += uVar6/10 at all.c:6644).
-      const bonus = this.spellcard.bonus;
-      this.addScore(bonus);
-      this.runState.spellcardsCaptured++;
-      // TH08 spell end FUN_004161b0 capture arm (all.c:9546-9548): after the
-      // bonus/history bookkeeping the protected captured-cards counter
-      // (run+0x1c) increments and re-arms its checksum — 4 raw u16 draws on
-      // every capture, replay playback included (the draw sits OUTSIDE the
-      // FUN_00406c90 history gate). Failed cards skip the whole arm.
-      this.payTh08ProtectedChecksum();
-      if (tally) tally.got++;
-      // Duration 280 frames (0x117+1 @ all.c:18302-18304). Failure path
-      // arms nothing — no banner, no score credit (all.c:6639-6692).
-      this.bonusPopup = { bonus, timer: 280 };
-      this.playSfx(33);
-      this.armTh08BossOrbitEmitter(this.spellcard);
-    }
+    // Keep the whole capture tail pending. Native order at FUN_004161b0 is:
+    // bullet sweep (0x41620f) -> non-boss enemy sweep (0x416225) -> score
+    // bank/popup (0x41623c/0x41624a) -> capture arm (0x41625c), with the
+    // protected checksum last in that arm (0x4167b0).
+    this.pendingTh08SpellCapture = this.spellcard?.capturing
+      ? { spellcard: this.spellcard, tally }
+      : null;
     this.spellName = '';
     this.spellcard = null;
     this.spellBackgroundRunners = [];
@@ -2235,6 +2231,28 @@ export class StageScene implements GameHost {
     const sweep = hadActiveSpell && !this.phaseTimedOut;
     this.phaseTimedOut = false;
     return sweep;
+  }
+
+  settleTh08CapturedSpell(): void {
+    const pending = this.pendingTh08SpellCapture;
+    if (!pending) return;
+    this.pendingTh08SpellCapture = null;
+    const { spellcard: sc, tally } = pending;
+    // Th07.exe FUN_0040f340 @ 0x40f340: award = decayed base + graze
+    // additions; the banner shows the full value while the score field gains
+    // value/10 (same 10:1 convention as point items — all.c:6644).
+    this.addScore(sc.bonus);
+    this.runState.spellcardsCaptured++;
+    // TH08's captured-card counter (run+0x1c) increments at 0x416790-0x4167a1,
+    // then FUN_00406e50 re-arms its protected checksum at 0x4167b0 — four raw
+    // u16 draws on every capture, outside the FUN_00406c90 history gate.
+    this.payTh08ProtectedChecksum();
+    if (tally) tally.got++;
+    // Duration 280 frames (0x117+1 @ all.c:18302-18304). Failure path arms
+    // nothing — no banner, no score credit (all.c:6639-6692).
+    this.bonusPopup = { bonus: sc.bonus, timer: 280 };
+    this.playSfx(33);
+    this.armTh08BossOrbitEmitter(sc);
   }
 
   voidSpellCapture(): void {

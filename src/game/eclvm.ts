@@ -4146,6 +4146,9 @@ export class StageRuntime {
         } else {
           this.killNonBossEnemies(game);
         }
+        // FUN_004161b0 enters its captured-card tail only after the scored
+        // field sweep, non-boss sweep and score bank (0x41620f-0x41624a).
+        game.settleTh08CapturedSpell?.();
         return null;
       }
       case 124: {
