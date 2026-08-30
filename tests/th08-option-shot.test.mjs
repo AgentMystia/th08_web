@@ -41,3 +41,27 @@ test('a target-seeking shot clamps speed into the native [1,10] range', () => {
   assert.equal(fast.speed, 10);
   assert.equal(fast.vx, 10);
 });
+
+test('targetless branch is fully gated on speed < 10 (FUN_00450320 jp tail @ 0x4504d3)', () => {
+  // At speed >= 10 the exe skips BOTH the 1/3 accelerate and the renormalize,
+  // leaving the velocity bits untouched.
+  const b = makeShot(50, 60, -2.0944, 10);
+  const vx0 = b.vx, vy0 = b.vy;
+  updateTh08SeekingOptionShot(b, null);
+  assert.equal(b.speed, 10);
+  assert.equal(b.vx, vx0);
+  assert.equal(b.vy, vy0);
+});
+
+test('homing hypot narrows the sum of squares to f32 before sqrt (0x4503cf fstp)', () => {
+  // gx st1 f2099-window inputs: Math.hypot on the un-narrowed sum yields the
+  // adjacent f32 (…665 vs …666) and flips the wall-crossing of later settles.
+  const b = {
+    x: f32(189.5469970703125), y: f32(326),
+    vx: f32(-4.37113897078234e-7), vy: f32(-10), speed: f32(10), angle: 0
+  };
+  updateTh08SeekingOptionShot(b, { x: f32(79.99974822998047), y: f32(161.59996032714844) });
+  assert.equal(b.speed, 10);
+  assert.equal(b.vx, f32(-1.1400666236877441));
+  assert.equal(b.vy, f32(-9.934800148010254));
+});
