@@ -7,6 +7,37 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
+## Convergence picture (2026-08-30 pass 36 — reconnaissance, no source change)
+
+Formal frames unchanged from pass 35 (gx st1 f7518 / gx st2 f6475 / ly st1
+f3237 / ly st2 f3471); 231 tests green; gates green. This pass narrowed the
+remaining walls to one family and ruled out every structural candidate:
+
+- **Wine-confirmed baseline**: port bullet positions match native EXACTLY in
+  the covered window (st2 f1050-1120, tmp/wine-out/st2.jsonl full-pool
+  compare, <2px all slots) — bullet movement/spawn/integration laws are exact.
+  Player positions match to 0.01px; enemy positions to 0.1px (census).
+- **All laws binary-verified matching**: SHT volley composition (power-80 = 3
+  needles + 2 option shots), graze/collect box sizes (graze half 1.4, collect
+  ±12, margin 20), hitbox tiers, fire-cycle period/phase, ins_2 wait, item
+  fall/homing physics, move-vs-collide order, shot/bullet f32 integration.
+- **The residual forks are emergent trajectory-value forks**: count transients
+  (port and native draw the same total per window but at different intra-frame
+  positions from event-timing jitter) shift spawned entities' RNG values,
+  which shifts their trajectories, which shifts the next event timings. The
+  st2 cascade's earliest census-visible node is the f2128 fairy killed one
+  frame early by shot contact; the f5865 ins_67 angle fork is an intra-frame
+  draw-order issue (port draws the random move angle after the firefly burst,
+  native mid-burst) that my static reading cannot resolve (the effect-spawn
+  deferral is function-pointer-opaque in the decompile).
+- **Honest status**: every remaining first-fork (st1 f4228 shot contact, st2
+  f2160 collect jitter / f5791 graze / f5853 graze / f5865 angle / f6330) is
+  the movement-precision family. Exact pinning needs native per-frame
+  bullet/shot/item positions or the per-draw order — i.e. a Wine trace round
+  (closed by user rule pending explicit order) or fresh telemetry. Existing
+  wine-out frames do not cover the current forks; browser screenshots are
+  unavailable on this host (no podman/chromium).
+
 ## Convergence picture (2026-08-30 pass 35 — the DAT_018b8988 live-global round)
 
 | run | pass-33 | pass-35 | note |
