@@ -7,14 +7,31 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 33 — the homing-item cull round)
+## Convergence picture (2026-08-30 pass 35 — the DAT_018b8988 live-global round)
 
-| run | pass-32 | pass-33 | note |
+| run | pass-33 | pass-35 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f7521 | **f7518** | state-1 homing cull fixed; contact is a downstream re-roll |
-| udGx01 st2 | f9253 | f9253 | flat |
-| udLy01 st1 | f3177 | f3177 | flat |
+| udGx01 st1 | f7518 | f7518 | flat |
+| udGx01 st2 | f9253 | f6475 | contact re-roll onto the nearly-native field; killer spawned f6166 in the residual band |
+| udLy01 st1 | f3177 | f3237 | re-roll, same sub15 rain family |
 | udLy01 st2 | f3471 | f3471 | flat |
+
+Pass-35 closed the st2 f4909 fork at its semantic root (86dd940): the
+spawn-state quad latch (+0xdbe) is a plain boolean; the transition-VM-end
+payment reads the LIVE global DAT_018b8988 = player+0xe2a90 (the player
+static at 0x17d5ef8, zeroed by FUN_004c230's 0xe2b30-byte memset).
+FUN_00449ff0 republishes the contacted quad's param6 there on every probe
+(all.c:36505); FUN_0044a230/FUN_0044a470 reset it to 6 at entry. A volley
+latched under a quad that expired before its VM ends pays the stale 6
+(pointStar, zero draws), not the zone's time orb. Port effect: f4909 pays
+exactly native's 150 (8 time-orb conversions from bullets whose ending-tick
+probe still touches the f4897 master quad + their stale carries; 81 zero-draw
+pointStars), and the first permanent count fork moves f4909 -> f6330
+(+1421 frames). Checksum oracle values now hold through f5500 modulo the
+known mid-pass sampling bands. st1's f4122-4123 settle and f4228 frontier
+are unchanged. Tests 231 green.
+
+Pass-34 was a no-source reconnaissance round, but it hardened both frontiers.
 
 Pass-30 closed the remaining settle timing/table laws. all.c:21661 gates
 FUN_0041ed50's wipe on FUN_004178a0()==0, so an active/captured spell leaves
@@ -35,6 +52,22 @@ the gate, f4214-4222 item removals/collects match slot-for-slot. The first
 remaining count fork is f4228: native pays 60 draws versus port 56; item
 collects are already exact and port has three effect-5 impacts, so one
 4-draw impact-family event is still missing. Tests are 229 green.
+
+Pass-34 was a no-source reconnaissance round, but it hardened both frontiers.
+Native run+0x50/+0xb4 (`FUN_00406e50`) is a usable RNG-value checksum oracle.
+Injecting one diagnostic effect-5 allocation after port's third f4228 impact
+makes f4228/f4229 counts exact, all 1289 native item tosses through f5110
+exact, and 4541/4543 native checksum boundaries exact (the two misses are
+known mid-pass samples). Forcing each nearby player shot to collide is
+falsified. f4228 is therefore exactly one missing effect-5 allocation in that
+RNG position, but its native shot-pool identity still needs evidence; Wine
+remains closed. On st2, the first permanent count fork is actually f4909
+(native 150 / port 470), long before the old f8950 field-empty observation.
+The checksum oracle is clean through f4908. Port pays 88 type-7 quad
+conversions (85 deferred from the f4900 3×7 + 32×2 volley, plus three normal);
+native has room for only eight such events. The binary spawn-state latch law
+matches the port, and simple extra-step experiments fail, so the next audit is
+native FIRE geometry/bullet-pool position rather than quad payment order.
 
 Pass-32 corrected a hidden equal-count value fork at f4123. Native
 FUN_004161b0 runs FUN_00430aa0 first, then the non-boss sweep and score bank
