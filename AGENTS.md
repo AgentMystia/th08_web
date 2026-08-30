@@ -259,14 +259,14 @@ resolve through file-order enumeration).
 
 ## 5. Tests
 
-`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (222). Key surfaces:
+`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (225). Key surfaces:
 et_ex dir semantics, sub-context CALL channel, boss audits/presentation,
 item/damage economy, familiar cadence, pacing hard checkpoints (native
 gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 27)
+## 6. Standing residuals (honest, 2026-08-30 pass 28)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,16 +379,19 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 27, commit 1bf6272): **gx st1 f7413**, **gx st2
+- Formal baselines (pass 28): **gx st1 f7531**, **gx st2
   f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-27
   closed the first half of the st1 f4122 settle fork: master-tail orbs read
   the +0x3380 LEDGER ×2 (all.c:20533; was live-children ×2) and the wipe
   sweep leaves quad-zone-covered bullets to the zone path (pointStar count
-  native-exact 209). f4122 draw deficit −828→−4; residual fork = the
-  missing boss-death ORBIT EMITTER (~442 type-10 orbs, 13/frame = min(budget,7)
-  + literal 6, spiral on enemy+0x2e0 with dθ −0.0533/frame, asm 0x4175f6
-  family, budget writer unresolved), quad double-conversion (+216), and the
-  ins_92 ledger cadence 46-vs-68 — until those land, gx st1 frontier numbers
+  native-exact 209). f4122 draw deficit −828→−4. Pass-28 implemented the
+  FUN_004161b0/00416b90 captured-card tail: native budget formula, 9-tick
+  warm-up, opposite 128px type-10 bursts, partial debit and the reconstructed
+  1/16 player easing; f4132 positions are wine-exact. Residuals: the asm
+  442-budget/14-debit cadence yields 416 calls while wine observes 442 items
+  (clock writer unresolved), the presentation actor transform is §7, plus
+  quad conversion and the ins_92 ledger cadence — until those land, gx st1
+  frontier numbers
   are re-roll noise on a still-forked stream. The f5911 fan-aim story is
   SUPERSEDED: the var chain is fully decoded (var10016 = rand10082×0.04 +
   π/3-family constants; native drew rand≈0, port −2.29) — pure downstream of
@@ -429,16 +432,15 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 27): (1) **the boss-death orbit emitter** (the
-  dominant residual, ~1768 draws): FUN_00416b90's emitter branch spawns
-  type-10 orbs at the dying enemy's +0x2e0 ephemeral pos (a spiral random-
-  walk: each burst adds polar(angle,128), angle field +0x318 decrements
-  −0.0533/−0.0156 per pass, constants 0x4b4390/0x4b4460/0x4b432c/0x4b4468),
-  min(budget,7)+6 per frame from director state +0x10 (442 total observed,
-  writer unresolved — likely a stage-ECL epilogue op). (2) quad double-
-  conversion at the wipe (+216: skipped bullets may pay via the deferred
-  spawn-state arm AND the normal block). (3) ins_92 ledger cadence 46-vs-68
-  (22 missing attaches → 44 tail orbs). (1b) **st2 bisection**: port field
+- Next-target queue (pass 28): (1) **f4123 quad-settle timing**: FUN_00430aa0
+  probes FUN_00449ff0 per bullet; zone hits consume player+0xe2a90's per-quad
+  type. Split the immediate sweep payment from state5/normal deferred payment
+  per bullet — the pass-28 all-immediate and skip-second experiments are
+  falsified. (2) **orbit emitter call-count contradiction**: asm budget442
+  with 14 debit/full tick yields 416 calls, wine observes 442 type-10 items;
+  decode the presentation clock/writer and effect-39 actor transform. (3)
+  ins_92 ledger cadence 46-vs-68 (22 missing attaches → 44 tail orbs). (1b)
+  **st2 bisection**: port field
   empty (enemies not firing) by f8950 vs native 511 — wine-window bisect
   st2 from f3500 (first spell segment); st2's own settle sweeps share the
   pass-27 fix family. (2) the st2 f9253 contact (sub17 rice, spawnF

@@ -7,14 +7,25 @@ Mystia fights; browser replay load & playback (title → Replay → .rpy).
 Gates: `npm run check` / `npm run build` / `npm test` + CI
 (core/browser gate Pages; replay job advisory).
 
-## Convergence picture (2026-08-30 pass 27, commit 1bf6272 — the f4122 settle-fork round)
+## Convergence picture (2026-08-30 pass 28 — the boss-death orbit-emitter round)
 
-| run | pass-26 | pass-27 | note |
+| run | pass-27 | pass-28 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f7499 | **f7413** | f4122 draw fork −828→−4 (two exe-pinned fixes); number is re-roll noise until the residual fork closes |
-| udGx01 st2 | f9253 | **f9253** | flat, zero regression |
+| udGx01 st1 | f7413 | **f7531** | first orbit-emitter implementation; f4123 settle fork is still first, contact is a re-roll |
+| udGx01 st2 | f9253 | f9253 | flat, zero regression |
 | udLy01 st1 | f3177 | f3177 | flat |
 | udLy01 st2 | f3471 | f3471 | flat |
+
+Pass-28 implemented the captured-card tail from FUN_004161b0/00416b90:
+the native budget formula (gx st1 = 442), nine-tick warm-up, opposite
+128px type-10 bursts, native partial debit, and the reconstructed 1/16
+player easing. The f4132 burst centers/positions are float-exact against
+wine after inverting the first item tick. Honest §7 residuals: the native
+presentation clock's +10-frame lead, the effect-39 actor transform, and
+the branch mapping for easing. A new contradiction remains: asm budget442
+with 14 debited per full tick yields 416 calls, while wine observes 442
+type-10 items; the port follows asm and does not fake the count. Full
+detail: tmp/gx-findings.md pass 28.
 
 Pass-27 root-caused the whole st1 stream fork to the midboss death settle
 at f4122 (draws vs rng-curve: first permanent fork, −828 at the wipe

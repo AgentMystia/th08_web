@@ -491,6 +491,17 @@ export class StageScene implements GameHost {
     elapsed: number;
     elapsedFrac: number;
     declAge: number;
+    timeLimitFrames: number;
+  } | null = null;
+  // FUN_00416b90's captured-card tail: the declaration-ring actor is
+  // transferred to this emitter at FUN_004161b0, then emits type-10 orbs in
+  // two opposite 128px bursts while easing toward the player.
+  private th08BossOrbitEmitter: {
+    budget: number;
+    timer: number;
+    warmup: number;
+    x: number;
+    y: number;
   } | null = null;
   // Spell-card playfield background: two VMs from the stage's eff0N.anm
   // (archive scripts 0/1), armed at every spell start (FUN_004152a0,
@@ -2111,7 +2122,14 @@ export class StageScene implements GameHost {
     return false;
   }
 
-  startBossSpell(spellId: number, bonus: number, decayPerSecond: number, name: string): void {
+  startBossSpell(
+    spellId: number,
+    bonus: number,
+    decayPerSecond: number,
+    name: string,
+    timeLimitFrames = 60
+  ): void {
+    this.th08BossOrbitEmitter = null;
     this.spellName = name;
     this.phaseTimedOut = false;
     this.spellcard = {
@@ -2125,7 +2143,8 @@ export class StageScene implements GameHost {
       decayPerSec: decayPerSecond,
       elapsed: 0,
       elapsedFrac: 0,
-      declAge: 0
+      declAge: 0,
+      timeLimitFrames
     };
     // Native spell start (FUN_004152a0, all.c:9093-9095): the effect manager
     // arms TWO full-playfield VMs from the stage's eff0N.anm — archive
@@ -2200,6 +2219,7 @@ export class StageScene implements GameHost {
       // arms nothing — no banner, no score credit (all.c:6639-6692).
       this.bonusPopup = { bonus, timer: 280 };
       this.playSfx(33);
+      this.armTh08BossOrbitEmitter(this.spellcard);
     }
     this.spellName = '';
     this.spellcard = null;
@@ -2216,6 +2236,84 @@ export class StageScene implements GameHost {
 
   voidSpellCapture(): void {
     if (this.spellcard) this.spellcard.capturing = false;
+  }
+
+  private armTh08BossOrbitEmitter(sc: NonNullable<StageScene['spellcard']>): void {
+    const boss = this.bossActive;
+    if (!boss) return;
+    const bossFlags = boss.ecl.th08?.flags ?? 0;
+    const lastSpell = (bossFlags & 0x08000000) !== 0;
+    const timeLimit = Math.max(1, Math.trunc(sc.timeLimitFrames));
+    // FUN_004161b0 @ 0x4162ae-0x416347: Last Spells pay a flat 700;
+    // normal cards interpolate from 100 to 1000 over the latter 7/8ths of
+    // the card clock, with integer division before each branch bank.
+    let budget: number;
+    if (lastSpell) {
+      budget = 700;
+    } else {
+      const lateGate = timeLimit - Math.trunc(timeLimit / 7);
+      // The presentation manager's clock is ten frames ahead of the bonus
+      // clock on the captured gx st1 witness (native formula input 797,
+      // spell elapsed 787). §7: that clock head start is not yet isolated
+      // to its writer; do not silently fold it into the bonus model.
+      const elapsed = Math.trunc(sc.elapsed + sc.elapsedFrac) + 10;
+      if (elapsed >= lateGate) budget = 1000;
+      else if (elapsed < 180) budget = 100;
+      else {
+        budget = 100 + Math.trunc(((elapsed - 180) * 900) / (lateGate - 180));
+      }
+    }
+    // §7: the binary transfers the live effect-39 actor (whose presentation
+    // transform is not represented by the scalar boss position). Seeding at
+    // the dying boss keeps the reconstructed gx orbit within ~1px while the
+    // actor-transform writer remains open.  The emission-phase clock is 19
+    // at transfer in the same witness (first emission after ten ticks).
+    this.th08BossOrbitEmitter = {
+      budget,
+      timer: 19,
+      warmup: 9,
+      x: boss.x,
+      y: boss.y
+    };
+  }
+
+  private updateTh08BossOrbitEmitter(): void {
+    const em = this.th08BossOrbitEmitter;
+    if (!em) return;
+    const warming = em.warmup > 0;
+    if (warming) em.warmup--;
+    em.timer++;
+    const p = this.playerObj;
+    // §7: the reconstructed native orbit center closes 1/16 of its distance
+    // to the live player every manager pass.  Its mapping onto the two
+    // native actor-age branches at 0x417381/0x41743b is not yet isolated.
+    em.x = Math.fround(em.x + Math.fround((p.x - em.x) / 16));
+    em.y = Math.fround(em.y + Math.fround((p.y - em.y) / 16));
+    if (warming || em.timer <= 8 || em.budget <= 0) return;
+
+    // @ 0x41754b: angle = normalize((actorTime-10)*2π/40 - π/2).
+    const angle = normalizeNativeAngleF32(
+      Math.fround(
+        Math.fround((em.timer - 10) * Math.fround(NATIVE_PI_F32 / 20)) -
+        NATIVE_HALF_PI_F32
+      )
+    );
+    const dx = Math.fround(Math.cos(angle) * 128);
+    const dy = Math.fround(Math.sin(angle) * 128);
+    const firstCount = Math.min(em.budget, 7);
+    for (let i = 0; i < firstCount; i++) {
+      this.spawnItem('time2', Math.fround(em.x - dx), Math.fround(em.y - dy), {});
+    }
+    em.budget -= firstCount;
+
+    const secondDebit = Math.min(em.budget, 7);
+    // Native literally loops six times here even when only a partial first
+    // debit remains; the guarded debit prevents negative bookkeeping.
+    for (let i = 0; i < 6; i++) {
+      this.spawnItem('time2', Math.fround(em.x + dx), Math.fround(em.y + dy), {});
+    }
+    em.budget -= secondDebit;
+    if (em.budget < 0) em.budget = 0;
   }
 
   onBossPhaseTimeout(): void {
@@ -2769,6 +2867,7 @@ export class StageScene implements GameHost {
       // retain their exact positions for this replay boundary and begin
       // homing on the next pass.  Running updateItems here collected one
       // extra time orb (four RNG draws) and shifted every later fixed slot.
+      this.updateTh08BossOrbitEmitter();
       if (!bombTriggeredThisFrame) this.updateItems();
       this.updateBullets();
       this.updateLasers();

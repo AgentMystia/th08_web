@@ -313,7 +313,13 @@ export interface GameHost {
   startDialogue?(index: number): void;
   isDialogueActive?(): boolean;
   consumeDialogueResume?(): boolean;
-  startBossSpell?(spellId: number, bonus: number, decayPerSecond: number, name: string): void;
+  startBossSpell?(
+    spellId: number,
+    bonus: number,
+    decayPerSecond: number,
+    name: string,
+    timeLimitFrames?: number
+  ): void;
   // Returns whether the TH08 phase-end field sweep applies. Timeouts fade
   // the field without the scored sweep.
   endBossSpell?(opts?: { fromBossDeath?: boolean }): boolean;

@@ -4521,7 +4521,7 @@ export class StageRuntime {
     const decay = Math.trunc(timer / 60) > 0
       ? Math.trunc((bonus - Math.trunc(bonus / 7)) / Math.trunc(timer / 60))
       : 0;
-    game.startBossSpell?.(spellId, bonus, decay, name);
+    game.startBossSpell?.(spellId, bonus, decay, name, timer);
     s.th08!.spellBonus = bonus;
     s.th08!.spellDecay = decay;
     game.cancelBulletsToItems();
