@@ -18,12 +18,19 @@ Convergence oracles:
   RNG values/order and state curves decide whether a change converged.
 
 Hard rules:
-- Wine/ptrace is CLOSED unless the user explicitly orders a trace round. Answer
-  native questions from the executable, decompile, objdump, `.rdata`, and
-  existing telemetry until then.
-- Run Node/tests/build inside `th08dev` (`podman exec th08dev bash -lc ...`).
-  Keep the host clean. Presentation checks use the podman Playwright image.
-- Nothing under `reference/` or `replay/` ships or is committed.
+- Environment regime (2026-08-31): on the LOCAL host, Wine/ptrace stays CLOSED
+  unless the user explicitly orders a trace round (answer native questions
+  from the executable, decompile, objdump, `.rdata`, and existing telemetry
+  until then), and Node/tests/build run inside `th08dev` (`podman exec th08dev
+  bash -lc ...`) with the podman Playwright image for presentation checks —
+  the host stays clean. On a CLOUD/disposable VM (e.g. a cloud Cursor
+  instance) the agent is AUTONOMOUS: Wine/ptrace trace rounds are
+  pre-authorized — schedule and run them at your own judgment, no user order
+  needed (the VM is expendable); run Node/npm/Playwright directly on the VM,
+  no container required.
+- Nothing under `reference/` or `replay/` ships or is committed. Cloud clones:
+  stage the exe/decompile under `reference/` and native telemetry under
+  `tmp/` outside git — the authority chain above assumes they exist locally.
 - No isolation hacks: no debug early-return, disabled subsystem, hardcoded
   replay state, phase clamp, RNG special case, or visual approximation that
   masks simulation divergence. Any unavoidable hand-written behavior must be
@@ -58,6 +65,9 @@ npx tsx scripts/replay-verify-th08.mjs <rpy> [--stage N] [--clear-check]
 podman exec th08dev bash -lc \
   'cd /work && npm run check && npm run build && npm test'
 ```
+
+On a cloud VM, the same gate is simply `npm run check && npm run build &&
+npm test` run directly.
 
 Then run all four formal verifiers (gx/ly, stage 1/2). Run gx st1
 `--clear-check` for death/settle/carry changes. Keep ly regression-clean.
@@ -262,7 +272,8 @@ Current st2 frontier chain (traced f6330 -> f5865 -> f5791):
   (219.4,435.9)) at f5791 while native never grazes it despite matched player
   /fairy/bullet-spawn positions and a confirmed graze law (margin 20, graze
   half 2.8). Why native spares it is open (bullet survival / sub-pixel reach);
-  native bullet-pool evidence needed (Wine is closed).
+  native bullet-pool evidence needed (Wine closed on the local host — a cloud
+  VM can trace this autonomously).
 - f5853 has a separate one-frame-late graze (bullet 1014). All remaining walls
   are the movement-precision / graze-timing family.
 
