@@ -178,17 +178,17 @@ bullets, items/economy, familiars, pacing checkpoints, presentation, and
 browser surfaces. Preserve native pins unless new binary evidence consciously
 supersedes them. Six browser-only checks may skip outside the browser gate.
 
-## 6. Current state and frontiers (pass 35)
+## 6. Current state and frontiers (pass 37)
 
-The convergence goal is not complete. Latest source state is pass-35 commit
-`86dd940`.
+The convergence goal is not complete. Latest source state is pass-37 commit
+`1e21d45`.
 
 Latest complete source verification:
-- check/build/test: PASS, 231/231.
-- Formal: gx st1 f7518; gx st2 f6475 (contact re-roll); ly st1 f3237; ly st2
-  f3471.
-- gx st1 clear-check clears at replay frame 11891; its end state remains a
-  downstream cascade, not native-exact.
+- check/build/test: PASS, 233/233.
+- Formal: gx st1 f7422 (cascade reroll from the two-tier target law); gx st2
+  f6475; ly st1 f3237; ly st2 f3471.
+- gx st1 clear-check now clears at replay frame 11414/11460 (inside the
+  recorded stream; was 11891); its end state remains a downstream cascade.
 
 Pass-35 closed the st2 f4909 fork: the spawn-state quad latch (+0xdbe) is a
 boolean and the VM-end payment reads the LIVE global DAT_018b8988
@@ -199,11 +199,33 @@ draws). f4909 now exact at 150 draws; the first permanent count fork moved
 f4909 -> f6330; checksum values hold through f5500 modulo known mid-pass
 sampling bands.
 
+Pass 37:
+- Player-callback order fully decoded (FUN_0044c390): move/options -> shot
+  movement (FUN_00451150) -> fire allocation (FUN_00451500 -> FUN_00450f60,
+  phase = fireTimer.current, wrap at 20 with same-frame re-arm, arm via
+  FUN_00451640 fires phase 0 on the arm frame) -> target-cache reset
+  (FUN_0044d420). Port matches; the fire-cycle-phase hypothesis is falsified.
+- 9c41bc1: FUN_00450320 seeking tick narrows each sum-of-squares to f32
+  before sqrt (FUN_0040b440 takes an f32 formal) and gates the whole
+  targetless accelerate+renormalize on speed < 10. Oracle-neutral here.
+- 1e21d45: the primary homing-target cache is two-tier — flags-bit-1 enemies
+  compete by nearest fabsf(f32(enemy.x − player.x)) (first bit-1 candidate of
+  a frame overwrites fallback picks); bit-1-clear enemies only reach the
+  max-y fallback while the bit-1 tier is empty. Old single-tier max-y agreed
+  until gx st1 f6330 and genuinely differed on 153 frames after; parallel-law
+  probe now shows 0 mismatches on both gx stages.
+
 Current st1 frontier:
 - f4228 is native 60 draws vs port 56: exactly one missing four-draw effect-5
-  allocation after the third impact and before the eleven collects. Forcing
-  nearby shots to collide is falsified; the native shot-pool identity/call
-  site remains open (Wine is closed).
+  allocation after the third impact and before the eleven collects. Window
+  algebra: native settles 4/6/3/0 vs port 3/6/1/2 on f4228/29/30/31 -> one
+  extra native settle at f4228 whose port counterpart never settles, plus
+  slots 25/26 one frame early. Player positions (f4100-4265, 0.005px), target
+  cache contents, spawn positions, fire phase, enemy boxes are all verified
+  exact; no port never-settling shot comes within 20px of the fairy at
+  f4228. The extra settle implies a trajectory difference invisible to every
+  current oracle — native shot-pool telemetry remains the missing evidence
+  (Wine is closed).
 
 Current st2 frontier chain (traced f6330 -> f5865 -> f5791):
 - f6330 (+12) is downstream of the Mystia f5865 phase-transition ins_67 move
