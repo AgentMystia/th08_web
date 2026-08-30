@@ -259,14 +259,14 @@ resolve through file-order enumeration).
 
 ## 5. Tests
 
-`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (225). Key surfaces:
+`tests/th08-*.test.mjs` + `tests/engine-*.test.mjs` (226). Key surfaces:
 et_ex dir semantics, sub-context CALL channel, boss audits/presentation,
 item/damage economy, familiar cadence, pacing hard checkpoints (native
 gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
 6 browser-only skips. The boss-audit pre-seeds the Last-Spell orb quota
 (structural assertion, decoupled from the razor-edge economy).
 
-## 6. Standing residuals (honest, 2026-08-30 pass 28)
+## 6. Standing residuals (honest, 2026-08-30 pass 29)
 
 - CLOSED pass 20: **the pass-19 "op-158 attack-controller" wall was a
   triple misattribution** — op-158 is the LASER-slot instruction (exe
@@ -379,7 +379,7 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   eclTime] — NOT [id,x,y,?,t]. Any probe reading e[1]/e[2] as x/y is wrong
   (verified: the three Sub24s' e[2] tracks port x frame-exact; e[1]=40 is
   HP; the midboss e[1]=1278 is HP).
-- Formal baselines (pass 28): **gx st1 f7531**, **gx st2
+- Formal baselines (pass 29): **gx st1 f7411**, **gx st2
   f9253** (post-fire-gate legit re-roll), ly st1 f3177, ly st2 f3471. Pass-27
   closed the first half of the st1 f4122 settle fork: master-tail orbs read
   the +0x3380 LEDGER ×2 (all.c:20533; was live-children ×2) and the wipe
@@ -387,10 +387,15 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   native-exact 209). f4122 draw deficit −828→−4. Pass-28 implemented the
   FUN_004161b0/00416b90 captured-card tail: native budget formula, 9-tick
   warm-up, opposite 128px type-10 bursts, partial debit and the reconstructed
-  1/16 player easing; f4132 positions are wine-exact. Residuals: the asm
-  442-budget/14-debit cadence yields 416 calls while wine observes 442 items
-  (clock writer unresolved), the presentation actor transform is §7, plus
-  quad conversion and the ins_92 ledger cadence — until those land, gx st1
+  1/16 player easing; f4132 positions are wine-exact. Pass-29 closed the
+  scored-sweep half of f4123: FUN_00430aa0 pays one raw zone conversion item
+  per bullet (asm 0x430b14-0x430b5c) and writes state 5; the state-1 type9
+  double-payment is a different arm. The f4123 frame draw excess +220 became
+  -16 (cumulative -20); 59 of native 63 new type7 slots are now one-to-one.
+  Remaining: five type7 allocations / 20 draws plus pointStar 214-vs-209,
+  the asm 442-budget/14-debit cadence that yields 416 calls while wine
+  observes 442 items (clock writer unresolved), the presentation actor
+  transform (§7), and the ins_92 ledger cadence — until those land, gx st1
   frontier numbers
   are re-roll noise on a still-forked stream. The f5911 fan-aim story is
   SUPERSEDED: the var chain is fully decoded (var10016 = rand10082×0.04 +
@@ -432,11 +437,11 @@ gauge/seed pins at st2 f1237/f1276 — keep or consciously regenerate).
   — its ly dialogue speed came from short-dur waits TIMING OUT (held keys
   never edge). Lesson: re-audit any A/B that inferred confirm semantics
   from "input words all odd" against all.c:24781-24793.
-- Next-target queue (pass 28): (1) **f4123 quad-settle timing**: FUN_00430aa0
-  probes FUN_00449ff0 per bullet; zone hits consume player+0xe2a90's per-quad
-  type. Split the immediate sweep payment from state5/normal deferred payment
-  per bullet — the pass-28 all-immediate and skip-second experiments are
-  falsified. (2) **orbit emitter call-count contradiction**: asm budget442
+- Next-target queue (pass 29): (1) **f4122/f4123 five-orb residual**: port
+  f4122 time235 vs native236 and native f4123's four non-sweep type7 additions
+  (slots1451/1575/1583/1586), with pointStar214-vs209; total allocations now
+  match at508, so classify the remaining per-lane transition/ledger payments.
+  (2) **orbit emitter call-count contradiction**: asm budget442
   with 14 debit/full tick yields 416 calls, wine observes 442 type-10 items;
   decode the presentation clock/writer and effect-39 actor transform. (3)
   ins_92 ledger cadence 46-vs-68 (22 missing attaches → 44 tail orbs). (1b)

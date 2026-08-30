@@ -9,12 +9,25 @@ Gates: `npm run check` / `npm run build` / `npm test` + CI
 
 ## Convergence picture (2026-08-30 pass 28 — the boss-death orbit-emitter round)
 
-| run | pass-27 | pass-28 | note |
+| run | pass-28 | pass-29 | note |
 |-----|---------|---------|------|
-| udGx01 st1 | f7413 | **f7531** | first orbit-emitter implementation; f4123 settle fork is still first, contact is a re-roll |
+| udGx01 st1 | f7531 | **f7411** | f4123 draw fork improved +220→-16; contact is a legitimate re-roll |
 | udGx01 st2 | f9253 | f9253 | flat, zero regression |
 | udLy01 st1 | f3177 | f3177 | flat |
 | udLy01 st2 | f3471 | f3471 | flat |
+
+Pass-29 closed the scored-sweep half of the st1 f4123 fork. Native
+FUN_00430aa0 (asm 0x430b14-0x430bb7) probes FUN_00449ff0 per bullet, pays
+ONE raw zone-conversion item through FUN_004400a0 on contact (or the sweep
+table on a miss), and writes bullet state 5; the all.c:23531-23533 type9
+double payment belongs only to the state-1 collision arm. The port now
+preserves state-5 fixed-slot occupancy. At f4123 its draw delta changed
+from +220 to -16 (cumulative -20; f4122 remains -4), and 59 of native 63
+new type-7 allocations are one-to-one. Remaining settle residual: five
+type-7 allocations / 20 draws plus pointStar 214-vs-209, then the orbit
+442-vs-416 contradiction and ins_92 ledger cadence. Gates: check/build/test
+226 green; all four formal verifiers run; gx st1 clear-check still clears
+(at replay frame 11561, downstream state remains cascade).
 
 Pass-28 implemented the captured-card tail from FUN_004161b0/00416b90:
 the native budget formula (gx st1 = 442), nine-tick warm-up, opposite

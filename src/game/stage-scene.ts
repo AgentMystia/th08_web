@@ -2366,20 +2366,41 @@ export class StageScene implements GameHost {
     let value = 2000;
     for (const b of this.enemyBullets) {
       if (b.dead) continue;
-      this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
-      // TH08 pays a second time orb per cancelled bullet (all.c:23531-23533).
-      this.spawnItem(this.cancelItemType, b.x, b.y, { state: 1 });
+      // TH08 FUN_00430aa0 (asm 0x430b14-0x430b5c) pays exactly ONE item
+      // for every nonzero bullet slot. It probes FUN_00449ff0 first; a zone
+      // contact passes that quad's raw conversion id to FUN_004400a0, while
+      // a miss uses the sweep table. The two-item rule at all.c:23531-23533
+      // belongs to the later state-1 collision arm when DAT_018b8988 is 9;
+      // it is not a property of this scored sweep.
+      const zone = this.th08ContactDeathClearZone(b.x, b.y);
+      const itemType = zone
+        ? TH08_ITEM_TYPE_BY_ID[zone.convertType] ?? 'pointSmall'
+        : this.cancelItemType;
+      this.spawnItem(itemType, b.x, b.y, { state: 1 });
       // FUN_00423100 @ all.c:15624: escalating popup per bullet — white
       // while ramping, yellow once the 8000 cap is reached.
       this.spawnScorePopup(value, b.x, b.y, value < 8000 ? 0xffffffff : 0xffffff00);
       total += value;
       value = Math.min(8000, value + 20);
+      // FUN_00430aa0 writes bullet state 5 (0x430bb7) rather than freeing
+      // the fixed slot. Keep the native clear-fade occupancy and off-screen
+      // counter; the bullet manager retires the slot after its removal ANM.
+      this.beginBulletClearFade(b, undefined, true);
     }
-    this.clearEnemyBullets();
     // FUN_00423100 does not apply the bomb-immunity flag to lasers. Their
     // converted items do not contribute to the escalating score total.
     this.cancelLaserField(true, true, true);
     return total;
+  }
+
+  private th08ContactDeathClearZone(x: number, y: number) {
+    for (const zone of this.th08DeathClearZones) {
+      if (zone.framesLeft <= 0) continue;
+      const dx = x - zone.x;
+      const dy = y - zone.y;
+      if (dx * dx + dy * dy < zone.radius * zone.radius) return zone;
+    }
+    return null;
   }
 
   // TH08 death-settle shared tail (all.c:21659-21668): a dying enemy that
